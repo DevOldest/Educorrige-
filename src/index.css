@@ -1,1 +1,27 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Libre+Baskerville:ital,wght@0,400;0,700;1,400&family=Inter:wght@400;500;600;700&display=swap');
+
+@theme {
+  --font-serif: "Libre Baskerville", serif;
+  --font-sans: "Inter", sans-serif;
+
+  --color-brand-gold: #8A6E36;
+  --color-brand-yellow: #E3B364;
+  --color-brand-blue-light: #39568C;
+  --color-brand-blue: #143B73;
+  --color-brand-blue-dark: #031C38;
+  --color-brand-black: #031124;
+  --color-brand-gray: #CCCCCC;
+}
+
+body {
+  @apply font-sans bg-slate-50 text-brand-black;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  @apply font-serif;
+}
+
+.glass-panel {
+  @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-lg;
+}
