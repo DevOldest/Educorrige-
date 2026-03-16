@@ -170,7 +170,12 @@ export default function ReportsView() {
           .maybeSingle();
 
         if (grade) {
-          const fieldToUpdate = assessment.type === 'prova' ? 'exam_score' : 'list1_score'; // Simplified logic, ideally we'd know which list
+          const fieldToUpdate = 
+            assessment.type === 'prova' ? 'exam_score' : 
+            assessment.type === 'lista2' ? 'list2_score' : 
+            assessment.type === 'lista3' ? 'list3_score' : 
+            'list1_score';
+            
           const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
           
           // Recalculate average
@@ -211,10 +216,6 @@ export default function ReportsView() {
           <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Relatórios de Correção</h3>
           <p className="text-slate-500">Acompanhe o histórico de todas as atividades corrigidas.</p>
         </div>
-        <button className="flex items-center gap-2 bg-white border border-slate-200 text-brand-blue-dark px-6 py-3 rounded-xl font-bold hover:bg-slate-50 transition-all">
-          <Download size={20} />
-          Exportar Tudo
-        </button>
       </div>
 
       {/* Filters */}
@@ -243,7 +244,9 @@ export default function ReportsView() {
         >
           <option value="">Todos os Tipos</option>
           <option value="prova">Provas</option>
-          <option value="lista">Listas</option>
+          <option value="lista1">Lista 1</option>
+          <option value="lista2">Lista 2</option>
+          <option value="lista3">Lista 3</option>
         </select>
         <button 
           onClick={() => setFilters({ classId: '', studentId: '', type: '' })}
@@ -287,7 +290,10 @@ export default function ReportsView() {
                     "text-[10px] font-bold uppercase px-2 py-0.5 rounded",
                     result.assessments?.type === 'prova' ? "bg-red-50 text-red-600" : "bg-blue-50 text-blue-600"
                   )}>
-                    {result.assessments?.type}
+                    {result.assessments?.type === 'prova' ? 'Prova' : 
+                     result.assessments?.type === 'lista1' ? 'Lista 1' :
+                     result.assessments?.type === 'lista2' ? 'Lista 2' :
+                     result.assessments?.type === 'lista3' ? 'Lista 3' : 'Atividade'}
                   </span>
                 </div>
               </div>
@@ -300,13 +306,35 @@ export default function ReportsView() {
               <button 
                 onClick={() => fetchResultDetails(result)}
                 className="p-3 bg-slate-50 text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all"
+                title="Ver Detalhes"
               >
                 <FileText size={20} />
+              </button>
+              <button 
+                onClick={async () => {
+                  setIsFetchingDetails(true);
+                  try {
+                    const { data: corrections } = await supabase
+                      .from('student_answers')
+                      .select('*, questions(*), ai_corrections(*)')
+                      .eq('student_id', result.student_id)
+                      .eq('assessment_id', result.assessment_id);
+                    
+                    exportToPDF({ ...result, corrections });
+                  } finally {
+                    setIsFetchingDetails(false);
+                  }
+                }}
+                className="p-3 bg-slate-50 text-brand-gold rounded-xl hover:bg-brand-gold hover:text-white transition-all"
+                title="Baixar PDF"
+              >
+                <Download size={20} />
               </button>
               <button 
                 onClick={() => handleDeleteResult(result)}
                 disabled={isDeleting === result.id}
                 className="p-3 bg-slate-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all disabled:opacity-50"
+                title="Excluir"
               >
                 {isDeleting === result.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
               </button>

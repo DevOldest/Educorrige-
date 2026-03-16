@@ -21,7 +21,7 @@ export default function AnswerKeysView() {
   const [formData, setFormData] = useState({
     title: '',
     unit_id: '',
-    type: 'prova',
+    type: 'prova' as 'prova' | 'lista1' | 'lista2' | 'lista3',
     questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] as string[] }]
   });
 
@@ -65,7 +65,11 @@ export default function AnswerKeysView() {
           .eq('unit_id', assessment.unit_id);
         
         if (grades && grades.length > 0) {
-          const fieldToUpdate = assessment.type === 'prova' ? 'exam_score' : 'list1_score'; // Simplified
+          const fieldToUpdate = 
+            assessment.type === 'prova' ? 'exam_score' : 
+            assessment.type === 'lista2' ? 'list2_score' : 
+            assessment.type === 'lista3' ? 'list3_score' : 
+            'list1_score';
           
           for (const grade of grades) {
             const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
@@ -425,7 +429,9 @@ export default function AnswerKeysView() {
                   className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
                 >
                   <option value="prova">Prova</option>
-                  <option value="lista">Lista</option>
+                  <option value="lista1">Lista 1</option>
+                  <option value="lista2">Lista 2</option>
+                  <option value="lista3">Lista 3</option>
                 </select>
               </div>
               <div className="space-y-2">

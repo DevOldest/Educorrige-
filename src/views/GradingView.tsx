@@ -33,7 +33,7 @@ export default function GradingView() {
   const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedAssessmentId, setSelectedAssessmentId] = useState('');
   const [selectedUnitId, setSelectedUnitId] = useState('');
-  const [activityType, setActivityType] = useState<'prova' | 'lista'>('prova');
+  const [activityType, setActivityType] = useState<'prova' | 'lista1' | 'lista2' | 'lista3'>('prova');
   
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
@@ -282,7 +282,11 @@ export default function GradingView() {
         .eq('unit_id', assessment.unit_id)
         .maybeSingle();
 
-      const fieldToUpdate = assessment.type === 'prova' ? 'exam_score' : 'list1_score';
+      const fieldToUpdate = 
+        assessment.type === 'prova' ? 'exam_score' : 
+        assessment.type === 'lista2' ? 'list2_score' : 
+        assessment.type === 'lista3' ? 'list3_score' : 
+        'list1_score';
       
       const gradeData: any = {
         student_id: selectedStudentId,
@@ -464,7 +468,9 @@ export default function GradingView() {
                   className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
                 >
                   <option value="prova">Prova</option>
-                  <option value="lista">Lista</option>
+                  <option value="lista1">Lista 1</option>
+                  <option value="lista2">Lista 2</option>
+                  <option value="lista3">Lista 3</option>
                 </select>
               </div>
               <div className="space-y-2">
