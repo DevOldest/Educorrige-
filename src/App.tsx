@@ -13,10 +13,14 @@ import {
   Menu,
   X,
   LayoutDashboard,
-  AlertTriangle
+  AlertTriangle,
+  BookOpen,
+  Loader2,
+  LogOut
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
+import { supabase } from './lib/supabase';
 
 // Views
 import Dashboard from './views/Dashboard';
@@ -25,20 +29,71 @@ import AnswerKeysView from './views/AnswerKeysView';
 import GradingView from './views/GradingView';
 import ReportsView from './views/ReportsView';
 import ManagementView from './views/ManagementView';
+import NotebookChecksView from './views/NotebookChecksView';
+import Login from './components/Login';
 
-type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'reports' | 'management';
+type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'reports' | 'management' | 'notebook-checks';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [session, setSession] = useState<any>(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
 
   const isSupabaseConfigured = !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+  useEffect(() => {
+    if (isSupabaseConfigured && supabase) {
+      supabase.auth.getSession().then(({ data: { session } }) => {
+        setSession(session);
+        setIsAuthLoading(false);
+      });
+
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+        setSession(session);
+      });
+
+      seedUnits();
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    } else {
+      setIsAuthLoading(false);
+    }
+  }, [isSupabaseConfigured]);
+
+  async function seedUnits() {
+    if (!supabase) return;
+
+    const { data: existingUnits } = await supabase.from('units').select('*');
+    if (existingUnits && existingUnits.length === 0) {
+      await supabase.from('units').insert([
+        { name: 'Unidade 1' },
+        { name: 'Unidade 2' },
+        { name: 'Unidade 3' }
+      ]);
+    }
+  }
+
+  if (isAuthLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <Loader2 className="animate-spin text-brand-blue" size={40} />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <Login onLogin={() => {}} />;
+  }
 
   const navItems = [
     { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { id: 'classes', label: 'Turmas', icon: Users },
     { id: 'answer-keys', label: 'Gabaritos', icon: FileText },
     { id: 'grading', label: 'Correção', icon: CheckSquare },
+    { id: 'notebook-checks', label: 'Vistos', icon: BookOpen },
     { id: 'reports', label: 'Relatórios', icon: BarChart3 },
     { id: 'management', label: 'Gestão', icon: GraduationCap },
   ];
@@ -96,15 +151,24 @@ export default function App() {
 
         <div className="p-4 border-t border-white/10">
           <div className={cn("flex items-center gap-3 p-2", !isSidebarOpen && "justify-center")}>
-            <div className="w-10 h-10 rounded-full bg-brand-gold flex items-center justify-center font-bold text-brand-blue-dark">
-              AA
+            <div className="w-10 h-10 rounded-full bg-brand-gold flex items-center justify-center font-bold text-brand-blue-dark uppercase">
+              {session?.user?.email?.substring(0, 2) || 'PR'}
             </div>
             {isSidebarOpen && (
               <div className="overflow-hidden">
-                <p className="text-sm font-medium truncate">Átila Alves</p>
-                <p className="text-xs text-brand-gray truncate">Professor de Química</p>
+                <p className="text-sm font-medium truncate">{session?.user?.email?.split('@')[0]}</p>
+                <p className="text-xs text-brand-gray truncate">Professor</p>
               </div>
             )}
+          </div>
+          <div className="p-4 border-t border-white/10">
+            <button 
+              onClick={() => supabase?.auth.signOut()}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-white/5 hover:text-white transition-all"
+            >
+              <LogOut size={20} />
+              <span>Sair</span>
+            </button>
           </div>
         </div>
       </motion.aside>
@@ -148,6 +212,7 @@ export default function App() {
               {activeView === 'grading' && <GradingView />}
               {activeView === 'reports' && <ReportsView />}
               {activeView === 'management' && <ManagementView />}
+              {activeView === 'notebook-checks' && <NotebookChecksView />}
             </motion.div>
           </AnimatePresence>
         </div>
