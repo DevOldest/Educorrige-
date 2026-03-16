@@ -1,4 +1,6 @@
 import React, { useState, useEffect } from 'react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { 
   Upload, 
   CheckSquare, 
@@ -12,7 +14,8 @@ import {
   MessageSquare,
   Settings,
   Search,
-  X
+  X,
+  Printer
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
@@ -330,6 +333,69 @@ export default function GradingView() {
     });
   }
 
+  const exportToPDF = () => {
+    if (!result || !selectedStudentId || !selectedAssessmentId) return;
+    
+    const student = students.find(s => s.id === selectedStudentId);
+    const assessment = assessments.find(a => a.id === selectedAssessmentId);
+    const className = classes.find(c => c.id === selectedClassId)?.name || '';
+
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    // Header
+    doc.setFontSize(20);
+    doc.setTextColor(10, 37, 64); // brand-blue-dark
+    doc.text('Relatório de Correção', pageWidth / 2, 20, { align: 'center' });
+
+    // Student Info
+    doc.setFontSize(12);
+    doc.setTextColor(100);
+    doc.text(`Aluno: ${student?.name || 'N/A'}`, 20, 35);
+    doc.text(`Turma: ${className}`, 20, 42);
+    doc.text(`Atividade: ${assessment?.title || 'N/A'}`, 20, 49);
+    doc.text(`Data: ${new Date().toLocaleDateString()}`, 20, 56);
+
+    // Score
+    doc.setFontSize(16);
+    doc.setTextColor(10, 37, 64);
+    doc.text(`Nota: ${result.totalScore} / ${result.maxScore} (${Math.round((result.totalScore / result.maxScore) * 100)}%)`, pageWidth - 20, 45, { align: 'right' });
+
+    // Overall Feedback
+    if (result.overallFeedback) {
+      doc.setFontSize(12);
+      doc.setTextColor(10, 37, 64);
+      doc.text('Feedback Geral:', 20, 70);
+      doc.setFontSize(10);
+      doc.setTextColor(80);
+      const splitFeedback = doc.splitTextToSize(result.overallFeedback, pageWidth - 40);
+      doc.text(splitFeedback, 20, 77);
+    }
+
+    // Table of corrections
+    const tableData = result.corrections.map((corr: any) => [
+      corr.questionNumber,
+      'Questão', // Type could be added if available
+      corr.studentAnswer || 'Sem resposta',
+      corr.feedback || '',
+      `${corr.score} pts`
+    ]);
+
+    autoTable(doc, {
+      startY: result.overallFeedback ? 100 : 70,
+      head: [['Nº', 'Tipo', 'Resposta do Aluno', 'Feedback da IA', 'Pontos']],
+      body: tableData,
+      headStyles: { fillColor: [10, 37, 64] },
+      styles: { fontSize: 8 },
+      columnStyles: {
+        2: { cellWidth: 40 },
+        3: { cellWidth: 60 }
+      }
+    });
+
+    doc.save(`Relatorio_${student?.name || 'Aluno'}_${assessment?.title || 'Atividade'}.pdf`);
+  };
+
   return (
     <div className="space-y-6">
       {!ai && (
@@ -549,16 +615,25 @@ export default function GradingView() {
                 ))}
               </div>
 
-              <button 
-                onClick={() => {
-                  setResult(null);
-                  setFiles([]);
-                  setPreviews([]);
-                }}
-                className="mt-8 w-full py-3 bg-slate-100 text-brand-blue-dark font-bold rounded-xl hover:bg-slate-200 transition-colors"
-              >
-                Nova Correção
-              </button>
+              <div className="flex gap-4 mt-8">
+                <button 
+                  onClick={exportToPDF}
+                  className="flex-1 py-3 bg-brand-gold text-white font-bold rounded-xl hover:bg-brand-gold/90 transition-all flex items-center justify-center gap-2"
+                >
+                  <Printer size={20} />
+                  Baixar PDF
+                </button>
+                <button 
+                  onClick={() => {
+                    setResult(null);
+                    setFiles([]);
+                    setPreviews([]);
+                  }}
+                  className="flex-1 py-3 bg-slate-100 text-brand-blue-dark font-bold rounded-xl hover:bg-slate-200 transition-colors"
+                >
+                  Nova Correção
+                </button>
+              </div>
             </div>
           </motion.div>
         )}
