@@ -31,7 +31,6 @@ export default function GradingView() {
   const [selectedAssessmentId, setSelectedAssessmentId] = useState('');
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [activityType, setActivityType] = useState<'prova' | 'lista'>('prova');
-  const [studentNameSearch, setStudentNameSearch] = useState('');
   
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
@@ -210,51 +209,112 @@ export default function GradingView() {
   };
 
   async function saveResults(data: any) {
-    // Save individual answers and corrections
-    for (const corr of data.corrections) {
-      const question = (await supabase
-        .from('questions')
-        .select('id')
-        .eq('assessment_id', selectedAssessmentId)
-        .eq('question_number', corr.questionNumber)
-        .single()).data;
+    if (!supabase) return;
 
-      if (question) {
-        const { data: answer } = await supabase
-          .from('student_answers')
-          .insert([{
-            student_id: selectedStudentId,
-            assessment_id: selectedAssessmentId,
-            question_id: question.id,
-            answer_text: corr.studentAnswer || '',
-            score: corr.score
-          }])
-          .select()
+    try {
+      // 1. Get assessment details to know type and unit
+      const { data: assessment } = await supabase
+        .from('assessments')
+        .select('type, unit_id')
+        .eq('id', selectedAssessmentId)
+        .single();
+
+      if (!assessment) throw new Error('Atividade não encontrada');
+
+      // 2. Save individual answers and corrections
+      for (const corr of data.corrections) {
+        const { data: question } = await supabase
+          .from('questions')
+          .select('id')
+          .eq('assessment_id', selectedAssessmentId)
+          .eq('question_number', corr.questionNumber)
           .single();
 
-        if (answer) {
-          await supabase.from('ai_corrections').insert([{
-            student_answer_id: answer.id,
-            ai_model: 'gemini-3-flash-preview',
-            correction_feedback: corr.feedback,
-            score_given: corr.score,
-            skills_mastered: corr.skillsMastered || [],
-            skills_to_improve: corr.skillsToImprove || []
-          }]);
+        if (question) {
+          const { data: answer } = await supabase
+            .from('student_answers')
+            .insert([{
+              student_id: selectedStudentId,
+              assessment_id: selectedAssessmentId,
+              question_id: question.id,
+              answer_text: corr.studentAnswer || '',
+              score: corr.score
+            }])
+            .select()
+            .single();
+
+          if (answer) {
+            await supabase.from('ai_corrections').insert([{
+              student_answer_id: answer.id,
+              ai_model: 'gemini-3-flash-preview',
+              correction_feedback: corr.feedback,
+              score_given: corr.score,
+              skills_mastered: corr.skillsMastered || [],
+              skills_to_improve: corr.skillsToImprove || []
+            }]);
+          }
         }
       }
-    }
 
-    // Save overall result
-    await supabase.from('assessment_results').insert([{
-      student_id: selectedStudentId,
-      assessment_id: selectedAssessmentId,
-      total_score: data.totalScore,
-      max_score: data.maxScore,
-      percentage: (data.totalScore / data.maxScore) * 100,
-      ai_corrected: true,
-      overall_feedback: data.overallFeedback
-    }]);
+      // 3. Save overall result
+      await supabase.from('assessment_results').insert([{
+        student_id: selectedStudentId,
+        assessment_id: selectedAssessmentId,
+        total_score: data.totalScore,
+        max_score: data.maxScore,
+        percentage: (data.totalScore / data.maxScore) * 100,
+        ai_corrected: true,
+        overall_feedback: data.overallFeedback
+      }]);
+
+      // 4. Update grade in Management (grades table)
+      const { data: existingGrade } = await supabase
+        .from('grades')
+        .select('*')
+        .eq('student_id', selectedStudentId)
+        .eq('unit_id', assessment.unit_id)
+        .maybeSingle();
+
+      const fieldToUpdate = assessment.type === 'prova' ? 'exam_score' : 'list1_score';
+      
+      const gradeData: any = {
+        student_id: selectedStudentId,
+        unit_id: assessment.unit_id,
+        [fieldToUpdate]: data.totalScore
+      };
+
+      if (existingGrade) {
+        // Calculate new average
+        const updatedGrade = { ...existingGrade, [fieldToUpdate]: data.totalScore };
+        const sum = (updatedGrade.list1_score || 0) + 
+                    (updatedGrade.list2_score || 0) + 
+                    (updatedGrade.list3_score || 0) + 
+                    (updatedGrade.exam_score || 0) + 
+                    (updatedGrade.notebook_score || 0) + 
+                    (updatedGrade.anki_score || 0);
+        
+        let average = Math.min(10, sum);
+        if (updatedGrade.recovery_score !== null) {
+          if (sum < 5) {
+            average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
+          } else {
+            average = Math.min(10, sum + updatedGrade.recovery_score);
+          }
+        }
+        
+        await supabase
+          .from('grades')
+          .update({ [fieldToUpdate]: data.totalScore, unit_average: average })
+          .eq('id', existingGrade.id);
+      } else {
+        await supabase
+          .from('grades')
+          .insert([{ ...gradeData, unit_average: data.totalScore }]);
+      }
+    } catch (error) {
+      console.error('Error saving results:', error);
+      throw error;
+    }
   }
 
   async function fileToBase64(file: File): Promise<string> {
@@ -314,16 +374,6 @@ export default function GradingView() {
 
             <div className="space-y-2">
               <label className="text-xs font-bold uppercase text-slate-400">Aluno</label>
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                <input 
-                  type="text" 
-                  placeholder="Buscar aluno..." 
-                  value={studentNameSearch}
-                  onChange={(e) => setStudentNameSearch(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-                />
-              </div>
               <select 
                 value={selectedStudentId}
                 onChange={(e) => setSelectedStudentId(e.target.value)}
@@ -331,9 +381,7 @@ export default function GradingView() {
                 disabled={isLoadingData || !selectedClassId}
               >
                 <option value="">{isLoadingData ? 'Carregando...' : 'Selecionar Aluno'}</option>
-                {students
-                  .filter(s => s.name.toLowerCase().includes(studentNameSearch.toLowerCase()))
-                  .map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
+                {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
               </select>
             </div>
 

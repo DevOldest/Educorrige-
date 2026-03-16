@@ -33,14 +33,14 @@ export default function Dashboard() {
         supabase.from('classes').select('*', { count: 'exact', head: true }),
         supabase.from('assessment_results').select('*', { count: 'exact', head: true }),
         supabase.from('assessments').select('*', { count: 'exact', head: true }),
-        supabase.from('assessment_results').select('final_score'),
+        supabase.from('assessment_results').select('total_score'),
         supabase.from('assessment_results')
           .select('*, students(name, classes(name)), assessments(title)')
           .order('created_at', { ascending: false })
           .limit(5)
       ]);
 
-      const totalGrades = avgGrade.data?.reduce((acc, curr) => acc + (curr.final_score || 0), 0) || 0;
+      const totalGrades = avgGrade.data?.reduce((acc, curr) => acc + (curr.total_score || 0), 0) || 0;
       const average = avgGrade.data?.length ? (totalGrades / avgGrade.data.length).toFixed(1) : '0.0';
 
       setStats([
@@ -112,7 +112,7 @@ export default function Dashboard() {
                     </div>
                   </div>
                   <div className="text-right">
-                    <p className="text-sm font-semibold text-emerald-600">Nota: {activity.final_score}</p>
+                    <p className="text-sm font-semibold text-emerald-600">Nota: {activity.total_score}</p>
                     <p className="text-xs text-slate-400">
                       {new Date(activity.created_at).toLocaleDateString('pt-BR')}
                     </p>

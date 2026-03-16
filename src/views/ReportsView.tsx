@@ -14,7 +14,6 @@ export default function ReportsView() {
   
   const [filters, setFilters] = useState({
     classId: '',
-    studentName: '',
     type: ''
   });
 
@@ -43,9 +42,8 @@ export default function ReportsView() {
 
   const filteredResults = results.filter(r => {
     const matchesClass = filters.classId ? r.students?.classes?.id === filters.classId : true;
-    const matchesName = filters.studentName ? r.students?.name.toLowerCase().includes(filters.studentName.toLowerCase()) : true;
     const matchesType = filters.type ? r.assessments?.type === filters.type : true;
-    return matchesClass && matchesName && matchesType;
+    return matchesClass && matchesType;
   });
 
   const fetchResultDetails = async (result: any) => {
@@ -138,17 +136,7 @@ export default function ReportsView() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-4 gap-4">
-        <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-          <input 
-            type="text" 
-            placeholder="Nome do aluno..." 
-            value={filters.studentName}
-            onChange={(e) => setFilters({ ...filters, studentName: e.target.value })}
-            className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-          />
-        </div>
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4">
         <select 
           value={filters.classId}
           onChange={(e) => setFilters({ ...filters, classId: e.target.value })}
@@ -167,7 +155,7 @@ export default function ReportsView() {
           <option value="lista">Listas</option>
         </select>
         <button 
-          onClick={() => setFilters({ classId: '', studentName: '', type: '' })}
+          onClick={() => setFilters({ classId: '', type: '' })}
           className="text-brand-blue font-bold text-sm hover:underline"
         >
           Limpar Filtros

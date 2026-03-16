@@ -23,7 +23,6 @@ export default function ManagementView() {
   const [students, setStudents] = useState<any[]>([]);
   const [selectedClassId, setSelectedClassId] = useState('');
   const [selectedStudentId, setSelectedStudentId] = useState('');
-  const [studentNameSearch, setStudentNameSearch] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   
   const [grades, setGrades] = useState<any[]>([]);
@@ -157,7 +156,7 @@ export default function ManagementView() {
   return (
     <div className="space-y-8">
       {/* Selection Header */}
-      <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-6">
+      <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-2">
           <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
           <select 
@@ -171,30 +170,15 @@ export default function ManagementView() {
         </div>
 
         <div className="space-y-2">
-          <label className="text-xs font-bold uppercase text-slate-400">Buscar Aluno</label>
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input 
-              type="text" 
-              placeholder="Nome do aluno..." 
-              value={studentNameSearch}
-              onChange={(e) => setStudentNameSearch(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-            />
-          </div>
-        </div>
-
-        <div className="space-y-2">
           <label className="text-xs font-bold uppercase text-slate-400">Selecionar Aluno</label>
           <select 
             value={selectedStudentId}
             onChange={(e) => setSelectedStudentId(e.target.value)}
             className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            disabled={!selectedClassId}
           >
             <option value="">Selecionar Aluno</option>
-            {students
-              .filter(s => s.name.toLowerCase().includes(studentNameSearch.toLowerCase()))
-              .map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
+            {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
           </select>
         </div>
       </div>
