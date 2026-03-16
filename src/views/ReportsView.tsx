@@ -3,7 +3,7 @@ import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarCh
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
-import jsPDF from 'jspdf';
+import { jsPDF } from 'jspdf';
 import autoTable from 'jspdf-autotable';
 
 export default function ReportsView() {
