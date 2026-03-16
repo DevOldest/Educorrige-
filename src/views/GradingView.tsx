@@ -35,7 +35,9 @@ export default function GradingView() {
   
   const [files, setFiles] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
+  const [isLoadingData, setIsLoadingData] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
 
   useEffect(() => {
@@ -54,31 +56,56 @@ export default function GradingView() {
 
   async function fetchInitialData() {
     if (!supabase) return;
-    const [classesRes, unitsRes] = await Promise.all([
-      supabase.from('classes').select('*'),
-      supabase.from('units').select('*')
-    ]);
-    if (classesRes.data) setClasses(classesRes.data);
-    if (unitsRes.data) setUnits(unitsRes.data);
+    try {
+      const [classesRes, unitsRes] = await Promise.all([
+        supabase.from('classes').select('*').order('name'),
+        supabase.from('units').select('*').order('name')
+      ]);
+      if (classesRes.data) setClasses(classesRes.data);
+      if (unitsRes.data) {
+        // Remove potential duplicates by name just in case
+        const uniqueUnits = unitsRes.data.filter((unit, index, self) =>
+          index === self.findIndex((t) => t.name === unit.name)
+        );
+        setUnits(uniqueUnits);
+      }
+    } catch (error) {
+      console.error('Error fetching initial data:', error);
+    }
   }
 
   async function fetchStudents(classId: string) {
     if (!supabase) return;
-    const { data } = await supabase
-      .from('students')
-      .select('*')
-      .eq('class_id', classId)
-      .order('name');
-    if (data) setStudents(data);
+    setIsLoadingData(true);
+    try {
+      const { data } = await supabase
+        .from('students')
+        .select('*')
+        .eq('class_id', classId)
+        .order('name');
+      if (data) setStudents(data);
+    } finally {
+      setIsLoadingData(false);
+    }
   }
 
   async function fetchAssessments(classId: string) {
     if (!supabase) return;
-    const { data } = await supabase
-      .from('assessments')
-      .select('*')
-      .eq('class_id', classId);
-    if (data) setAssessments(data);
+    setIsLoadingData(true);
+    try {
+      const { data, error } = await supabase
+        .from('assessments')
+        .select('*')
+        .eq('class_id', classId)
+        .order('created_at', { ascending: false });
+      
+      if (error) throw error;
+      if (data) setAssessments(data);
+    } catch (error) {
+      console.error('Error fetching assessments:', error);
+    } finally {
+      setIsLoadingData(false);
+    }
   }
 
   const onDrop = (acceptedFiles: File[]) => {
@@ -102,6 +129,7 @@ export default function GradingView() {
     }
 
     setIsProcessing(true);
+    setError(null);
     try {
       // 1. Fetch Question Data (Answer Key)
       const { data: questions } = await supabase
@@ -162,7 +190,7 @@ export default function GradingView() {
       `;
 
       const result = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3-flash-preview",
         contents: [{ parts: [{ text: prompt }, ...imageParts] }]
       });
 
@@ -173,9 +201,9 @@ export default function GradingView() {
         setResult(correctionData);
         await saveResults(correctionData);
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Grading error:', error);
-      alert('Erro na correção automática. Verifique as imagens e tente novamente.');
+      setError(error.message || 'Erro na correção automática. Verifique as imagens e tente novamente.');
     } finally {
       setIsProcessing(false);
     }
@@ -239,7 +267,30 @@ export default function GradingView() {
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+    <div className="space-y-6">
+      {!ai && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex items-center gap-3 mb-6">
+          <AlertCircle size={24} />
+          <div>
+            <p className="font-bold">IA não configurada</p>
+            <p className="text-sm text-red-600">A chave da API do Gemini não foi encontrada. A correção automática não funcionará.</p>
+          </div>
+        </div>
+      )}
+
+      {error && (
+        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex items-center justify-between gap-3 mb-6">
+          <div className="flex items-center gap-3">
+            <AlertCircle size={24} />
+            <p className="text-sm font-medium">{error}</p>
+          </div>
+          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">
+            <X size={20} />
+          </button>
+        </div>
+      )}
+      
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
       {/* Selection Panel */}
       <div className="lg:col-span-1 space-y-6">
         <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-6">
@@ -277,8 +328,9 @@ export default function GradingView() {
                 value={selectedStudentId}
                 onChange={(e) => setSelectedStudentId(e.target.value)}
                 className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+                disabled={isLoadingData || !selectedClassId}
               >
-                <option value="">Selecionar Aluno</option>
+                <option value="">{isLoadingData ? 'Carregando...' : 'Selecionar Aluno'}</option>
                 {students
                   .filter(s => s.name.toLowerCase().includes(studentNameSearch.toLowerCase()))
                   .map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
@@ -316,12 +368,23 @@ export default function GradingView() {
                 value={selectedAssessmentId}
                 onChange={(e) => setSelectedAssessmentId(e.target.value)}
                 className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+                disabled={!selectedClassId}
               >
-                <option value="">Selecionar Gabarito</option>
+                <option value="">{selectedClassId ? 'Selecionar Gabarito' : 'Selecione uma Turma Primeiro'}</option>
                 {assessments
-                  .filter(a => a.type === activityType && (selectedUnitId ? a.unit_id === selectedUnitId : true))
+                  .filter(a => {
+                    const typeMatch = a.type === activityType;
+                    const unitMatch = selectedUnitId ? a.unit_id === selectedUnitId : true;
+                    return typeMatch && unitMatch;
+                  })
                   .map(a => <option key={a.id} value={a.id}>{a.title}</option>)}
               </select>
+              {selectedClassId && assessments.length === 0 && (
+                <p className="text-[10px] text-red-500 font-medium">Nenhum gabarito encontrado para esta turma.</p>
+              )}
+              {selectedClassId && assessments.length > 0 && assessments.filter(a => a.type === activityType && (selectedUnitId ? a.unit_id === selectedUnitId : true)).length === 0 && (
+                <p className="text-[10px] text-amber-600 font-medium">Nenhum gabarito do tipo "{activityType}" encontrado para esta unidade.</p>
+              )}
             </div>
           </div>
         </div>
@@ -450,6 +513,7 @@ export default function GradingView() {
         )}
       </div>
     </div>
-  );
+  </div>
+);
 }
 
