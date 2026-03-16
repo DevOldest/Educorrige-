@@ -11,7 +11,11 @@ export default function ClassesView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [previewData, setPreviewData] = useState<{ className: string; students: { name: string; rollNumber: number }[] } | null>(null);
+  const [previewData, setPreviewData] = useState<{ 
+    className: string; 
+    schoolYear: number;
+    students: { name: string; rollNumber: number }[] 
+  } | null>(null);
 
   useEffect(() => {
     fetchClasses();
@@ -114,6 +118,7 @@ export default function ClassesView() {
 
           setPreviewData({
             className: data.className || 'Nova Turma',
+            schoolYear: new Date().getFullYear(),
             students: studentsWithRoll
           });
         } catch (err) {
@@ -150,7 +155,7 @@ export default function ClassesView() {
         .from('classes')
         .insert([{ 
           name: previewData.className, 
-          school_year: new Date().getFullYear(),
+          school_year: previewData.schoolYear,
           user_id: user?.id 
         }])
         .select()
@@ -259,14 +264,25 @@ export default function ClassesView() {
 
             {previewData ? (
               <div className="space-y-6">
-                <div className="space-y-2">
-                  <label className="text-sm font-bold text-brand-blue-dark">Nome da Turma</label>
-                  <input 
-                    type="text" 
-                    value={previewData.className}
-                    onChange={(e) => setPreviewData({ ...previewData, className: e.target.value })}
-                    className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-brand-blue-dark">Nome da Turma</label>
+                    <input 
+                      type="text" 
+                      value={previewData.className}
+                      onChange={(e) => setPreviewData({ ...previewData, className: e.target.value })}
+                      className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-sm font-bold text-brand-blue-dark">Ano Letivo</label>
+                    <input 
+                      type="number" 
+                      value={previewData.schoolYear}
+                      onChange={(e) => setPreviewData({ ...previewData, schoolYear: parseInt(e.target.value) })}
+                      className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                    />
+                  </div>
                 </div>
 
                 <div className="space-y-2">
