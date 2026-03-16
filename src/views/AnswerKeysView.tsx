@@ -31,13 +31,19 @@ export default function AnswerKeysView() {
     setIsLoading(true);
     const [assessmentsRes, classesRes, unitsRes] = await Promise.all([
       supabase.from('assessments').select('*, classes(name), units(name)').order('created_at', { ascending: false }),
-      supabase.from('classes').select('*'),
-      supabase.from('units').select('*')
+      supabase.from('classes').select('*').order('name'),
+      supabase.from('units').select('*').order('name')
     ]);
 
     if (assessmentsRes.data) setAssessments(assessmentsRes.data);
     if (classesRes.data) setClasses(classesRes.data);
-    if (unitsRes.data) setUnits(unitsRes.data);
+    if (unitsRes.data) {
+      // Remove potential duplicates by name just in case
+      const uniqueUnits = unitsRes.data.filter((unit, index, self) =>
+        index === self.findIndex((t) => t.name === unit.name)
+      );
+      setUnits(uniqueUnits);
+    }
     setIsLoading(false);
   }
 
