@@ -11,6 +11,7 @@ export default function ClassesView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [previewData, setPreviewData] = useState<{ className: string; students: { name: string; rollNumber: number }[] } | null>(null);
 
   useEffect(() => {
     fetchClasses();
@@ -31,6 +32,38 @@ export default function ClassesView() {
     setIsLoading(false);
   }
 
+  async function handleDeleteClass(classId: string, className: string) {
+    if (!supabase) return;
+    if (!confirm(`Deseja realmente excluir a turma "${className}"? Todos os alunos e notas associadas serão removidos permanentemente.`)) return;
+
+    try {
+      // 1. Delete students (grades should cascade if set up, but let's be safe)
+      const { data: students } = await supabase.from('students').select('id').eq('class_id', classId);
+      if (students && students.length > 0) {
+        const studentIds = students.map(s => s.id);
+        await supabase.from('grades').delete().in('student_id', studentIds);
+        await supabase.from('assessment_results').delete().in('student_id', studentIds);
+        await supabase.from('student_answers').delete().in('student_id', studentIds);
+      }
+      
+      await supabase.from('students').delete().eq('class_id', classId);
+      
+      // 2. Delete assessments related to this class
+      await supabase.from('assessments').delete().eq('class_id', classId);
+
+      // 3. Delete class
+      const { error } = await supabase.from('classes').delete().eq('id', classId);
+
+      if (error) throw error;
+
+      setClasses(classes.filter(c => c.id !== classId));
+      alert('Turma excluída com sucesso!');
+    } catch (error) {
+      console.error('Error deleting class:', error);
+      alert('Erro ao excluir turma.');
+    }
+  }
+
   const onDrop = async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
     if (!file || !ai) return;
@@ -42,12 +75,13 @@ export default function ClassesView() {
         const base64 = (reader.result as string).split(',')[1];
         
         const prompt = `
-          Analise esta lista de alunos em PDF e extraia os nomes e números de chamada.
-          Retorne um JSON no formato:
+          Analise esta lista de alunos em PDF e extraia o nome da turma e a lista de alunos (apenas os nomes).
+          Ignore números de chamada se houver, mas mantenha a ordem se possível.
+          Retorne um JSON estritamente no formato:
           {
-            "className": "Nome Sugerido da Turma",
+            "className": "Nome da Turma Encontrado",
             "students": [
-              { "name": "Nome do Aluno", "rollNumber": 1 },
+              { "name": "NOME COMPLETO DO ALUNO" },
               ...
             ]
           }
@@ -55,7 +89,7 @@ export default function ClassesView() {
 
         try {
           const result = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
+            model: "gemini-3.1-pro-preview",
             contents: [
               {
                 parts: [
@@ -70,26 +104,23 @@ export default function ClassesView() {
           });
 
           const responseText = result.text || '';
-          try {
-            const data = JSON.parse(responseText);
-            await saveClassAndStudents(data);
-          } catch (parseErr) {
-            console.error('JSON Parse Error:', parseErr, responseText);
-            // Fallback to regex if JSON mode fails for some reason
-            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-            if (jsonMatch) {
-              const data = JSON.parse(jsonMatch[0]);
-              await saveClassAndStudents(data);
-            } else {
-              throw new Error('Could not parse AI response');
-            }
-          }
+          const data = JSON.parse(responseText);
+          
+          // Add roll numbers based on order
+          const studentsWithRoll = data.students.map((s: any, index: number) => ({
+            name: s.name,
+            rollNumber: index + 1
+          }));
+
+          setPreviewData({
+            className: data.className || 'Nova Turma',
+            students: studentsWithRoll
+          });
         } catch (err) {
           console.error('AI Processing Error:', err);
-          alert('Erro ao processar o PDF com IA. Tente novamente.');
+          alert('Erro ao processar o PDF com IA. Verifique se o arquivo é um PDF válido e tente novamente.');
         } finally {
           setIsProcessing(false);
-          setShowUploadModal(false);
         }
       };
       reader.readAsDataURL(file);
@@ -109,28 +140,44 @@ export default function ClassesView() {
   // @ts-ignore
   const { getRootProps, getInputProps, isDragActive } = useDropzone(dropzoneOptions);
 
-  async function saveClassAndStudents(data: any) {
-    const { data: classData, error: classError } = await supabase
-      .from('classes')
-      .insert([{ name: data.className, school_year: new Date().getFullYear() }])
-      .select()
-      .single();
+  async function handleSave() {
+    if (!previewData || !supabase) return;
 
-    if (classError) throw classError;
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      
+      const { data: classData, error: classError } = await supabase
+        .from('classes')
+        .insert([{ 
+          name: previewData.className, 
+          school_year: new Date().getFullYear(),
+          user_id: user?.id 
+        }])
+        .select()
+        .single();
 
-    const studentsToInsert = data.students.map((s: any) => ({
-      class_id: classData.id,
-      name: s.name,
-      roll_number: s.rollNumber
-    }));
+      if (classError) throw classError;
 
-    const { error: studentsError } = await supabase
-      .from('students')
-      .insert(studentsToInsert);
+      const studentsToInsert = previewData.students.map((s: any) => ({
+        class_id: classData.id,
+        name: s.name,
+        roll_number: s.rollNumber
+      }));
 
-    if (studentsError) throw studentsError;
+      const { error: studentsError } = await supabase
+        .from('students')
+        .insert(studentsToInsert);
 
-    fetchClasses();
+      if (studentsError) throw studentsError;
+
+      setPreviewData(null);
+      setShowUploadModal(false);
+      fetchClasses();
+      alert('Turma e alunos salvos com sucesso!');
+    } catch (error) {
+      console.error('Error saving class:', error);
+      alert('Erro ao salvar a turma no banco de dados.');
+    }
   }
 
   return (
@@ -169,7 +216,10 @@ export default function ClassesView() {
                   <button className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue">
                     <Edit2 size={16} />
                   </button>
-                  <button className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500">
+                  <button 
+                    onClick={() => handleDeleteClass(cls.id, cls.name)}
+                    className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"
+                  >
                     <Trash2 size={16} />
                   </button>
                 </div>
@@ -193,46 +243,106 @@ export default function ClassesView() {
             className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl"
           >
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Importar Turma</h3>
-              <button onClick={() => setShowUploadModal(false)} className="text-slate-400 hover:text-brand-black">
+              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">
+                {previewData ? 'Revisar Turma' : 'Importar Turma'}
+              </h3>
+              <button 
+                onClick={() => {
+                  setShowUploadModal(false);
+                  setPreviewData(null);
+                }} 
+                className="text-slate-400 hover:text-brand-black"
+              >
                 <X size={24} />
               </button>
             </div>
 
-            <div 
-              {...getRootProps()} 
-              className={cn(
-                "border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center gap-4 transition-all cursor-pointer",
-                isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
-              )}
-            >
-              <input {...getInputProps()} />
-              {isProcessing ? (
-                <div className="flex flex-col items-center gap-4">
-                  <Loader2 className="animate-spin text-brand-gold" size={48} />
-                  <p className="text-brand-blue-dark font-medium">A IA está lendo o PDF...</p>
+            {previewData ? (
+              <div className="space-y-6">
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-brand-blue-dark">Nome da Turma</label>
+                  <input 
+                    type="text" 
+                    value={previewData.className}
+                    onChange={(e) => setPreviewData({ ...previewData, className: e.target.value })}
+                    className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                  />
                 </div>
-              ) : (
-                <>
-                  <div className="p-4 bg-brand-gold/10 rounded-full text-brand-gold">
-                    <FileUp size={40} />
-                  </div>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-brand-blue-dark">Arraste o PDF da lista de alunos</p>
-                    <p className="text-sm text-slate-500">ou clique para selecionar o arquivo</p>
-                  </div>
-                </>
-              )}
-            </div>
 
-            <div className="mt-6 flex gap-4">
-              <button 
-                onClick={() => setShowUploadModal(false)}
-                className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
-              >
-                Cancelar
-              </button>
-            </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-bold text-brand-blue-dark">Lista de Alunos ({previewData.students.length})</label>
+                  <div className="max-h-60 overflow-y-auto border border-slate-100 rounded-xl p-2 space-y-1">
+                    {previewData.students.map((student, idx) => (
+                      <div key={idx} className="flex items-center gap-3 p-2 bg-slate-50 rounded-lg text-sm">
+                        <span className="w-6 text-slate-400 font-bold">{student.rollNumber}</span>
+                        <input 
+                          type="text" 
+                          value={student.name}
+                          onChange={(e) => {
+                            const newStudents = [...previewData.students];
+                            newStudents[idx].name = e.target.value;
+                            setPreviewData({ ...previewData, students: newStudents });
+                          }}
+                          className="flex-1 bg-transparent border-none p-0 focus:ring-0"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="flex gap-4">
+                  <button 
+                    onClick={() => setPreviewData(null)}
+                    className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                  >
+                    Voltar
+                  </button>
+                  <button 
+                    onClick={handleSave}
+                    className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg"
+                  >
+                    Salvar Turma
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div 
+                  {...getRootProps()} 
+                  className={cn(
+                    "border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center gap-4 transition-all cursor-pointer",
+                    isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
+                  )}
+                >
+                  <input {...getInputProps()} />
+                  {isProcessing ? (
+                    <div className="flex flex-col items-center gap-4">
+                      <Loader2 className="animate-spin text-brand-gold" size={48} />
+                      <p className="text-brand-blue-dark font-medium">A IA está lendo o PDF...</p>
+                    </div>
+                  ) : (
+                    <>
+                      <div className="p-4 bg-brand-gold/10 rounded-full text-brand-gold">
+                        <FileUp size={40} />
+                      </div>
+                      <div className="text-center">
+                        <p className="text-lg font-bold text-brand-blue-dark">Arraste o PDF da lista de alunos</p>
+                        <p className="text-sm text-slate-500">ou clique para selecionar o arquivo</p>
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="mt-6 flex gap-4">
+                  <button 
+                    onClick={() => setShowUploadModal(false)}
+                    className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </>
+            )}
           </motion.div>
         </div>
       )}

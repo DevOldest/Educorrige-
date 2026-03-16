@@ -41,6 +41,66 @@ export default function AnswerKeysView() {
     setIsLoading(false);
   }
 
+  async function handleDeleteAssessment(assessmentId: string, title: string) {
+    if (!supabase) return;
+    if (!confirm(`Deseja realmente excluir o gabarito "${title}"? Todas as correções e notas associadas serão removidas permanentemente.`)) return;
+
+    try {
+      // 1. Get assessment info before deleting
+      const { data: assessment } = await supabase.from('assessments').select('*').eq('id', assessmentId).single();
+      
+      if (assessment) {
+        // 2. Update grades for all students in this class/unit
+        const { data: grades } = await supabase
+          .from('grades')
+          .select('*')
+          .eq('unit_id', assessment.unit_id);
+        
+        if (grades && grades.length > 0) {
+          const fieldToUpdate = assessment.type === 'prova' ? 'exam_score' : 'list1_score'; // Simplified
+          
+          for (const grade of grades) {
+            const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
+            const sum = (updatedGrade.list1_score || 0) + 
+                        (updatedGrade.list2_score || 0) + 
+                        (updatedGrade.list3_score || 0) + 
+                        (updatedGrade.exam_score || 0) + 
+                        (updatedGrade.notebook_score || 0) + 
+                        (updatedGrade.anki_score || 0);
+            
+            let average = Math.min(10, sum);
+            if (updatedGrade.recovery_score !== null) {
+              if (sum < 5) {
+                average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
+              } else {
+                average = Math.min(10, sum + updatedGrade.recovery_score);
+              }
+            }
+            await supabase.from('grades').update({ [fieldToUpdate]: 0, unit_average: average }).eq('id', grade.id);
+          }
+        }
+      }
+
+      // 3. Delete assessment_results and student_answers
+      await supabase.from('assessment_results').delete().eq('assessment_id', assessmentId);
+      await supabase.from('student_answers').delete().eq('assessment_id', assessmentId);
+      
+      // 4. Delete questions
+      await supabase.from('questions').delete().eq('assessment_id', assessmentId);
+
+      // 5. Delete assessment
+      const { error } = await supabase.from('assessments').delete().eq('id', assessmentId);
+
+      if (error) throw error;
+
+      setAssessments(assessments.filter(a => a.id !== assessmentId));
+      alert('Gabarito excluído e notas atualizadas com sucesso!');
+    } catch (error) {
+      console.error('Error deleting assessment:', error);
+      alert('Erro ao excluir gabarito.');
+    }
+  }
+
   const onDrop = async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
     if (!file || !ai) return;
@@ -72,7 +132,7 @@ export default function AnswerKeysView() {
 
         try {
           const result = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
+            model: "gemini-3.1-pro-preview",
             contents: [
               {
                 parts: [
@@ -145,6 +205,8 @@ export default function AnswerKeysView() {
       return;
     }
 
+    const { data: { user } } = await supabase.auth.getUser();
+
     const { data: assessment, error: assessmentError } = await supabase
       .from('assessments')
       .insert([{
@@ -152,7 +214,8 @@ export default function AnswerKeysView() {
         class_id: formData.class_id,
         unit_id: formData.unit_id,
         type: formData.type,
-        total_questions: formData.questions.length
+        total_questions: formData.questions.length,
+        user_id: user?.id
       }])
       .select()
       .single();
@@ -249,7 +312,10 @@ export default function AnswerKeysView() {
                     <button className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue">
                       <Edit2 size={16} />
                     </button>
-                    <button className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500">
+                    <button 
+                      onClick={() => handleDeleteAssessment(assessment.id, assessment.title)}
+                      className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"
+                    >
                       <Trash2 size={16} />
                     </button>
                   </div>

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarChart3, Users, CheckCircle2 } from 'lucide-react';
+import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarChart3, Users, CheckCircle2, Trash2, Loader2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
@@ -10,6 +10,7 @@ export default function ReportsView() {
   const [isLoading, setIsLoading] = useState(true);
   const [selectedResult, setSelectedResult] = useState<any>(null);
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
+  const [isDeleting, setIsDeleting] = useState<string | null>(null);
   
   const [filters, setFilters] = useState({
     classId: '',
@@ -62,6 +63,64 @@ export default function ReportsView() {
       console.error('Error fetching result details:', error);
     } finally {
       setIsFetchingDetails(false);
+    }
+  };
+
+  const handleDeleteResult = async (result: any) => {
+    if (!supabase) return;
+    if (!confirm(`Deseja realmente excluir a correção de ${result.students?.name}? Esta ação não pode ser desfeita.`)) return;
+
+    setIsDeleting(result.id);
+    try {
+      // 1. Delete student_answers (will cascade to ai_corrections if set up, but let's be safe)
+      await supabase.from('student_answers').delete().eq('assessment_id', result.assessment_id).eq('student_id', result.student_id);
+      
+      // 2. Delete assessment_result
+      await supabase.from('assessment_results').delete().eq('id', result.id);
+
+      // 3. Update grade in Management
+      const { data: assessment } = await supabase.from('assessments').select('type, unit_id').eq('id', result.assessment_id).single();
+      
+      if (assessment) {
+        const { data: grade } = await supabase
+          .from('grades')
+          .select('*')
+          .eq('student_id', result.student_id)
+          .eq('unit_id', assessment.unit_id)
+          .maybeSingle();
+
+        if (grade) {
+          const fieldToUpdate = assessment.type === 'prova' ? 'exam_score' : 'list1_score'; // Simplified logic, ideally we'd know which list
+          const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
+          
+          // Recalculate average
+          const sum = (updatedGrade.list1_score || 0) + 
+                      (updatedGrade.list2_score || 0) + 
+                      (updatedGrade.list3_score || 0) + 
+                      (updatedGrade.exam_score || 0) + 
+                      (updatedGrade.notebook_score || 0) + 
+                      (updatedGrade.anki_score || 0);
+          
+          let average = Math.min(10, sum);
+          if (updatedGrade.recovery_score !== null) {
+            if (sum < 5) {
+              average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
+            } else {
+              average = Math.min(10, sum + updatedGrade.recovery_score);
+            }
+          }
+
+          await supabase.from('grades').update({ [fieldToUpdate]: 0, unit_average: average }).eq('id', grade.id);
+        }
+      }
+
+      setResults(results.filter(r => r.id !== result.id));
+      alert('Correção excluída e nota atualizada com sucesso!');
+    } catch (error) {
+      console.error('Error deleting result:', error);
+      alert('Erro ao excluir correção.');
+    } finally {
+      setIsDeleting(null);
     }
   };
 
@@ -164,6 +223,13 @@ export default function ReportsView() {
                 className="p-3 bg-slate-50 text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all"
               >
                 <FileText size={20} />
+              </button>
+              <button 
+                onClick={() => handleDeleteResult(result)}
+                disabled={isDeleting === result.id}
+                className="p-3 bg-slate-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all disabled:opacity-50"
+              >
+                {isDeleting === result.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
               </button>
             </div>
           </motion.div>

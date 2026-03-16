@@ -27,10 +27,11 @@ export default function ManagementView() {
   const [isLoading, setIsLoading] = useState(false);
   
   const [grades, setGrades] = useState<any[]>([]);
-  const [currentUnit, setCurrentUnit] = useState(1);
+  const [units, setUnits] = useState<any[]>([]);
+  const [selectedUnitId, setSelectedUnitId] = useState('');
 
   useEffect(() => {
-    fetchClasses();
+    fetchInitialData();
   }, []);
 
   useEffect(() => {
@@ -45,10 +46,17 @@ export default function ManagementView() {
     }
   }, [selectedStudentId]);
 
-  async function fetchClasses() {
+  async function fetchInitialData() {
     if (!supabase) return;
-    const { data } = await supabase.from('classes').select('*');
-    if (data) setClasses(data);
+    const [classesRes, unitsRes] = await Promise.all([
+      supabase.from('classes').select('*'),
+      supabase.from('units').select('*').order('name')
+    ]);
+    if (classesRes.data) setClasses(classesRes.data);
+    if (unitsRes.data) {
+      setUnits(unitsRes.data);
+      if (unitsRes.data.length > 0) setSelectedUnitId(unitsRes.data[0].id);
+    }
   }
 
   async function fetchStudents(classId: string) {
@@ -106,6 +114,7 @@ export default function ManagementView() {
     const dataToSave = {
       ...unitData,
       student_id: selectedStudentId,
+      unit_id: selectedUnitId,
       unit_average: average
     };
 
@@ -122,9 +131,9 @@ export default function ManagementView() {
     }
   };
 
-  const getUnitGrade = (unit: number) => {
-    return grades.find(g => g.unit === unit) || {
-      unit,
+  const getUnitGrade = (unitId: string) => {
+    return grades.find(g => g.unit_id === unitId) || {
+      unit_id: unitId,
       list1_score: 0,
       list2_score: 0,
       list3_score: 0,
@@ -137,18 +146,9 @@ export default function ManagementView() {
 
   const calculateYearlyAverage = () => {
     const avg = grades.length > 0 
-      ? grades.reduce((acc, g) => acc + g.unit_average, 0) / 3 
+      ? grades.reduce((acc, g) => acc + (g.unit_average || 0), 0) / 3 
       : 0;
     
-    // Yearly recovery logic
-    const yearlyRecovery = grades.find(g => g.unit === 4); // Use unit 4 as yearly recovery
-    if (yearlyRecovery && yearlyRecovery.recovery_score !== null) {
-      if (avg < 5) {
-        return Math.max(avg, yearlyRecovery.recovery_score);
-      } else {
-        return Math.min(10, avg + yearlyRecovery.recovery_score);
-      }
-    }
     return avg;
   };
 
@@ -224,13 +224,13 @@ export default function ManagementView() {
                 Progresso por Unidade
               </h5>
               <div className="space-y-4">
-                {[1, 2, 3].map(u => {
-                  const g = getUnitGrade(u);
+                {units.map(u => {
+                  const g = getUnitGrade(u.id);
                   const avg = g.unit_average || 0;
                   return (
-                    <div key={u} className="space-y-1">
+                    <div key={u.id} className="space-y-1">
                       <div className="flex justify-between text-xs font-bold">
-                        <span className="text-slate-500">Unidade {u}</span>
+                        <span className="text-slate-500">{u.name}</span>
                         <span className={avg >= 5 ? "text-emerald-600" : "text-red-500"}>{avg.toFixed(1)}</span>
                       </div>
                       <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
@@ -250,55 +250,25 @@ export default function ManagementView() {
           {/* Grading Tabs */}
           <div className="lg:col-span-3 space-y-6">
             <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl w-fit">
-              {[1, 2, 3, 4].map(u => (
+              {units.map(u => (
                 <button
-                  key={u}
-                  onClick={() => setCurrentUnit(u)}
+                  key={u.id}
+                  onClick={() => setSelectedUnitId(u.id)}
                   className={cn(
                     "px-8 py-3 rounded-xl font-bold transition-all",
-                    currentUnit === u ? "bg-white text-brand-blue shadow-md" : "text-slate-500 hover:text-brand-blue"
+                    selectedUnitId === u.id ? "bg-white text-brand-blue shadow-md" : "text-slate-500 hover:text-brand-blue"
                   )}
                 >
-                  {u === 4 ? 'Recup. Final' : `Unidade ${u}`}
+                  {u.name}
                 </button>
               ))}
             </div>
 
-            {currentUnit === 4 ? (
-              <motion.div 
-                initial={{ opacity: 0, y: 10 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100"
-              >
-                <h4 className="text-2xl font-serif font-bold text-brand-blue-dark mb-6">Recuperação Final do Ano</h4>
-                <div className="p-6 bg-amber-50 rounded-2xl border border-amber-100 space-y-6">
-                  <p className="text-amber-800">
-                    A recuperação final é aplicada sobre a média das 3 unidades. 
-                    Se a média for inferior a 5, a nota da recuperação substitui se for maior.
-                    Se a média for 5 ou mais, a nota é acrescida (máximo 10).
-                  </p>
-                  <div className="flex items-center justify-between max-w-xs">
-                    <span className="font-bold text-amber-900">Nota da Recuperação Final</span>
-                    <input 
-                      type="number" 
-                      step="0.1"
-                      value={getUnitGrade(4).recovery_score || ''}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value) || 0;
-                        handleSaveGrade({ ...getUnitGrade(4), recovery_score: val, unit: 4 });
-                      }}
-                      className="w-24 p-3 bg-white border border-amber-200 rounded-xl text-center font-bold text-amber-900"
-                    />
-                  </div>
-                </div>
-              </motion.div>
-            ) : (
-              <UnitGradeForm 
-                unit={currentUnit} 
-                grade={getUnitGrade(currentUnit)} 
-                onSave={handleSaveGrade}
-              />
-            )}
+            <UnitGradeForm 
+              unitName={units.find(u => u.id === selectedUnitId)?.name || ''} 
+              grade={getUnitGrade(selectedUnitId)} 
+              onSave={handleSaveGrade}
+            />
           </div>
         </div>
       ) : (
@@ -312,7 +282,7 @@ export default function ManagementView() {
   );
 }
 
-function UnitGradeForm({ unit, grade, onSave }: { unit: number, grade: any, onSave: (data: any) => void }) {
+function UnitGradeForm({ unitName, grade, onSave }: { unitName: string, grade: any, onSave: (data: any) => void }) {
   const [localGrade, setLocalGrade] = useState(grade);
 
   useEffect(() => {
@@ -326,13 +296,13 @@ function UnitGradeForm({ unit, grade, onSave }: { unit: number, grade: any, onSa
 
   return (
     <motion.div 
-      key={unit}
+      key={unitName}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100"
     >
       <div className="flex justify-between items-center mb-8">
-        <h4 className="text-2xl font-serif font-bold text-brand-blue-dark">Lançamento de Notas - Unidade {unit}</h4>
+        <h4 className="text-2xl font-serif font-bold text-brand-blue-dark">Lançamento de Notas - {unitName}</h4>
         <div className="px-4 py-2 bg-brand-yellow/10 text-brand-blue-dark rounded-xl font-bold flex items-center gap-2">
           <Calculator size={18} />
           Média: {grade.unit_average?.toFixed(1) || '0.0'}
