@@ -17,6 +17,14 @@ export default function ClassesView() {
     students: { name: string; rollNumber: number }[] 
   } | null>(null);
 
+  const [selectedClass, setSelectedClass] = useState<any | null>(null);
+  const [showStudentsModal, setShowStudentsModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editClassName, setEditClassName] = useState('');
+  const [editClassYear, setEditClassYear] = useState(0);
+  const [classStudents, setClassStudents] = useState<any[]>([]);
+  const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+
   useEffect(() => {
     fetchClasses();
   }, []);
@@ -34,6 +42,51 @@ export default function ClassesView() {
     
     if (data) setClasses(data);
     setIsLoading(false);
+  }
+
+  async function fetchClassStudents(classId: string) {
+    if (!supabase) return;
+    setIsLoadingStudents(true);
+    const { data } = await supabase
+      .from('students')
+      .select('*')
+      .eq('class_id', classId)
+      .order('roll_number', { ascending: true });
+    
+    if (data) setClassStudents(data);
+    setIsLoadingStudents(false);
+  }
+
+  const handleViewStudents = (cls: any) => {
+    setSelectedClass(cls);
+    fetchClassStudents(cls.id);
+    setShowStudentsModal(true);
+  };
+
+  const handleEditClick = (cls: any) => {
+    setSelectedClass(cls);
+    setEditClassName(cls.name);
+    setEditClassYear(cls.school_year);
+    setShowEditModal(true);
+  };
+
+  async function handleUpdateClass() {
+    if (!supabase || !selectedClass) return;
+    try {
+      const { error } = await supabase
+        .from('classes')
+        .update({ name: editClassName, school_year: editClassYear })
+        .eq('id', selectedClass.id);
+
+      if (error) throw error;
+      
+      setShowEditModal(false);
+      fetchClasses();
+      alert('Turma atualizada com sucesso!');
+    } catch (error) {
+      console.error('Error updating class:', error);
+      alert('Erro ao atualizar turma.');
+    }
   }
 
   async function handleDeleteClass(classId: string, className: string) {
@@ -218,7 +271,10 @@ export default function ClassesView() {
                   <Users size={24} />
                 </div>
                 <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <button className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue">
+                  <button 
+                    onClick={() => handleEditClick(cls)}
+                    className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue"
+                  >
                     <Edit2 size={16} />
                   </button>
                   <button 
@@ -231,11 +287,118 @@ export default function ClassesView() {
               </div>
               <h4 className="text-xl font-bold text-brand-blue-dark mb-1">{cls.name}</h4>
               <p className="text-sm text-slate-500 mb-4">{cls.school_year} • {cls.students?.[0]?.count || 0} Alunos</p>
-              <button className="w-full py-2 bg-slate-50 text-brand-blue-dark font-semibold rounded-lg hover:bg-brand-yellow transition-colors">
+              <button 
+                onClick={() => handleViewStudents(cls)}
+                className="w-full py-2 bg-slate-50 text-brand-blue-dark font-semibold rounded-lg hover:bg-brand-yellow transition-colors"
+              >
                 Ver Alunos
               </button>
             </motion.div>
           ))}
+        </div>
+      )}
+
+      {/* Edit Class Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-black/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+          >
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Editar Turma</h3>
+              <button onClick={() => setShowEditModal(false)} className="text-slate-400 hover:text-brand-black">
+                <X size={24} />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-brand-blue-dark">Nome da Turma</label>
+                <input 
+                  type="text" 
+                  value={editClassName}
+                  onChange={(e) => setEditClassName(e.target.value)}
+                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                />
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-brand-blue-dark">Ano Letivo</label>
+                <input 
+                  type="number" 
+                  value={editClassYear}
+                  onChange={(e) => setEditClassYear(parseInt(e.target.value))}
+                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                />
+              </div>
+              <div className="flex gap-4 pt-4">
+                <button 
+                  onClick={() => setShowEditModal(false)}
+                  className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={handleUpdateClass}
+                  className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg"
+                >
+                  Salvar Alterações
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* View Students Modal */}
+      {showStudentsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-black/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl max-h-[90vh] flex flex-col"
+          >
+            <div className="flex justify-between items-center mb-6">
+              <div>
+                <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">{selectedClass?.name}</h3>
+                <p className="text-slate-500">Lista de Alunos Cadastrados</p>
+              </div>
+              <button onClick={() => setShowStudentsModal(false)} className="text-slate-400 hover:text-brand-black">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto pr-2">
+              {isLoadingStudents ? (
+                <div className="flex justify-center py-10">
+                  <Loader2 className="animate-spin text-brand-gold" size={32} />
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-2">
+                  {classStudents.map((student) => (
+                    <div key={student.id} className="flex items-center gap-4 p-3 bg-slate-50 rounded-xl">
+                      <span className="w-8 h-8 flex items-center justify-center bg-brand-blue/10 text-brand-blue rounded-lg font-bold text-sm">
+                        {student.roll_number}
+                      </span>
+                      <span className="font-medium text-brand-blue-dark">{student.name}</span>
+                    </div>
+                  ))}
+                  {classStudents.length === 0 && (
+                    <p className="text-center py-10 text-slate-400 italic">Nenhum aluno cadastrado nesta turma.</p>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="mt-6">
+              <button 
+                onClick={() => setShowStudentsModal(false)}
+                className="w-full py-3 bg-slate-100 text-brand-blue-dark rounded-xl font-bold hover:bg-slate-200 transition-colors"
+              >
+                Fechar
+              </button>
+            </div>
+          </motion.div>
         </div>
       )}
 
