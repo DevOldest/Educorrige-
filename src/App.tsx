@@ -186,14 +186,16 @@ export default function App() {
                 <span>Configuração do Supabase pendente</span>
               </div>
             )}
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-              <input 
-                type="text" 
-                placeholder="Buscar..." 
-                className="pl-10 pr-4 py-2 bg-slate-100 border-none rounded-full text-sm focus:ring-2 focus:ring-brand-yellow w-64 transition-all"
-              />
-            </div>
+            {activeView !== 'dashboard' && (
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                <input 
+                  type="text" 
+                  placeholder="Buscar..." 
+                  className="pl-10 pr-4 py-2 bg-slate-100 border-none rounded-full text-sm focus:ring-2 focus:ring-brand-yellow w-64 transition-all"
+                />
+              </div>
+            )}
           </div>
         </header>
 
