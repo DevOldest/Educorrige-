@@ -55,7 +55,7 @@ export default function ClassesView() {
 
         try {
           const result = await ai.models.generateContent({
-            model: "gemini-3.1-pro-preview",
+            model: "gemini-3-flash-preview",
             contents: [
               {
                 parts: [
@@ -63,14 +63,26 @@ export default function ClassesView() {
                   { inlineData: { mimeType: "application/pdf", data: base64 } }
                 ]
               }
-            ]
+            ],
+            config: {
+              responseMimeType: "application/json"
+            }
           });
 
           const responseText = result.text || '';
-          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            const data = JSON.parse(jsonMatch[0]);
+          try {
+            const data = JSON.parse(responseText);
             await saveClassAndStudents(data);
+          } catch (parseErr) {
+            console.error('JSON Parse Error:', parseErr, responseText);
+            // Fallback to regex if JSON mode fails for some reason
+            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+            if (jsonMatch) {
+              const data = JSON.parse(jsonMatch[0]);
+              await saveClassAndStudents(data);
+            } else {
+              throw new Error('Could not parse AI response');
+            }
           }
         } catch (err) {
           console.error('AI Processing Error:', err);

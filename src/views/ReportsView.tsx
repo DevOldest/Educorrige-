@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarChart3, Users } from 'lucide-react';
+import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarChart3, Users, CheckCircle2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
@@ -8,6 +8,8 @@ export default function ReportsView() {
   const [results, setResults] = useState<any[]>([]);
   const [classes, setClasses] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [selectedResult, setSelectedResult] = useState<any>(null);
+  const [isFetchingDetails, setIsFetchingDetails] = useState(false);
   
   const [filters, setFilters] = useState({
     classId: '',
@@ -44,6 +46,24 @@ export default function ReportsView() {
     const matchesType = filters.type ? r.assessments?.type === filters.type : true;
     return matchesClass && matchesName && matchesType;
   });
+
+  const fetchResultDetails = async (result: any) => {
+    if (!supabase) return;
+    setIsFetchingDetails(true);
+    try {
+      const { data: corrections } = await supabase
+        .from('student_answers')
+        .select('*, questions(*), ai_corrections(*)')
+        .eq('student_id', result.student_id)
+        .eq('assessment_id', result.assessment_id);
+      
+      setSelectedResult({ ...result, corrections });
+    } catch (error) {
+      console.error('Error fetching result details:', error);
+    } finally {
+      setIsFetchingDetails(false);
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -139,7 +159,10 @@ export default function ReportsView() {
                 <p className="text-lg font-bold text-brand-blue-dark">{result.total_score} / {result.max_score}</p>
                 <p className="text-xs text-slate-400">Pontuação Final</p>
               </div>
-              <button className="p-3 bg-slate-50 text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all">
+              <button 
+                onClick={() => fetchResultDetails(result)}
+                className="p-3 bg-slate-50 text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all"
+              >
                 <FileText size={20} />
               </button>
             </div>
@@ -153,6 +176,126 @@ export default function ReportsView() {
           </div>
         )}
       </div>
+
+      {/* Details Modal */}
+      {selectedResult && (
+        <div className="fixed inset-0 bg-brand-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white w-full max-w-4xl max-height-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+          >
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-brand-blue-dark text-white">
+              <div>
+                <h3 className="text-xl font-bold">{selectedResult.students?.name}</h3>
+                <p className="text-brand-gray text-sm">{selectedResult.assessments?.title}</p>
+              </div>
+              <button 
+                onClick={() => setSelectedResult(null)}
+                className="p-2 hover:bg-white/10 rounded-full transition-all"
+              >
+                <ChevronRight className="rotate-90" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+              {/* Summary */}
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className="bg-slate-50 p-4 rounded-2xl text-center">
+                  <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Nota Final</p>
+                  <p className="text-3xl font-bold text-brand-blue-dark">{selectedResult.total_score} / {selectedResult.max_score}</p>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-2xl text-center">
+                  <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Aproveitamento</p>
+                  <p className="text-3xl font-bold text-emerald-600">{Math.round(selectedResult.percentage)}%</p>
+                </div>
+                <div className="bg-slate-50 p-4 rounded-2xl text-center">
+                  <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Data</p>
+                  <p className="text-xl font-bold text-brand-blue-dark">{new Date(selectedResult.created_at).toLocaleDateString()}</p>
+                </div>
+              </div>
+
+              {/* Overall Feedback */}
+              {selectedResult.overall_feedback && (
+                <div className="bg-brand-yellow/10 p-6 rounded-2xl border border-brand-yellow/20">
+                  <h4 className="font-bold text-brand-blue-dark mb-2 flex items-center gap-2">
+                    <CheckCircle2 size={18} className="text-brand-yellow" />
+                    Feedback Geral da IA
+                  </h4>
+                  <p className="text-slate-700 text-sm leading-relaxed italic">
+                    "{selectedResult.overall_feedback}"
+                  </p>
+                </div>
+              )}
+
+              {/* Corrections List */}
+              <div className="space-y-4">
+                <h4 className="font-bold text-brand-blue-dark flex items-center gap-2">
+                  <FileText size={18} className="text-brand-gold" />
+                  Detalhamento por Questão
+                </h4>
+                <div className="space-y-4">
+                  {selectedResult.corrections?.map((corr: any, i: number) => (
+                    <div key={i} className="border border-slate-100 rounded-2xl p-5 space-y-4">
+                      <div className="flex justify-between items-start">
+                        <div className="flex items-center gap-3">
+                          <span className="w-8 h-8 bg-brand-blue-dark text-white rounded-full flex items-center justify-center font-bold text-sm">
+                            {corr.questions?.question_number}
+                          </span>
+                          <div>
+                            <p className="font-bold text-brand-blue-dark">Questão {corr.questions?.question_number}</p>
+                            <p className="text-[10px] uppercase text-slate-400 font-bold">{corr.questions?.question_type}</p>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <p className="font-bold text-brand-blue-dark">{corr.score} / {corr.questions?.max_score}</p>
+                          <p className="text-[10px] text-slate-400 font-bold uppercase">Pontos</p>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
+                        <div className="bg-slate-50 p-3 rounded-xl">
+                          <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Resposta do Aluno</p>
+                          <p className="text-slate-700">{corr.answer_text || 'Sem resposta'}</p>
+                        </div>
+                        <div className="bg-emerald-50 p-3 rounded-xl">
+                          <p className="text-[10px] font-bold uppercase text-emerald-600 mb-1">Feedback da IA</p>
+                          <p className="text-slate-700">{corr.ai_corrections?.[0]?.correction_feedback}</p>
+                        </div>
+                      </div>
+
+                      {/* Skills */}
+                      {(corr.ai_corrections?.[0]?.skills_mastered?.length > 0 || corr.ai_corrections?.[0]?.skills_to_improve?.length > 0) && (
+                        <div className="flex flex-wrap gap-2">
+                          {corr.ai_corrections?.[0]?.skills_mastered?.map((skill: string) => (
+                            <span key={skill} className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full">
+                              ✓ {skill}
+                            </span>
+                          ))}
+                          {corr.ai_corrections?.[0]?.skills_to_improve?.map((skill: string) => (
+                            <span key={skill} className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full">
+                              ⚠ {skill}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end">
+              <button 
+                onClick={() => setSelectedResult(null)}
+                className="px-8 py-3 bg-brand-blue-dark text-white rounded-xl font-bold hover:bg-brand-black transition-all"
+              >
+                Fechar
+              </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
     </div>
   );
 }

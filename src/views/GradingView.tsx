@@ -124,18 +124,24 @@ export default function GradingView() {
 
       // 3. AI Correction Prompt
       const prompt = `
-        Você é um assistente de correção escolar. Analise as imagens da atividade do aluno e compare com o gabarito fornecido.
+        Você é um assistente de correção escolar especialista. Analise as imagens da atividade do aluno e compare com o gabarito fornecido.
         
         GABARITO:
-        ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): Resposta Esperada: ${q.expected_answer}, Pontos Máximos: ${q.max_score}`).join('\n')}
+        ${questions.map(q => `
+          Questão ${q.question_number} (${q.question_type}):
+          - Resposta Esperada: ${q.expected_answer}
+          - Critério de Correção: ${q.criteria || 'Não especificado'}
+          - Habilidades BNCC: ${q.bncc_skills ? q.bncc_skills.join(', ') : 'Não especificado'}
+          - Pontos Máximos: ${q.max_score}
+        `).join('\n')}
         
         INSTRUÇÕES:
-        - Identifique as respostas do aluno para cada questão.
+        - Identifique as respostas do aluno para cada questão nas imagens.
         - Para questões objetivas, dê a nota total se estiver correta, ou 0 se errada.
-        - Para questões dissertativas, avalie a qualidade da resposta baseada no critério e dê uma nota proporcional.
-        - Forneça um feedback curto para cada questão.
-        - Forneça um resumo geral da atividade.
-        - Referencie habilidades da BNCC se possível (baseado no contexto de Química).
+        - Para questões dissertativas, avalie a qualidade da resposta baseada estritamente no CRITÉRIO DE CORREÇÃO fornecido e dê uma nota proporcional.
+        - Forneça um feedback curto e construtivo para cada questão.
+        - Forneça um resumo geral da atividade, destacando pontos fortes e áreas de melhoria.
+        - Referencie as habilidades da BNCC que o aluno demonstrou domínio ou que ainda precisa desenvolver.
 
         RETORNE UM JSON NO FORMATO:
         {
@@ -147,9 +153,10 @@ export default function GradingView() {
               "questionNumber": 1,
               "score": 1.0,
               "feedback": "Resposta correta e bem fundamentada.",
-              "studentAnswer": "Texto da resposta do aluno"
-            },
-            ...
+              "studentAnswer": "Texto da resposta do aluno",
+              "skillsMastered": ["EF01MA01"],
+              "skillsToImprove": []
+            }
           ]
         }
       `;
@@ -200,9 +207,11 @@ export default function GradingView() {
         if (answer) {
           await supabase.from('ai_corrections').insert([{
             student_answer_id: answer.id,
-            ai_model: 'gemini-3.1-pro',
+            ai_model: 'gemini-3-flash-preview',
             correction_feedback: corr.feedback,
-            score_given: corr.score
+            score_given: corr.score,
+            skills_mastered: corr.skillsMastered || [],
+            skills_to_improve: corr.skillsToImprove || []
           }]);
         }
       }
@@ -215,7 +224,8 @@ export default function GradingView() {
       total_score: data.totalScore,
       max_score: data.maxScore,
       percentage: (data.totalScore / data.maxScore) * 100,
-      ai_corrected: true
+      ai_corrected: true,
+      overall_feedback: data.overallFeedback
     }]);
   }
 

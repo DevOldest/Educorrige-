@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { 
   Users, 
@@ -6,16 +6,65 @@ import {
   CheckSquare, 
   TrendingUp,
   AlertCircle,
-  Clock
+  Clock,
+  Loader2
 } from 'lucide-react';
+import { supabase } from '../lib/supabase';
 
 export default function Dashboard() {
-  const stats = [
-    { label: 'Turmas Ativas', value: '12', icon: Users, color: 'bg-blue-500' },
-    { label: 'Provas Corrigidas', value: '1,284', icon: CheckSquare, color: 'bg-emerald-500' },
-    { label: 'Gabaritos Salvos', value: '45', icon: FileText, color: 'bg-amber-500' },
-    { label: 'Média Geral', value: '7.4', icon: TrendingUp, color: 'bg-purple-500' },
-  ];
+  const [stats, setStats] = useState([
+    { label: 'Turmas Ativas', value: '0', icon: Users, color: 'bg-blue-500' },
+    { label: 'Provas Corrigidas', value: '0', icon: CheckSquare, color: 'bg-emerald-500' },
+    { label: 'Gabaritos Salvos', value: '0', icon: FileText, color: 'bg-amber-500' },
+    { label: 'Média Geral', value: '0.0', icon: TrendingUp, color: 'bg-purple-500' },
+  ]);
+  const [recentActivities, setRecentActivities] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useEffect(() => {
+    fetchDashboardData();
+  }, []);
+
+  async function fetchDashboardData() {
+    if (!supabase) return;
+    setIsLoading(true);
+    try {
+      const [classesCount, resultsCount, assessmentsCount, avgGrade, recentRes] = await Promise.all([
+        supabase.from('classes').select('*', { count: 'exact', head: true }),
+        supabase.from('assessment_results').select('*', { count: 'exact', head: true }),
+        supabase.from('assessments').select('*', { count: 'exact', head: true }),
+        supabase.from('assessment_results').select('final_score'),
+        supabase.from('assessment_results')
+          .select('*, students(name, classes(name)), assessments(title)')
+          .order('created_at', { ascending: false })
+          .limit(5)
+      ]);
+
+      const totalGrades = avgGrade.data?.reduce((acc, curr) => acc + (curr.final_score || 0), 0) || 0;
+      const average = avgGrade.data?.length ? (totalGrades / avgGrade.data.length).toFixed(1) : '0.0';
+
+      setStats([
+        { label: 'Turmas Ativas', value: String(classesCount.count || 0), icon: Users, color: 'bg-blue-500' },
+        { label: 'Provas Corrigidas', value: String(resultsCount.count || 0), icon: CheckSquare, color: 'bg-emerald-500' },
+        { label: 'Gabaritos Salvos', value: String(assessmentsCount.count || 0), icon: FileText, color: 'bg-amber-500' },
+        { label: 'Média Geral', value: average, icon: TrendingUp, color: 'bg-purple-500' },
+      ]);
+
+      if (recentRes.data) setRecentActivities(recentRes.data);
+    } catch (error) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-full py-20">
+        <Loader2 className="animate-spin text-brand-gold" size={48} />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-8">
@@ -48,23 +97,33 @@ export default function Dashboard() {
             Atividades Recentes
           </h3>
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-            {[1, 2, 3, 4, 5].map((_, i) => (
-              <div key={i} className="p-4 border-b border-slate-50 last:border-0 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-brand-blue">
-                    <FileText size={20} />
+            {recentActivities.length > 0 ? (
+              recentActivities.map((activity, i) => (
+                <div key={activity.id} className="p-4 border-b border-slate-50 last:border-0 flex items-center justify-between hover:bg-slate-50 transition-colors">
+                  <div className="flex items-center gap-4">
+                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-brand-blue">
+                      <FileText size={20} />
+                    </div>
+                    <div>
+                      <p className="font-medium text-brand-blue-dark">{activity.assessments?.title}</p>
+                      <p className="text-xs text-slate-500">
+                        {activity.students?.name} • {activity.students?.classes?.name}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium text-brand-blue-dark">Prova de Química - Unidade II</p>
-                    <p className="text-xs text-slate-500">Turma 3º Ano A • 32 alunos</p>
+                  <div className="text-right">
+                    <p className="text-sm font-semibold text-emerald-600">Nota: {activity.final_score}</p>
+                    <p className="text-xs text-slate-400">
+                      {new Date(activity.created_at).toLocaleDateString('pt-BR')}
+                    </p>
                   </div>
                 </div>
-                <div className="text-right">
-                  <p className="text-sm font-semibold text-emerald-600">Concluído</p>
-                  <p className="text-xs text-slate-400">Há 2 horas</p>
-                </div>
+              ))
+            ) : (
+              <div className="p-8 text-center text-slate-500">
+                Nenhuma atividade recente encontrada.
               </div>
-            ))}
+            )}
           </div>
         </div>
 
@@ -76,12 +135,12 @@ export default function Dashboard() {
           </h3>
           <div className="space-y-4">
             <div className="p-4 rounded-xl bg-amber-50 border border-amber-100 text-amber-800 text-sm">
-              <p className="font-bold mb-1">Recuperação Unidade I</p>
-              <p>5 alunos da Turma 1º Ano B estão abaixo da média e precisam de atenção.</p>
+              <p className="font-bold mb-1">Recuperação</p>
+              <p>O sistema monitora automaticamente alunos com desempenho abaixo do esperado.</p>
             </div>
             <div className="p-4 rounded-xl bg-blue-50 border border-blue-100 text-blue-800 text-sm">
-              <p className="font-bold mb-1">Novo Gabarito</p>
-              <p>O gabarito da Lista de Exercícios 03 foi processado com sucesso.</p>
+              <p className="font-bold mb-1">Dica da IA</p>
+              <p>Importe seus gabaritos em PDF para economizar tempo no cadastro de questões.</p>
             </div>
           </div>
         </div>

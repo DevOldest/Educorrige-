@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, FileText, Search, Trash2, Edit2, CheckCircle2, AlertCircle } from 'lucide-react';
+import { Plus, FileText, Search, Trash2, Edit2, CheckCircle2, AlertCircle, FileUp, Loader2, X } from 'lucide-react';
 import { motion } from 'motion/react';
+import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
+import { ai } from '../lib/gemini';
 import { cn } from '../lib/utils';
 
 export default function AnswerKeysView() {
@@ -9,6 +11,7 @@ export default function AnswerKeysView() {
   const [classes, setClasses] = useState<any[]>([]);
   const [units, setUnits] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isProcessing, setIsProcessing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
 
   // Form State
@@ -17,7 +20,7 @@ export default function AnswerKeysView() {
     class_id: '',
     unit_id: '',
     type: 'prova',
-    questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1 }]
+    questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] as string[] }]
   });
 
   useEffect(() => {
@@ -38,12 +41,89 @@ export default function AnswerKeysView() {
     setIsLoading(false);
   }
 
+  const onDrop = async (acceptedFiles: File[]) => {
+    const file = acceptedFiles[0];
+    if (!file || !ai) return;
+
+    setIsProcessing(true);
+    try {
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const base64 = (reader.result as string).split(',')[1];
+        
+        const prompt = `
+          Analise este PDF de uma prova ou atividade escolar e extraia as questões, seus critérios de correção e as habilidades da BNCC relacionadas.
+          Retorne um JSON no formato:
+          {
+            "title": "Título Sugerido da Atividade",
+            "questions": [
+              {
+                "question_number": 1,
+                "question_type": "objetiva" ou "dissertativa",
+                "expected_answer": "Resposta correta ou palavras-chave",
+                "max_score": 1.0,
+                "criteria": "Critério detalhado de correção",
+                "bncc_skills": ["EF01MA01", "EF01MA02"]
+              },
+              ...
+            ]
+          }
+        `;
+
+        try {
+          const result = await ai.models.generateContent({
+            model: "gemini-3-flash-preview",
+            contents: [
+              {
+                parts: [
+                  { text: prompt },
+                  { inlineData: { mimeType: "application/pdf", data: base64 } }
+                ]
+              }
+            ],
+            config: {
+              responseMimeType: "application/json"
+            }
+          });
+
+          const responseText = result.text || '';
+          const data = JSON.parse(responseText);
+          
+          setFormData({
+            ...formData,
+            title: data.title || formData.title,
+            questions: data.questions.map((q: any) => ({
+              ...q,
+              max_score: q.max_score || 1,
+              bncc_skills: q.bncc_skills || []
+            }))
+          });
+        } catch (err) {
+          console.error('AI Processing Error:', err);
+          alert('Erro ao processar o PDF com IA. Tente novamente.');
+        } finally {
+          setIsProcessing(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    } catch (error) {
+      console.error('Error reading file:', error);
+      setIsProcessing(false);
+    }
+  };
+
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop,
+    accept: { 'application/pdf': ['.pdf'] },
+    multiple: false
+  } as any);
+
   const addQuestion = () => {
     setFormData({
       ...formData,
       questions: [
         ...formData.questions,
-        { question_number: formData.questions.length + 1, question_type: 'objetiva', expected_answer: '', max_score: 1 }
+        { question_number: formData.questions.length + 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }
       ]
     });
   };
@@ -61,7 +141,7 @@ export default function AnswerKeysView() {
 
   const handleSave = async () => {
     if (!formData.title || !formData.class_id || !formData.unit_id) {
-      alert('Preencha todos os campos obrigatórios.');
+      alert('Preencha todos os campos obrigatórios (Título, Turma e Unidade).');
       return;
     }
 
@@ -79,12 +159,18 @@ export default function AnswerKeysView() {
 
     if (assessmentError) {
       console.error(assessmentError);
+      alert('Erro ao salvar atividade.');
       return;
     }
 
     const questionsToInsert = formData.questions.map(q => ({
       assessment_id: assessment.id,
-      ...q
+      question_number: q.question_number,
+      question_type: q.question_type,
+      expected_answer: q.expected_answer,
+      max_score: q.max_score,
+      criteria: q.criteria,
+      bncc_skills: q.bncc_skills
     }));
 
     const { error: questionsError } = await supabase
@@ -93,6 +179,7 @@ export default function AnswerKeysView() {
 
     if (questionsError) {
       console.error(questionsError);
+      alert('Erro ao salvar questões.');
       return;
     }
 
@@ -103,7 +190,7 @@ export default function AnswerKeysView() {
       class_id: '',
       unit_id: '',
       type: 'prova',
-      questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1 }]
+      questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }]
     });
   };
 
@@ -179,13 +266,40 @@ export default function AnswerKeysView() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl p-8 max-w-4xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
+            className="bg-white rounded-3xl p-8 max-w-5xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
           >
             <div className="flex justify-between items-center mb-8">
               <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Novo Gabarito</h3>
               <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-brand-black">
                 <X size={24} />
               </button>
+            </div>
+
+            {/* PDF Upload Section */}
+            <div 
+              {...getRootProps()} 
+              className={cn(
+                "mb-8 border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-all cursor-pointer",
+                isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
+              )}
+            >
+              <input {...getInputProps()} />
+              {isProcessing ? (
+                <div className="flex flex-col items-center gap-3">
+                  <Loader2 className="animate-spin text-brand-gold" size={32} />
+                  <p className="text-brand-blue-dark font-medium">A IA está extraindo as questões do PDF...</p>
+                </div>
+              ) : (
+                <>
+                  <div className="p-3 bg-brand-gold/10 rounded-full text-brand-gold">
+                    <FileUp size={24} />
+                  </div>
+                  <div className="text-center">
+                    <p className="font-bold text-brand-blue-dark">Importar Gabarito via PDF</p>
+                    <p className="text-xs text-slate-500">Arraste a prova em PDF para extrair questões e critérios automaticamente</p>
+                  </div>
+                </>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -236,59 +350,83 @@ export default function AnswerKeysView() {
 
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <h4 className="text-lg font-bold text-brand-blue-dark">Questões</h4>
+                <h4 className="text-lg font-bold text-brand-blue-dark">Questões Extraídas/Cadastradas</h4>
                 <button 
                   onClick={addQuestion}
                   className="text-brand-blue font-bold text-sm flex items-center gap-1 hover:text-brand-blue-dark"
                 >
-                  <Plus size={16} /> Adicionar Questão
+                  <Plus size={16} /> Adicionar Questão Manualmente
                 </button>
               </div>
 
               <div className="space-y-4">
                 {formData.questions.map((q, i) => (
-                  <div key={i} className="p-4 bg-slate-50 rounded-2xl grid grid-cols-12 gap-4 items-end">
-                    <div className="col-span-1">
-                      <label className="text-[10px] font-bold uppercase text-slate-400">Nº</label>
-                      <div className="p-3 font-bold text-brand-blue-dark">{q.question_number}</div>
+                  <div key={i} className="p-6 bg-slate-50 rounded-2xl space-y-4">
+                    <div className="grid grid-cols-12 gap-4 items-end">
+                      <div className="col-span-1">
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Nº</label>
+                        <div className="p-3 font-bold text-brand-blue-dark">{q.question_number}</div>
+                      </div>
+                      <div className="col-span-3">
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Tipo</label>
+                        <select 
+                          value={q.question_type}
+                          onChange={(e) => updateQuestion(i, 'question_type', e.target.value)}
+                          className="w-full p-2 bg-white border-none rounded-lg text-sm"
+                        >
+                          <option value="objetiva">Objetiva</option>
+                          <option value="dissertativa">Dissertativa</option>
+                        </select>
+                      </div>
+                      <div className="col-span-5">
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Resposta Esperada</label>
+                        <input 
+                          type="text" 
+                          value={q.expected_answer}
+                          onChange={(e) => updateQuestion(i, 'expected_answer', e.target.value)}
+                          placeholder={q.question_type === 'objetiva' ? "A, B, C..." : "Palavras-chave..."}
+                          className="w-full p-2 bg-white border-none rounded-lg text-sm"
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Pontos</label>
+                        <input 
+                          type="number" 
+                          value={q.max_score}
+                          onChange={(e) => updateQuestion(i, 'max_score', parseFloat(e.target.value))}
+                          className="w-full p-2 bg-white border-none rounded-lg text-sm"
+                        />
+                      </div>
+                      <div className="col-span-1 flex justify-center pb-2">
+                        <button 
+                          onClick={() => removeQuestion(i)}
+                          className="text-red-400 hover:text-red-600"
+                        >
+                          <Trash2 size={18} />
+                        </button>
+                      </div>
                     </div>
-                    <div className="col-span-3">
-                      <label className="text-[10px] font-bold uppercase text-slate-400">Tipo</label>
-                      <select 
-                        value={q.question_type}
-                        onChange={(e) => updateQuestion(i, 'question_type', e.target.value)}
-                        className="w-full p-2 bg-white border-none rounded-lg text-sm"
-                      >
-                        <option value="objetiva">Objetiva</option>
-                        <option value="dissertativa">Dissertativa</option>
-                      </select>
-                    </div>
-                    <div className="col-span-5">
-                      <label className="text-[10px] font-bold uppercase text-slate-400">Resposta Correta / Critério</label>
-                      <input 
-                        type="text" 
-                        value={q.expected_answer}
-                        onChange={(e) => updateQuestion(i, 'expected_answer', e.target.value)}
-                        placeholder={q.question_type === 'objetiva' ? "A, B, C..." : "Palavras-chave..."}
-                        className="w-full p-2 bg-white border-none rounded-lg text-sm"
-                      />
-                    </div>
-                    <div className="col-span-2">
-                      <label className="text-[10px] font-bold uppercase text-slate-400">Pontos</label>
-                      <input 
-                        type="number" 
-                        value={q.max_score}
-                        onChange={(e) => updateQuestion(i, 'max_score', parseFloat(e.target.value))}
-                        className="w-full p-2 bg-white border-none rounded-lg text-sm"
-                      />
-                    </div>
-                    <div className="col-span-1 flex justify-center pb-2">
-                      <button 
-                        onClick={() => removeQuestion(i)}
-                        className="text-red-400 hover:text-red-600"
-                      >
-                        <Trash2 size={18} />
-                      </button>
+                    
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Critério de Correção (IA)</label>
+                        <textarea 
+                          value={q.criteria}
+                          onChange={(e) => updateQuestion(i, 'criteria', e.target.value)}
+                          className="w-full p-2 bg-white border-none rounded-lg text-xs h-16 resize-none"
+                          placeholder="Descreva o que a IA deve considerar para dar a pontuação..."
+                        />
+                      </div>
+                      <div className="space-y-1">
+                        <label className="text-[10px] font-bold uppercase text-slate-400">Habilidades BNCC</label>
+                        <input 
+                          type="text" 
+                          value={q.bncc_skills.join(', ')}
+                          onChange={(e) => updateQuestion(i, 'bncc_skills', e.target.value.split(',').map((s: string) => s.trim()))}
+                          className="w-full p-2 bg-white border-none rounded-lg text-xs"
+                          placeholder="Ex: EF01MA01, EF01MA02"
+                        />
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -313,24 +451,5 @@ export default function AnswerKeysView() {
         </div>
       )}
     </div>
-  );
-}
-
-function X({ size, className }: { size?: number, className?: string }) {
-  return (
-    <svg 
-      xmlns="http://www.w3.org/2000/svg" 
-      width={size || 24} 
-      height={size || 24} 
-      viewBox="0 0 24 24" 
-      fill="none" 
-      stroke="currentColor" 
-      strokeWidth="2" 
-      strokeLinecap="round" 
-      strokeLinejoin="round" 
-      className={className}
-    >
-      <path d="M18 6 6 18"/><path d="m6 6 12 12"/>
-    </svg>
   );
 }
