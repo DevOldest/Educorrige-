@@ -89,51 +89,14 @@ export default function Dashboard() {
         ))}
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Recent Activity */}
-        <div className="lg:col-span-2 space-y-4">
-          <h3 className="text-lg font-bold text-brand-blue-dark flex items-center gap-2">
-            <Clock size={20} className="text-brand-gold" />
-            Atividades Recentes
-          </h3>
-          <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
-            {recentActivities.length > 0 ? (
-              recentActivities.map((activity, i) => (
-                <div key={activity.id} className="p-4 border-b border-slate-50 last:border-0 flex items-center justify-between hover:bg-slate-50 transition-colors">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center text-brand-blue">
-                      <FileText size={20} />
-                    </div>
-                    <div>
-                      <p className="font-medium text-brand-blue-dark">{activity.assessments?.title}</p>
-                      <p className="text-xs text-slate-500">
-                        {activity.students?.name} • {activity.students?.classes?.name}
-                      </p>
-                    </div>
-                  </div>
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-emerald-600">Nota: {activity.total_score}</p>
-                    <p className="text-xs text-slate-400">
-                      {new Date(activity.created_at).toLocaleDateString('pt-BR')}
-                    </p>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="p-8 text-center text-slate-500">
-                Nenhuma atividade recente encontrada.
-              </div>
-            )}
-          </div>
-        </div>
-
+      <div className="grid grid-cols-1 gap-8">
         {/* Alerts/Notifications */}
         <div className="space-y-4">
           <h3 className="text-lg font-bold text-brand-blue-dark flex items-center gap-2">
             <AlertCircle size={20} className="text-brand-gold" />
             Avisos
           </h3>
-          <div className="space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="p-4 rounded-xl bg-amber-50 border border-amber-100 text-amber-800 text-sm">
               <p className="font-bold mb-1">Recuperação</p>
               <p>O sistema monitora automaticamente alunos com desempenho abaixo do esperado.</p>

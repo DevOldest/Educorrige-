@@ -13,11 +13,13 @@ export default function AnswerKeysView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingAssessment, setEditingAssessment] = useState<any>(null);
+  const [newAssessmentName, setNewAssessmentName] = useState('');
 
   // Form State
   const [formData, setFormData] = useState({
     title: '',
-    class_id: '',
     unit_id: '',
     type: 'prova',
     questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] as string[] }]
@@ -205,9 +207,40 @@ export default function AnswerKeysView() {
     setFormData({ ...formData, questions: newQuestions });
   };
 
+  const handleEdit = (assessment: any) => {
+    setEditingAssessment(assessment);
+    setNewAssessmentName(assessment.title);
+    setShowEditModal(true);
+  };
+
+  const handleUpdateName = async () => {
+    if (!supabase || !editingAssessment || !newAssessmentName.trim()) return;
+    
+    setIsLoading(true);
+    try {
+      const { error } = await supabase
+        .from('assessments')
+        .update({ title: newAssessmentName.trim() })
+        .eq('id', editingAssessment.id);
+
+      if (error) throw error;
+      
+      setAssessments(assessments.map(a => 
+        a.id === editingAssessment.id ? { ...a, title: newAssessmentName.trim() } : a
+      ));
+      setShowEditModal(false);
+      setEditingAssessment(null);
+    } catch (error) {
+      console.error('Error updating assessment name:', error);
+      alert('Erro ao atualizar o nome do gabarito.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSave = async () => {
-    if (!formData.title || !formData.class_id || !formData.unit_id) {
-      alert('Preencha todos os campos obrigatórios (Título, Turma e Unidade).');
+    if (!formData.title || !formData.unit_id) {
+      alert('Preencha todos os campos obrigatórios (Título e Unidade).');
       return;
     }
 
@@ -217,7 +250,6 @@ export default function AnswerKeysView() {
       .from('assessments')
       .insert([{
         title: formData.title,
-        class_id: formData.class_id,
         unit_id: formData.unit_id,
         type: formData.type,
         total_questions: formData.questions.length,
@@ -256,7 +288,6 @@ export default function AnswerKeysView() {
     fetchData();
     setFormData({
       title: '',
-      class_id: '',
       unit_id: '',
       type: 'prova',
       questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }]
@@ -284,7 +315,6 @@ export default function AnswerKeysView() {
           <thead className="bg-slate-50 border-b border-slate-100">
             <tr>
               <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Título</th>
-              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Turma</th>
               <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Unidade</th>
               <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Tipo</th>
               <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Questões</th>
@@ -302,7 +332,6 @@ export default function AnswerKeysView() {
                     <span className="font-medium text-brand-blue-dark">{assessment.title}</span>
                   </div>
                 </td>
-                <td className="px-6 py-4 text-sm text-slate-600">{assessment.classes?.name}</td>
                 <td className="px-6 py-4 text-sm text-slate-600">{assessment.units?.name}</td>
                 <td className="px-6 py-4">
                   <span className={cn(
@@ -315,7 +344,10 @@ export default function AnswerKeysView() {
                 <td className="px-6 py-4 text-sm text-slate-600">{assessment.total_questions}</td>
                 <td className="px-6 py-4">
                   <div className="flex gap-2">
-                    <button className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue">
+                    <button 
+                      onClick={() => handleEdit(assessment)}
+                      className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue"
+                    >
                       <Edit2 size={16} />
                     </button>
                     <button 
@@ -394,17 +426,6 @@ export default function AnswerKeysView() {
                 >
                   <option value="prova">Prova</option>
                   <option value="lista">Lista</option>
-                </select>
-              </div>
-              <div className="space-y-2">
-                <label className="text-sm font-bold text-brand-blue-dark">Turma</label>
-                <select 
-                  value={formData.class_id}
-                  onChange={(e) => setFormData({ ...formData, class_id: e.target.value })}
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
-                >
-                  <option value="">Selecionar Turma</option>
-                  {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
               <div className="space-y-2">
@@ -518,6 +539,45 @@ export default function AnswerKeysView() {
               >
                 Salvar Gabarito
               </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+      {/* Edit Name Modal */}
+      {showEditModal && (
+        <div className="fixed inset-0 bg-brand-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <motion.div 
+            initial={{ opacity: 0, scale: 0.95 }}
+            animate={{ opacity: 1, scale: 1 }}
+            className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8"
+          >
+            <h3 className="text-2xl font-serif font-bold text-brand-blue-dark mb-6">Editar Nome do Gabarito</h3>
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-slate-400">Novo Nome</label>
+                <input 
+                  type="text"
+                  value={newAssessmentName}
+                  onChange={(e) => setNewAssessmentName(e.target.value)}
+                  className="w-full p-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-brand-yellow"
+                  placeholder="Ex: Prova de Matemática - 1º Bimestre"
+                />
+              </div>
+              <div className="flex gap-4 pt-4">
+                <button 
+                  onClick={() => setShowEditModal(false)}
+                  className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={handleUpdateName}
+                  disabled={isLoading || !newAssessmentName.trim()}
+                  className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all disabled:opacity-50"
+                >
+                  {isLoading ? 'Salvando...' : 'Salvar'}
+                </button>
+              </div>
             </div>
           </motion.div>
         </div>

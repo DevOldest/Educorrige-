@@ -1,12 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarChart3, Users, CheckCircle2, Trash2, Loader2 } from 'lucide-react';
+import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarChart3, Users, CheckCircle2, Trash2, Loader2, Printer } from 'lucide-react';
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 export default function ReportsView() {
   const [results, setResults] = useState<any[]>([]);
   const [classes, setClasses] = useState<any[]>([]);
+  const [students, setStudents] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedResult, setSelectedResult] = useState<any>(null);
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
@@ -14,12 +17,32 @@ export default function ReportsView() {
   
   const [filters, setFilters] = useState({
     classId: '',
+    studentId: '',
     type: ''
   });
 
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    if (filters.classId) {
+      fetchStudents(filters.classId);
+    } else {
+      setStudents([]);
+      setFilters(prev => ({ ...prev, studentId: '' }));
+    }
+  }, [filters.classId]);
+
+  async function fetchStudents(classId: string) {
+    if (!supabase) return;
+    const { data } = await supabase
+      .from('students')
+      .select('*')
+      .eq('class_id', classId)
+      .order('name');
+    if (data) setStudents(data);
+  }
 
   async function fetchData() {
     if (!supabase) {
@@ -42,9 +65,68 @@ export default function ReportsView() {
 
   const filteredResults = results.filter(r => {
     const matchesClass = filters.classId ? r.students?.classes?.id === filters.classId : true;
+    const matchesStudent = filters.studentId ? r.student_id === filters.studentId : true;
     const matchesType = filters.type ? r.assessments?.type === filters.type : true;
-    return matchesClass && matchesType;
+    return matchesClass && matchesStudent && matchesType;
   });
+
+  const exportToPDF = (result: any) => {
+    if (!result) return;
+    const doc = new jsPDF();
+    const pageWidth = doc.internal.pageSize.getWidth();
+
+    // Header
+    doc.setFontSize(20);
+    doc.setTextColor(10, 37, 64); // brand-blue-dark
+    doc.text('Relatório de Correção', pageWidth / 2, 20, { align: 'center' });
+
+    // Student Info
+    doc.setFontSize(12);
+    doc.setTextColor(100);
+    doc.text(`Aluno: ${result.students?.name}`, 20, 35);
+    doc.text(`Turma: ${result.students?.classes?.name}`, 20, 42);
+    doc.text(`Atividade: ${result.assessments?.title}`, 20, 49);
+    doc.text(`Data: ${new Date(result.created_at).toLocaleDateString()}`, 20, 56);
+
+    // Score
+    doc.setFontSize(16);
+    doc.setTextColor(10, 37, 64);
+    doc.text(`Nota: ${result.total_score} / ${result.max_score} (${Math.round(result.percentage)}%)`, pageWidth - 20, 45, { align: 'right' });
+
+    // Overall Feedback
+    if (result.overall_feedback) {
+      doc.setFontSize(12);
+      doc.setTextColor(10, 37, 64);
+      doc.text('Feedback Geral:', 20, 70);
+      doc.setFontSize(10);
+      doc.setTextColor(80);
+      const splitFeedback = doc.splitTextToSize(result.overall_feedback, pageWidth - 40);
+      doc.text(splitFeedback, 20, 77);
+    }
+
+    // Table of corrections
+    const tableData = result.corrections.map((corr: any) => [
+      corr.questions?.question_number,
+      corr.questions?.question_type,
+      corr.answer_text || 'Sem resposta',
+      corr.ai_corrections?.[0]?.correction_feedback || '',
+      `${corr.score} / ${corr.questions?.max_score}`
+    ]);
+
+    autoTable(doc, {
+      startY: result.overall_feedback ? 100 : 70,
+      head: [['Nº', 'Tipo', 'Resposta do Aluno', 'Feedback da IA', 'Pontos']],
+      body: tableData,
+      headStyles: { fillColor: [10, 37, 64] },
+      styles: { fontSize: 8 },
+      columnStyles: {
+        2: { cellWidth: 40 },
+        3: { cellWidth: 60 }
+      }
+    });
+
+    doc.save(`Relatorio_${result.students?.name}_${result.assessments?.title}.pdf`);
+  };
 
   const fetchResultDetails = async (result: any) => {
     if (!supabase) return;
@@ -136,14 +218,23 @@ export default function ReportsView() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-4 gap-4">
         <select 
           value={filters.classId}
-          onChange={(e) => setFilters({ ...filters, classId: e.target.value })}
+          onChange={(e) => setFilters({ ...filters, classId: e.target.value, studentId: '' })}
           className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
         >
           <option value="">Todas as Turmas</option>
           {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+        </select>
+        <select 
+          value={filters.studentId}
+          onChange={(e) => setFilters({ ...filters, studentId: e.target.value })}
+          className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
+          disabled={!filters.classId}
+        >
+          <option value="">Todos os Alunos</option>
+          {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
         </select>
         <select 
           value={filters.type}
@@ -155,7 +246,7 @@ export default function ReportsView() {
           <option value="lista">Listas</option>
         </select>
         <button 
-          onClick={() => setFilters({ classId: '', type: '' })}
+          onClick={() => setFilters({ classId: '', studentId: '', type: '' })}
           className="text-brand-blue font-bold text-sm hover:underline"
         >
           Limpar Filtros
@@ -339,7 +430,14 @@ export default function ReportsView() {
               </div>
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end">
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between">
+              <button 
+                onClick={() => exportToPDF(selectedResult)}
+                className="flex items-center gap-2 px-6 py-3 bg-brand-gold text-white rounded-xl font-bold hover:bg-brand-gold/90 transition-all"
+              >
+                <Printer size={20} />
+                Exportar PDF
+              </button>
               <button 
                 onClick={() => setSelectedResult(null)}
                 className="px-8 py-3 bg-brand-blue-dark text-white rounded-xl font-bold hover:bg-brand-black transition-all"

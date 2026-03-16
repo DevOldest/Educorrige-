@@ -41,15 +41,14 @@ export default function GradingView() {
 
   useEffect(() => {
     fetchInitialData();
+    fetchAllAssessments();
   }, []);
 
   useEffect(() => {
     if (selectedClassId) {
       fetchStudents(selectedClassId);
-      fetchAssessments(selectedClassId);
     } else {
       setStudents([]);
-      setAssessments([]);
     }
   }, [selectedClassId]);
 
@@ -88,14 +87,13 @@ export default function GradingView() {
     }
   }
 
-  async function fetchAssessments(classId: string) {
+  async function fetchAllAssessments() {
     if (!supabase) return;
     setIsLoadingData(true);
     try {
       const { data, error } = await supabase
         .from('assessments')
         .select('*')
-        .eq('class_id', classId)
         .order('created_at', { ascending: false });
       
       if (error) throw error;
@@ -212,6 +210,9 @@ export default function GradingView() {
     if (!supabase) return;
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error('Usuário não autenticado');
+
       // 1. Get assessment details to know type and unit
       const { data: assessment } = await supabase
         .from('assessments')
@@ -238,7 +239,8 @@ export default function GradingView() {
               assessment_id: selectedAssessmentId,
               question_id: question.id,
               answer_text: corr.studentAnswer || '',
-              score: corr.score
+              score: corr.score,
+              user_id: user.id
             }])
             .select()
             .single();
@@ -250,7 +252,8 @@ export default function GradingView() {
               correction_feedback: corr.feedback,
               score_given: corr.score,
               skills_mastered: corr.skillsMastered || [],
-              skills_to_improve: corr.skillsToImprove || []
+              skills_to_improve: corr.skillsToImprove || [],
+              user_id: user.id
             }]);
           }
         }
@@ -264,7 +267,8 @@ export default function GradingView() {
         max_score: data.maxScore,
         percentage: (data.totalScore / data.maxScore) * 100,
         ai_corrected: true,
-        overall_feedback: data.overallFeedback
+        overall_feedback: data.overallFeedback,
+        user_id: user.id
       }]);
 
       // 4. Update grade in Management (grades table)
@@ -416,9 +420,8 @@ export default function GradingView() {
                 value={selectedAssessmentId}
                 onChange={(e) => setSelectedAssessmentId(e.target.value)}
                 className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
-                disabled={!selectedClassId}
               >
-                <option value="">{selectedClassId ? 'Selecionar Gabarito' : 'Selecione uma Turma Primeiro'}</option>
+                <option value="">Selecionar Gabarito</option>
                 {assessments
                   .filter(a => {
                     const typeMatch = a.type === activityType;
@@ -427,11 +430,8 @@ export default function GradingView() {
                   })
                   .map(a => <option key={a.id} value={a.id}>{a.title}</option>)}
               </select>
-              {selectedClassId && assessments.length === 0 && (
-                <p className="text-[10px] text-red-500 font-medium">Nenhum gabarito encontrado para esta turma.</p>
-              )}
-              {selectedClassId && assessments.length > 0 && assessments.filter(a => a.type === activityType && (selectedUnitId ? a.unit_id === selectedUnitId : true)).length === 0 && (
-                <p className="text-[10px] text-amber-600 font-medium">Nenhum gabarito do tipo "{activityType}" encontrado para esta unidade.</p>
+              {assessments.length === 0 && (
+                <p className="text-[10px] text-red-500 font-medium">Nenhum gabarito encontrado.</p>
               )}
             </div>
           </div>
@@ -478,6 +478,9 @@ export default function GradingView() {
                     className="aspect-square rounded-xl overflow-hidden border border-slate-200 relative group"
                   >
                     <img src={src} alt={`Preview ${i}`} className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
+                      <ImageIcon className="text-white" size={24} />
+                    </div>
                     <button 
                       onClick={() => {
                         const newFiles = [...files];
