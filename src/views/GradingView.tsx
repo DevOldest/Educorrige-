@@ -39,8 +39,11 @@ export default function GradingView() {
   const [previews, setPreviews] = useState<string[]>([]);
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [hasSaved, setHasSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
+  const [gradingContext, setGradingContext] = useState<any>(null);
 
   useEffect(() => {
     fetchInitialData();
@@ -199,7 +202,13 @@ export default function GradingView() {
       if (jsonMatch) {
         const correctionData = JSON.parse(jsonMatch[0]);
         setResult(correctionData);
-        await saveResults(correctionData);
+        setGradingContext({
+          studentId: selectedStudentId,
+          assessmentId: selectedAssessmentId,
+          unitId: selectedUnitId,
+          classId: selectedClassId
+        });
+        setHasSaved(false);
       }
     } catch (error: any) {
       console.error('Grading error:', error);
@@ -209,28 +218,31 @@ export default function GradingView() {
     }
   };
 
-  async function saveResults(data: any) {
-    if (!supabase) return;
+  async function saveResults() {
+    if (!supabase || !result || !gradingContext || hasSaved) return;
 
+    setIsSaving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Usuário não autenticado');
 
-      // 1. Get assessment details to know type and unit
+      const { studentId, assessmentId, unitId } = gradingContext;
+
+      // 1. Get assessment details
       const { data: assessment } = await supabase
         .from('assessments')
         .select('type, unit_id')
-        .eq('id', selectedAssessmentId)
+        .eq('id', assessmentId)
         .single();
 
       if (!assessment) throw new Error('Atividade não encontrada');
 
       // 2. Save individual answers and corrections
-      for (const corr of data.corrections) {
+      for (const corr of result.corrections) {
         const { data: question } = await supabase
           .from('questions')
           .select('id')
-          .eq('assessment_id', selectedAssessmentId)
+          .eq('assessment_id', assessmentId)
           .eq('question_number', corr.questionNumber)
           .single();
 
@@ -238,8 +250,8 @@ export default function GradingView() {
           const { data: answer } = await supabase
             .from('student_answers')
             .insert([{
-              student_id: selectedStudentId,
-              assessment_id: selectedAssessmentId,
+              student_id: studentId,
+              assessment_id: assessmentId,
               question_id: question.id,
               answer_text: corr.studentAnswer || '',
               score: corr.score,
@@ -264,21 +276,21 @@ export default function GradingView() {
 
       // 3. Save overall result
       await supabase.from('assessment_results').insert([{
-        student_id: selectedStudentId,
-        assessment_id: selectedAssessmentId,
-        total_score: data.totalScore,
-        max_score: data.maxScore,
-        percentage: (data.totalScore / data.maxScore) * 100,
+        student_id: studentId,
+        assessment_id: assessmentId,
+        total_score: result.totalScore,
+        max_score: result.maxScore,
+        percentage: (result.totalScore / result.maxScore) * 100,
         ai_corrected: true,
-        overall_feedback: data.overallFeedback,
+        overall_feedback: result.overallFeedback,
         user_id: user.id
       }]);
 
-      // 4. Update grade in Management (grades table)
+      // 4. Update grade in Management
       const { data: existingGrade } = await supabase
         .from('grades')
         .select('*')
-        .eq('student_id', selectedStudentId)
+        .eq('student_id', studentId)
         .eq('unit_id', assessment.unit_id)
         .maybeSingle();
 
@@ -288,15 +300,8 @@ export default function GradingView() {
         assessment.type === 'lista3' ? 'list3_score' : 
         'list1_score';
       
-      const gradeData: any = {
-        student_id: selectedStudentId,
-        unit_id: assessment.unit_id,
-        [fieldToUpdate]: data.totalScore
-      };
-
       if (existingGrade) {
-        // Calculate new average
-        const updatedGrade = { ...existingGrade, [fieldToUpdate]: data.totalScore };
+        const updatedGrade = { ...existingGrade, [fieldToUpdate]: result.totalScore };
         const sum = (updatedGrade.list1_score || 0) + 
                     (updatedGrade.list2_score || 0) + 
                     (updatedGrade.list3_score || 0) + 
@@ -315,16 +320,26 @@ export default function GradingView() {
         
         await supabase
           .from('grades')
-          .update({ [fieldToUpdate]: data.totalScore, unit_average: average })
+          .update({ [fieldToUpdate]: result.totalScore, unit_average: average })
           .eq('id', existingGrade.id);
       } else {
         await supabase
           .from('grades')
-          .insert([{ ...gradeData, unit_average: data.totalScore }]);
+          .insert([{ 
+            student_id: studentId,
+            unit_id: assessment.unit_id,
+            [fieldToUpdate]: result.totalScore,
+            unit_average: result.totalScore 
+          }]);
       }
-    } catch (error) {
+
+      setHasSaved(true);
+      alert('Resultados salvos com sucesso no banco de dados!');
+    } catch (error: any) {
       console.error('Error saving results:', error);
-      throw error;
+      alert('Erro ao salvar resultados: ' + error.message);
+    } finally {
+      setIsSaving(false);
     }
   }
 
@@ -621,10 +636,25 @@ export default function GradingView() {
                 ))}
               </div>
 
-              <div className="flex gap-4 mt-8">
+              <div className="flex flex-col sm:flex-row gap-4 mt-8">
+                {!hasSaved ? (
+                  <button 
+                    onClick={saveResults}
+                    disabled={isSaving}
+                    className="flex-1 py-3 bg-brand-blue text-white font-bold rounded-xl hover:bg-brand-blue-dark transition-all flex items-center justify-center gap-2 shadow-md"
+                  >
+                    {isSaving ? <Loader2 className="animate-spin" size={20} /> : <CheckCircle2 size={20} />}
+                    {isSaving ? 'Salvando...' : 'Salvar'}
+                  </button>
+                ) : (
+                  <div className="flex-1 py-3 bg-emerald-50 text-emerald-600 font-bold rounded-xl flex items-center justify-center gap-2 border border-emerald-100">
+                    <CheckCircle2 size={20} />
+                    Salvo com Sucesso
+                  </div>
+                )}
                 <button 
                   onClick={exportToPDF}
-                  className="flex-1 py-3 bg-brand-gold text-white font-bold rounded-xl hover:bg-brand-gold/90 transition-all flex items-center justify-center gap-2"
+                  className="flex-1 py-3 bg-brand-gold text-white font-bold rounded-xl hover:bg-brand-gold/90 transition-all flex items-center justify-center gap-2 shadow-md"
                 >
                   <Printer size={20} />
                   Baixar PDF
@@ -634,6 +664,7 @@ export default function GradingView() {
                     setResult(null);
                     setFiles([]);
                     setPreviews([]);
+                    setHasSaved(false);
                   }}
                   className="flex-1 py-3 bg-slate-100 text-brand-blue-dark font-bold rounded-xl hover:bg-slate-200 transition-colors"
                 >

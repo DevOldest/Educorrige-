@@ -21,6 +21,12 @@ export default function ReportsView() {
     type: ''
   });
 
+  const [appliedFilters, setAppliedFilters] = useState({
+    classId: '',
+    studentId: '',
+    type: ''
+  });
+
   useEffect(() => {
     fetchData();
   }, []);
@@ -64,11 +70,21 @@ export default function ReportsView() {
   }
 
   const filteredResults = results.filter(r => {
-    const matchesClass = filters.classId ? r.students?.classes?.id === filters.classId : true;
-    const matchesStudent = filters.studentId ? r.student_id === filters.studentId : true;
-    const matchesType = filters.type ? r.assessments?.type === filters.type : true;
+    const matchesClass = appliedFilters.classId ? r.students?.classes?.id === appliedFilters.classId : true;
+    const matchesStudent = appliedFilters.studentId ? r.student_id === appliedFilters.studentId : true;
+    const matchesType = appliedFilters.type ? r.assessments?.type === appliedFilters.type : true;
     return matchesClass && matchesStudent && matchesType;
   });
+
+  const handleSearch = () => {
+    setAppliedFilters({ ...filters });
+  };
+
+  const handleClearFilters = () => {
+    const empty = { classId: '', studentId: '', type: '' };
+    setFilters(empty);
+    setAppliedFilters(empty);
+  };
 
   const exportToPDF = (result: any) => {
     if (!result) return;
@@ -248,12 +264,21 @@ export default function ReportsView() {
           <option value="lista2">Lista 2</option>
           <option value="lista3">Lista 3</option>
         </select>
-        <button 
-          onClick={() => setFilters({ classId: '', studentId: '', type: '' })}
-          className="text-brand-blue font-bold text-sm hover:underline"
-        >
-          Limpar Filtros
-        </button>
+        <div className="flex items-center gap-4">
+          <button 
+            onClick={handleSearch}
+            className="flex-1 bg-brand-blue text-white font-bold py-3 rounded-xl hover:bg-brand-blue-dark transition-all flex items-center justify-center gap-2"
+          >
+            <Search size={18} />
+            Buscar
+          </button>
+          <button 
+            onClick={handleClearFilters}
+            className="text-brand-blue font-bold text-sm hover:underline whitespace-nowrap"
+          >
+            Limpar Filtros
+          </button>
+        </div>
       </div>
 
       {/* Results List */}
