@@ -154,35 +154,44 @@ export default function GradingView() {
       }));
 
       // 3. AI Correction Prompt
+      const targetScore = activityType === 'prova' ? 4.0 : 1.0;
+      const questionWeight = targetScore / (questions?.length || 1);
+
       const prompt = `
         Você é um assistente de correção escolar especialista. Analise as imagens da atividade do aluno e compare com o gabarito fornecido.
         
+        TIPO DE ATIVIDADE: ${activityType.toUpperCase()}
+        VALOR TOTAL DA ATIVIDADE: ${targetScore.toFixed(1)} pontos
+        NÚMERO DE QUESTÕES: ${questions?.length || 0}
+        PESO POR QUESTÃO: ${questionWeight.toFixed(4)} pontos (Calculado como ${targetScore} / ${questions?.length || 1})
+
         GABARITO:
-        ${questions.map(q => `
+        ${questions?.map(q => `
           Questão ${q.question_number} (${q.question_type}):
           - Resposta Esperada: ${q.expected_answer}
           - Critério de Correção: ${q.criteria || 'Não especificado'}
           - Habilidades BNCC: ${q.bncc_skills ? q.bncc_skills.join(', ') : 'Não especificado'}
-          - Pontos Máximos: ${q.max_score}
+          - Pontos Máximos: ${questionWeight.toFixed(4)}
         `).join('\n')}
         
         INSTRUÇÕES:
         - Identifique as respostas do aluno para cada questão nas imagens.
-        - Para questões objetivas, dê a nota total se estiver correta, ou 0 se errada.
-        - Para questões dissertativas, avalie a qualidade da resposta baseada estritamente no CRITÉRIO DE CORREÇÃO fornecido e dê uma nota proporcional.
+        - Para questões objetivas, dê a nota total (${questionWeight.toFixed(4)}) se estiver correta, ou 0 se errada.
+        - Para questões dissertativas, avalie a qualidade da resposta baseada estritamente no CRITÉRIO DE CORREÇÃO fornecido e dê uma nota proporcional ao peso da questão (${questionWeight.toFixed(4)}).
         - Forneça um feedback curto e construtivo para cada questão.
         - Forneça um resumo geral da atividade, destacando pontos fortes e áreas de melhoria.
         - Referencie as habilidades da BNCC que o aluno demonstrou domínio ou que ainda precisa desenvolver.
+        - O "totalScore" final deve ser a soma das notas de cada questão, não ultrapassando ${targetScore.toFixed(1)}.
 
         RETORNE UM JSON NO FORMATO:
         {
           "overallFeedback": "Texto curto relatando de forma geral a atividade",
-          "totalScore": 8.5,
-          "maxScore": 10.0,
+          "totalScore": 0.0,
+          "maxScore": ${targetScore.toFixed(1)},
           "corrections": [
             {
               "questionNumber": 1,
-              "score": 1.0,
+              "score": 0.0,
               "feedback": "Resposta correta e bem fundamentada.",
               "studentAnswer": "Texto da resposta do aluno",
               "skillsMastered": ["EF01MA01"],
