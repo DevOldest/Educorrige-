@@ -113,7 +113,7 @@ export default function App() {
               animate={{ opacity: 1 }}
               className="text-2xl font-serif font-bold tracking-tight text-brand-yellow"
             >
-              Educorrige
+              3 em 1
             </motion.h1>
           )}
           <button 
@@ -151,12 +151,20 @@ export default function App() {
 
         <div className="p-4 border-t border-white/10">
           <div className={cn("flex items-center gap-3 p-2", !isSidebarOpen && "justify-center")}>
-            <div className="w-10 h-10 rounded-full bg-brand-gold flex items-center justify-center font-bold text-brand-blue-dark uppercase">
-              {session?.user?.email?.substring(0, 2) || 'PR'}
+            <div className="w-10 h-10 rounded-full bg-brand-gold overflow-hidden flex items-center justify-center border-2 border-brand-yellow shadow-inner">
+              <img 
+                src="https://ais-dev-b6e5wy4h5nwrozqzrdq6hh-59306652383.us-east5.run.app/favicon.ico" 
+                alt="Átila Alves"
+                className="w-full h-full object-cover"
+                onError={(e) => {
+                  const target = e.target as HTMLImageElement;
+                  target.src = "https://api.dicebear.com/7.x/avataaars/svg?seed=Atila";
+                }}
+              />
             </div>
             {isSidebarOpen && (
               <div className="overflow-hidden">
-                <p className="text-sm font-medium truncate">{session?.user?.email?.split('@')[0]}</p>
+                <p className="text-sm font-medium truncate">Átila Alves</p>
                 <p className="text-xs text-brand-gray truncate">Professor</p>
               </div>
             )}
