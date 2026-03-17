@@ -18,13 +18,15 @@ export default function ReportsView() {
   const [filters, setFilters] = useState({
     classId: '',
     studentId: '',
-    type: ''
+    type: '',
+    search: ''
   });
 
   const [appliedFilters, setAppliedFilters] = useState({
     classId: '',
     studentId: '',
-    type: ''
+    type: '',
+    search: ''
   });
 
   useEffect(() => {
@@ -73,7 +75,11 @@ export default function ReportsView() {
     const matchesClass = appliedFilters.classId ? r.students?.classes?.id === appliedFilters.classId : true;
     const matchesStudent = appliedFilters.studentId ? r.student_id === appliedFilters.studentId : true;
     const matchesType = appliedFilters.type ? r.assessments?.type === appliedFilters.type : true;
-    return matchesClass && matchesStudent && matchesType;
+    const matchesSearch = appliedFilters.search 
+      ? r.students?.name?.toLowerCase().includes(appliedFilters.search.toLowerCase()) ||
+        r.assessments?.title?.toLowerCase().includes(appliedFilters.search.toLowerCase())
+      : true;
+    return matchesClass && matchesStudent && matchesType && matchesSearch;
   });
 
   const handleSearch = () => {
@@ -81,7 +87,7 @@ export default function ReportsView() {
   };
 
   const handleClearFilters = () => {
-    const empty = { classId: '', studentId: '', type: '' };
+    const empty = { classId: '', studentId: '', type: '', search: '' };
     setFilters(empty);
     setAppliedFilters(empty);
   };
@@ -235,49 +241,63 @@ export default function ReportsView() {
       </div>
 
       {/* Filters */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-4 gap-4">
-        <select 
-          value={filters.classId}
-          onChange={(e) => setFilters({ ...filters, classId: e.target.value, studentId: '' })}
-          className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-        >
-          <option value="">Todas as Turmas</option>
-          {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-        </select>
-        <select 
-          value={filters.studentId}
-          onChange={(e) => setFilters({ ...filters, studentId: e.target.value })}
-          className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-          disabled={!filters.classId}
-        >
-          <option value="">Todos os Alunos</option>
-          {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-        </select>
-        <select 
-          value={filters.type}
-          onChange={(e) => setFilters({ ...filters, type: e.target.value })}
-          className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-        >
-          <option value="">Todos os Tipos</option>
-          <option value="prova">Provas</option>
-          <option value="lista1">Lista 1</option>
-          <option value="lista2">Lista 2</option>
-          <option value="lista3">Lista 3</option>
-        </select>
-        <div className="flex items-center gap-4">
-          <button 
-            onClick={handleSearch}
-            className="flex-1 bg-brand-blue text-white font-bold py-3 rounded-xl hover:bg-brand-blue-dark transition-all flex items-center justify-center gap-2"
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
+        <div className="relative">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+          <input 
+            type="text"
+            placeholder="Buscar por nome do aluno ou título da atividade..."
+            value={filters.search}
+            onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-brand-yellow text-base"
+          />
+        </div>
+        
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <select 
+            value={filters.classId}
+            onChange={(e) => setFilters({ ...filters, classId: e.target.value, studentId: '' })}
+            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
           >
-            <Search size={18} />
-            Buscar
-          </button>
-          <button 
-            onClick={handleClearFilters}
-            className="text-brand-blue font-bold text-sm hover:underline whitespace-nowrap"
+            <option value="">Todas as Turmas</option>
+            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+          <select 
+            value={filters.studentId}
+            onChange={(e) => setFilters({ ...filters, studentId: e.target.value })}
+            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
+            disabled={!filters.classId}
           >
-            Limpar Filtros
-          </button>
+            <option value="">Todos os Alunos</option>
+            {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+          </select>
+          <select 
+            value={filters.type}
+            onChange={(e) => setFilters({ ...filters, type: e.target.value })}
+            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
+          >
+            <option value="">Todos os Tipos</option>
+            <option value="prova">Provas</option>
+            <option value="lista1">Lista 1</option>
+            <option value="lista2">Lista 2</option>
+            <option value="lista3">Lista 3</option>
+          </select>
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={handleSearch}
+              className="flex-1 bg-brand-blue text-white font-bold py-3 rounded-xl hover:bg-brand-blue-dark transition-all flex items-center justify-center gap-2 shadow-lg shadow-brand-blue/20"
+            >
+              <Search size={18} />
+              Buscar
+            </button>
+            <button 
+              onClick={handleClearFilters}
+              className="text-brand-blue font-bold text-sm hover:underline whitespace-nowrap px-2"
+            >
+              Limpar
+            </button>
+          </div>
         </div>
       </div>
 
