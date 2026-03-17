@@ -219,80 +219,122 @@ export default function GradingView() {
   };
 
   async function saveResults() {
-    if (!supabase || !result || !gradingContext || hasSaved) return;
+    console.log('Iniciando saveResults...', { result, gradingContext, hasSaved });
+    if (!supabase || !result || !gradingContext || hasSaved) {
+      console.warn('saveResults abortado:', { 
+        hasSupabase: !!supabase, 
+        hasResult: !!result, 
+        hasContext: !!gradingContext, 
+        hasSaved 
+      });
+      return;
+    }
 
     setIsSaving(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const { data: { user }, error: authError } = await supabase.auth.getUser();
+      if (authError) throw authError;
       if (!user) throw new Error('Usuário não autenticado');
 
-      const { studentId, assessmentId, unitId } = gradingContext;
+      const { studentId, assessmentId } = gradingContext;
+      console.log('Contexto de salvamento:', { studentId, assessmentId, userId: user.id });
 
       // 1. Get assessment details
-      const { data: assessment } = await supabase
+      const { data: assessment, error: assessmentError } = await supabase
         .from('assessments')
         .select('type, unit_id')
         .eq('id', assessmentId)
         .single();
 
-      if (!assessment) throw new Error('Atividade não encontrada');
+      if (assessmentError) {
+        console.error('Erro ao buscar atividade:', assessmentError);
+        throw new Error('Erro ao buscar atividade: ' + assessmentError.message);
+      }
+      if (!assessment) throw new Error('Atividade não encontrada no banco de dados.');
+
+      console.log('Atividade encontrada:', assessment);
 
       // 2. Save individual answers and corrections
+      console.log('Salvando respostas individuais...');
       for (const corr of result.corrections) {
-        const { data: question } = await supabase
+        const { data: question, error: questionError } = await supabase
           .from('questions')
           .select('id')
           .eq('assessment_id', assessmentId)
           .eq('question_number', corr.questionNumber)
           .single();
 
+        if (questionError) {
+          console.warn(`Questão ${corr.questionNumber} não encontrada no gabarito. Pulando...`, questionError);
+          continue;
+        }
+
         if (question) {
-          const { data: answer } = await supabase
+          const { data: answer, error: answerError } = await supabase
             .from('student_answers')
             .insert([{
               student_id: studentId,
               assessment_id: assessmentId,
               question_id: question.id,
               answer_text: corr.studentAnswer || '',
-              score: corr.score,
-              user_id: user.id
+              score: corr.score
             }])
             .select()
             .single();
 
+          if (answerError) {
+            console.error('Erro ao salvar student_answer:', answerError);
+            throw new Error(`Erro ao salvar resposta da questão ${corr.questionNumber}: ${answerError.message} (${answerError.details || ''})`);
+          }
+
           if (answer) {
-            await supabase.from('ai_corrections').insert([{
+            const { error: aiError } = await supabase.from('ai_corrections').insert([{
               student_answer_id: answer.id,
               ai_model: 'gemini-3-flash-preview',
               correction_feedback: corr.feedback,
               score_given: corr.score,
               skills_mastered: corr.skillsMastered || [],
-              skills_to_improve: corr.skillsToImprove || [],
-              user_id: user.id
+              skills_to_improve: corr.skillsToImprove || []
             }]);
+            
+            if (aiError) {
+              console.error('Erro ao salvar ai_correction:', aiError);
+              throw new Error(`Erro ao salvar correção da questão ${corr.questionNumber}: ${aiError.message} (${aiError.details || ''})`);
+            }
           }
         }
       }
 
       // 3. Save overall result
-      await supabase.from('assessment_results').insert([{
+      console.log('Salvando resultado geral...');
+      const { error: resultError } = await supabase.from('assessment_results').insert([{
         student_id: studentId,
         assessment_id: assessmentId,
         total_score: result.totalScore,
         max_score: result.maxScore,
         percentage: (result.totalScore / result.maxScore) * 100,
         ai_corrected: true,
-        overall_feedback: result.overallFeedback,
-        user_id: user.id
+        overall_feedback: result.overallFeedback
       }]);
 
+      if (resultError) {
+        console.error('Erro ao salvar assessment_results:', resultError);
+        throw new Error('Erro ao salvar resultado geral: ' + resultError.message + ' (' + (resultError.details || '') + ')');
+      }
+
       // 4. Update grade in Management
-      const { data: existingGrade } = await supabase
+      console.log('Atualizando notas na gestão...');
+      const { data: existingGrade, error: gradeFetchError } = await supabase
         .from('grades')
         .select('*')
         .eq('student_id', studentId)
         .eq('unit_id', assessment.unit_id)
         .maybeSingle();
+
+      if (gradeFetchError) {
+        console.error('Erro ao buscar nota existente:', gradeFetchError);
+        throw new Error('Erro ao buscar nota na gestão: ' + gradeFetchError.message);
+      }
 
       const fieldToUpdate = 
         assessment.type === 'prova' ? 'exam_score' : 
@@ -318,26 +360,38 @@ export default function GradingView() {
           }
         }
         
-        await supabase
+        const { error: updateError } = await supabase
           .from('grades')
           .update({ [fieldToUpdate]: result.totalScore, unit_average: average })
           .eq('id', existingGrade.id);
+          
+        if (updateError) {
+          console.error('Erro ao atualizar nota:', updateError);
+          throw new Error('Erro ao atualizar nota na gestão: ' + updateError.message);
+        }
       } else {
-        await supabase
+        const { error: insertError } = await supabase
           .from('grades')
           .insert([{ 
             student_id: studentId,
             unit_id: assessment.unit_id,
             [fieldToUpdate]: result.totalScore,
-            unit_average: result.totalScore 
+            unit_average: result.totalScore,
+            user_id: user.id
           }]);
+          
+        if (insertError) {
+          console.error('Erro ao inserir nova nota:', insertError);
+          throw new Error('Erro ao criar nota na gestão: ' + insertError.message);
+        }
       }
 
+      console.log('Salvamento concluído com sucesso!');
       setHasSaved(true);
       alert('Resultados salvos com sucesso no banco de dados!');
     } catch (error: any) {
-      console.error('Error saving results:', error);
-      alert('Erro ao salvar resultados: ' + error.message);
+      console.error('Erro fatal no saveResults:', error);
+      alert('Erro ao salvar resultados: ' + (error.message || JSON.stringify(error)));
     } finally {
       setIsSaving(false);
     }
