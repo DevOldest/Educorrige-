@@ -8,24 +8,12 @@ import autoTable from 'jspdf-autotable';
 
 export default function ReportsView() {
   const [results, setResults] = useState<any[]>([]);
-  const [classes, setClasses] = useState<any[]>([]);
-  const [students, setStudents] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedResult, setSelectedResult] = useState<any>(null);
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   
   const [filters, setFilters] = useState({
-    classId: '',
-    studentId: '',
-    type: '',
-    search: ''
-  });
-
-  const [appliedFilters, setAppliedFilters] = useState({
-    classId: '',
-    studentId: '',
-    type: '',
     search: ''
   });
 
@@ -33,63 +21,29 @@ export default function ReportsView() {
     fetchData();
   }, []);
 
-  useEffect(() => {
-    if (filters.classId) {
-      fetchStudents(filters.classId);
-    } else {
-      setStudents([]);
-      setFilters(prev => ({ ...prev, studentId: '' }));
-    }
-  }, [filters.classId]);
-
-  async function fetchStudents(classId: string) {
-    if (!supabase) return;
-    const { data } = await supabase
-      .from('students')
-      .select('*')
-      .eq('class_id', classId)
-      .order('name');
-    if (data) setStudents(data);
-  }
-
   async function fetchData() {
     if (!supabase) {
       setIsLoading(false);
       return;
     }
     setIsLoading(true);
-    const [resultsRes, classesRes] = await Promise.all([
-      supabase
-        .from('assessment_results')
-        .select('*, students(name, classes(name)), assessments(title, type)')
-        .order('created_at', { ascending: false }),
-      supabase.from('classes').select('*')
-    ]);
+    const { data } = await supabase
+      .from('assessment_results')
+      .select('*, students(name, classes(name)), assessments(title, type)')
+      .order('created_at', { ascending: false });
 
-    if (resultsRes.data) setResults(resultsRes.data);
-    if (classesRes.data) setClasses(classesRes.data);
+    if (data) setResults(data);
     setIsLoading(false);
   }
 
   const filteredResults = results.filter(r => {
-    const matchesClass = appliedFilters.classId ? r.students?.classes?.id === appliedFilters.classId : true;
-    const matchesStudent = appliedFilters.studentId ? r.student_id === appliedFilters.studentId : true;
-    const matchesType = appliedFilters.type ? r.assessments?.type === appliedFilters.type : true;
-    const matchesSearch = appliedFilters.search 
-      ? r.students?.name?.toLowerCase().includes(appliedFilters.search.toLowerCase()) ||
-        r.assessments?.title?.toLowerCase().includes(appliedFilters.search.toLowerCase())
-      : true;
-    return matchesClass && matchesStudent && matchesType && matchesSearch;
+    if (!filters.search) return true;
+    const searchLower = filters.search.toLowerCase();
+    return r.students?.name?.toLowerCase().includes(searchLower);
   });
 
-  const handleSearch = () => {
-    setAppliedFilters({ ...filters });
-  };
-
   const handleClearFilters = () => {
-    const empty = { classId: '', studentId: '', type: '', search: '' };
-    setFilters(empty);
-    setAppliedFilters(empty);
+    setFilters({ search: '' });
   };
 
   const exportToPDF = (result: any) => {
@@ -240,65 +194,29 @@ export default function ReportsView() {
         </div>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
-        <div className="relative">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+      {/* Simplified Search Bar */}
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
+        <div className="relative max-w-2xl mx-auto">
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={24} />
           <input 
             type="text"
-            placeholder="Buscar por nome do aluno ou título da atividade..."
+            placeholder="Digite o nome do aluno para ver seus relatórios..."
             value={filters.search}
             onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-            className="w-full pl-12 pr-4 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-brand-yellow text-base"
+            className="w-full pl-14 pr-12 py-5 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-brand-yellow text-lg shadow-inner"
           />
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <select 
-            value={filters.classId}
-            onChange={(e) => setFilters({ ...filters, classId: e.target.value, studentId: '' })}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-          >
-            <option value="">Todas as Turmas</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
-          <select 
-            value={filters.studentId}
-            onChange={(e) => setFilters({ ...filters, studentId: e.target.value })}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-            disabled={!filters.classId}
-          >
-            <option value="">Todos os Alunos</option>
-            {students.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-          <select 
-            value={filters.type}
-            onChange={(e) => setFilters({ ...filters, type: e.target.value })}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-sm"
-          >
-            <option value="">Todos os Tipos</option>
-            <option value="prova">Provas</option>
-            <option value="lista1">Lista 1</option>
-            <option value="lista2">Lista 2</option>
-            <option value="lista3">Lista 3</option>
-          </select>
-          <div className="flex items-center gap-4">
-            <button 
-              onClick={handleSearch}
-              className="flex-1 bg-brand-blue text-white font-bold py-3 rounded-xl hover:bg-brand-blue-dark transition-all flex items-center justify-center gap-2 shadow-lg shadow-brand-blue/20"
-            >
-              <Search size={18} />
-              Buscar
-            </button>
+          {filters.search && (
             <button 
               onClick={handleClearFilters}
-              className="text-brand-blue font-bold text-sm hover:underline whitespace-nowrap px-2"
+              className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-brand-blue-dark transition-colors"
             >
-              Limpar
+              <Trash2 size={20} />
             </button>
-          </div>
+          )}
         </div>
+        <p className="text-center text-xs text-slate-400 mt-3">
+          Os resultados serão filtrados automaticamente conforme você digita.
+        </p>
       </div>
 
       {/* Results List */}
