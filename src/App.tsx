@@ -153,13 +153,9 @@ export default function App() {
           <div className={cn("flex items-center gap-3 p-2", !isSidebarOpen && "justify-center")}>
             <div className="w-10 h-10 rounded-full bg-brand-gold overflow-hidden flex items-center justify-center border-2 border-brand-yellow shadow-inner">
               <img 
-                src="https://ais-dev-b6e5wy4h5nwrozqzrdq6hh-59306652383.us-east5.run.app/favicon.ico" 
+                src="https://api.dicebear.com/7.x/avataaars/svg?seed=Atila&topType=NoHair&skinColor=Pale&facialHairProbability=0" 
                 alt="Átila Alves"
-                className="w-full h-full object-cover"
-                onError={(e) => {
-                  const target = e.target as HTMLImageElement;
-                  target.src = "https://api.dicebear.com/7.x/avataaars/svg?seed=Atila";
-                }}
+                className="w-full h-full object-cover bg-slate-100"
               />
             </div>
             {isSidebarOpen && (
