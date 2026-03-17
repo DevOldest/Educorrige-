@@ -277,7 +277,8 @@ export default function GradingView() {
               assessment_id: assessmentId,
               question_id: question.id,
               answer_text: corr.studentAnswer || '',
-              score: corr.score
+              score: corr.score,
+              user_id: user.id
             }])
             .select()
             .single();
@@ -294,7 +295,8 @@ export default function GradingView() {
               correction_feedback: corr.feedback,
               score_given: corr.score,
               skills_mastered: corr.skillsMastered || [],
-              skills_to_improve: corr.skillsToImprove || []
+              skills_to_improve: corr.skillsToImprove || [],
+              user_id: user.id
             }]);
             
             if (aiError) {
@@ -314,7 +316,8 @@ export default function GradingView() {
         max_score: result.maxScore,
         percentage: (result.totalScore / result.maxScore) * 100,
         ai_corrected: true,
-        overall_feedback: result.overallFeedback
+        overall_feedback: result.overallFeedback,
+        user_id: user.id
       }]);
 
       if (resultError) {
