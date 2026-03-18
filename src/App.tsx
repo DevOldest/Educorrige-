@@ -111,9 +111,9 @@ export default function App() {
             <motion.h1 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
-              className="text-2xl font-serif font-bold tracking-tight text-brand-yellow"
+              className="text-xl font-serif font-bold tracking-tight text-brand-yellow"
             >
-              3 em 1
+              3 em 1 Correções
             </motion.h1>
           )}
           <button 
@@ -153,7 +153,7 @@ export default function App() {
           <div className={cn("flex items-center gap-3 p-2", !isSidebarOpen && "justify-center")}>
             <div className="w-10 h-10 rounded-full bg-brand-gold overflow-hidden flex items-center justify-center border-2 border-brand-yellow shadow-inner">
               <img 
-                src="https://api.dicebear.com/7.x/avataaars/svg?seed=Atila&topType=NoHair&skinColor=Pale&facialHairProbability=0" 
+                src="https://api.dicebear.com/7.x/avataaars/svg?seed=AtilaAlves&topType=NoHair&accessoriesType=Prescription02&facialHairType=BeardLight&skinColor=Pale" 
                 alt="Átila Alves"
                 className="w-full h-full object-cover bg-slate-100"
               />
