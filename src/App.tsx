@@ -153,7 +153,7 @@ export default function App() {
           <div className={cn("flex items-center gap-3 p-2", !isSidebarOpen && "justify-center")}>
             <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden flex items-center justify-center border-2 border-brand-yellow shadow-inner">
               <img 
-                src="https://api.dicebear.com/7.x/avataaars/svg?seed=AtilaAlves&topType=NoHair&accessoriesType=None&facialHairType=None&skinColor=Pale" 
+                src="/perfil.jpg" 
                 alt="Átila Alves"
                 className="w-full h-full object-cover"
               />
