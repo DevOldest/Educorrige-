@@ -91,24 +91,63 @@ export default function ClassesView() {
 
   async function handleDeleteClass(classId: string, className: string) {
     if (!supabase) return;
-    if (!confirm(`Deseja realmente excluir a turma "${className}"? Todos os alunos e notas associadas serão removidos permanentemente.`)) return;
+    if (!confirm(`Deseja realmente excluir a turma "${className}"? Todos os alunos, notas e atividades associadas serão removidos permanentemente.`)) return;
 
     try {
-      // 1. Delete students (grades should cascade if set up, but let's be safe)
+      // 1. Get all students of this class
       const { data: students } = await supabase.from('students').select('id').eq('class_id', classId);
-      if (students && students.length > 0) {
-        const studentIds = students.map(s => s.id);
-        await supabase.from('grades').delete().in('student_id', studentIds);
-        await supabase.from('assessment_results').delete().in('student_id', studentIds);
+      const studentIds = students?.map(s => s.id) || [];
+
+      // 2. Get all assessments of this class
+      const { data: assessments } = await supabase.from('assessments').select('id').eq('class_id', classId);
+      const assessmentIds = assessments?.map(a => a.id) || [];
+
+      // 3. Delete AI Corrections (linked to student_answers)
+      if (studentIds.length > 0) {
+        const { data: answers } = await supabase
+          .from('student_answers')
+          .select('id')
+          .in('student_id', studentIds);
+        
+        const answerIds = answers?.map(a => a.id) || [];
+        if (answerIds.length > 0) {
+          await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+        }
+      }
+
+      // 4. Delete Student Answers
+      if (studentIds.length > 0) {
         await supabase.from('student_answers').delete().in('student_id', studentIds);
       }
-      
-      await supabase.from('students').delete().eq('class_id', classId);
-      
-      // 2. Delete assessments related to this class
+      if (assessmentIds.length > 0) {
+        await supabase.from('student_answers').delete().in('assessment_id', assessmentIds);
+      }
+
+      // 5. Delete Assessment Results
+      if (studentIds.length > 0) {
+        await supabase.from('assessment_results').delete().in('student_id', studentIds);
+      }
+      if (assessmentIds.length > 0) {
+        await supabase.from('assessment_results').delete().in('assessment_id', assessmentIds);
+      }
+
+      // 6. Delete Questions
+      if (assessmentIds.length > 0) {
+        await supabase.from('questions').delete().in('assessment_id', assessmentIds);
+      }
+
+      // 7. Delete Assessments
       await supabase.from('assessments').delete().eq('class_id', classId);
 
-      // 3. Delete class
+      // 8. Delete Grades
+      if (studentIds.length > 0) {
+        await supabase.from('grades').delete().in('student_id', studentIds);
+      }
+
+      // 9. Delete Students
+      await supabase.from('students').delete().eq('class_id', classId);
+
+      // 10. Delete Class
       const { error } = await supabase.from('classes').delete().eq('id', classId);
 
       if (error) throw error;

@@ -128,7 +128,18 @@ export default function ReportsView() {
 
     setIsDeleting(result.id);
     try {
-      // 1. Delete student_answers (will cascade to ai_corrections if set up, but let's be safe)
+      // 1. Delete AI Corrections and student_answers
+      const { data: answers } = await supabase
+        .from('student_answers')
+        .select('id')
+        .eq('assessment_id', result.assessment_id)
+        .eq('student_id', result.student_id);
+      
+      const answerIds = answers?.map(a => a.id) || [];
+      if (answerIds.length > 0) {
+        await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+      }
+
       await supabase.from('student_answers').delete().eq('assessment_id', result.assessment_id).eq('student_id', result.student_id);
       
       // 2. Delete assessment_result

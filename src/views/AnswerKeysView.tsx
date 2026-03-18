@@ -93,7 +93,14 @@ export default function AnswerKeysView() {
         }
       }
 
-      // 3. Delete assessment_results and student_answers
+      // 3. Delete AI Corrections, assessment_results and student_answers
+      const { data: answers } = await supabase.from('student_answers').select('id').eq('assessment_id', assessmentId);
+      const answerIds = answers?.map(a => a.id) || [];
+      
+      if (answerIds.length > 0) {
+        await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+      }
+
       await supabase.from('assessment_results').delete().eq('assessment_id', assessmentId);
       await supabase.from('student_answers').delete().eq('assessment_id', assessmentId);
       
