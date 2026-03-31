@@ -293,7 +293,7 @@ function UnitGradeForm({ unitName, grade, onSave }: { unitName: string, grade: a
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-8">
         {/* Listas */}
         <div className="space-y-4">
           <h5 className="text-sm font-bold text-brand-blue-dark uppercase flex items-center gap-2">
@@ -361,7 +361,7 @@ function UnitGradeForm({ unitName, grade, onSave }: { unitName: string, grade: a
         </div>
 
         {/* Recuperação */}
-        <div className="space-y-4">
+        <div className="space-y-4 md:col-span-3 lg:col-span-1">
           <h5 className="text-sm font-bold text-brand-blue-dark uppercase flex items-center gap-2 text-amber-600">
             <AlertTriangle size={16} />
             Recuperação

@@ -238,22 +238,22 @@ export default function ReportsView() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex items-center justify-between group hover:border-brand-yellow transition-all"
+            className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 group hover:border-brand-yellow transition-all"
           >
-            <div className="flex items-center gap-6">
+            <div className="flex items-center gap-4 sm:gap-6 w-full sm:w-auto">
               <div className={cn(
-                "w-12 h-12 rounded-full flex items-center justify-center text-white font-bold",
+                "w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-white font-bold shrink-0",
                 result.percentage >= 50 ? "bg-emerald-500" : "bg-red-500"
               )}>
                 {Math.round(result.percentage)}%
               </div>
-              <div>
-                <h4 className="font-bold text-brand-blue-dark flex items-center gap-2">
-                  {result.students?.name}
-                  <ChevronRight size={14} className="text-slate-300" />
-                  <span className="text-slate-400 font-medium">{result.assessments?.title}</span>
+              <div className="min-w-0 flex-1">
+                <h4 className="font-bold text-brand-blue-dark flex flex-wrap items-center gap-x-2">
+                  <span className="truncate">{result.students?.name}</span>
+                  <ChevronRight size={14} className="text-slate-300 hidden sm:inline" />
+                  <span className="text-slate-400 font-medium truncate">{result.assessments?.title}</span>
                 </h4>
-                <div className="flex items-center gap-4 mt-1">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
                   <span className="text-xs text-slate-500 flex items-center gap-1">
                     <Users size={12} /> {result.students?.classes?.name}
                   </span>
@@ -272,46 +272,48 @@ export default function ReportsView() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center gap-4">
-              <div className="text-right mr-4">
+            <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto pt-4 sm:pt-0 border-t sm:border-t-0 border-slate-50">
+              <div className="text-left sm:text-right">
                 <p className="text-lg font-bold text-brand-blue-dark">{result.total_score} / {result.max_score}</p>
-                <p className="text-xs text-slate-400">Pontuação Final</p>
+                <p className="text-xs text-slate-400">Pontuação</p>
               </div>
-              <button 
-                onClick={() => fetchResultDetails(result)}
-                className="p-3 bg-slate-50 text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all"
-                title="Ver Detalhes"
-              >
-                <FileText size={20} />
-              </button>
-              <button 
-                onClick={async () => {
-                  setIsFetchingDetails(true);
-                  try {
-                    const { data: corrections } = await supabase
-                      .from('student_answers')
-                      .select('*, questions(*), ai_corrections(*)')
-                      .eq('student_id', result.student_id)
-                      .eq('assessment_id', result.assessment_id);
-                    
-                    exportToPDF({ ...result, corrections });
-                  } finally {
-                    setIsFetchingDetails(false);
-                  }
-                }}
-                className="p-3 bg-slate-50 text-brand-gold rounded-xl hover:bg-brand-gold hover:text-white transition-all"
-                title="Baixar PDF"
-              >
-                <Download size={20} />
-              </button>
-              <button 
-                onClick={() => handleDeleteResult(result)}
-                disabled={isDeleting === result.id}
-                className="p-3 bg-slate-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all disabled:opacity-50"
-                title="Excluir"
-              >
-                {isDeleting === result.id ? <Loader2 className="animate-spin" size={20} /> : <Trash2 size={20} />}
-              </button>
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={() => fetchResultDetails(result)}
+                  className="p-2.5 bg-slate-50 text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all"
+                  title="Ver Detalhes"
+                >
+                  <FileText size={18} />
+                </button>
+                <button 
+                  onClick={async () => {
+                    setIsFetchingDetails(true);
+                    try {
+                      const { data: corrections } = await supabase
+                        .from('student_answers')
+                        .select('*, questions(*), ai_corrections(*)')
+                        .eq('student_id', result.student_id)
+                        .eq('assessment_id', result.assessment_id);
+                      
+                      exportToPDF({ ...result, corrections });
+                    } finally {
+                      setIsFetchingDetails(false);
+                    }
+                  }}
+                  className="p-2.5 bg-slate-50 text-brand-gold rounded-xl hover:bg-brand-gold hover:text-white transition-all"
+                  title="Baixar PDF"
+                >
+                  <Download size={18} />
+                </button>
+                <button 
+                  onClick={() => handleDeleteResult(result)}
+                  disabled={isDeleting === result.id}
+                  className="p-2.5 bg-slate-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all disabled:opacity-50"
+                  title="Excluir"
+                >
+                  {isDeleting === result.id ? <Loader2 className="animate-spin" size={18} /> : <Trash2 size={18} />}
+                </button>
+              </div>
             </div>
           </motion.div>
         ))}

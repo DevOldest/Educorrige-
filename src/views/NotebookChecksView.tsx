@@ -22,6 +22,8 @@ export default function NotebookChecksView() {
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [checks, setChecks] = useState<Record<string, number>>({});
+  const [maxStamps, setMaxStamps] = useState(6);
+  const [autoMax, setAutoMax] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -68,17 +70,36 @@ export default function NotebookChecksView() {
       .in('student_id', studentsData?.map(s => s.id) || []);
 
     const checksMap: Record<string, number> = {};
+    let currentMax = 6;
+    
     gradesData?.forEach(g => {
+      // If we're loading existing data, we might need to infer the count
+      // For now, we'll stick to the 0.25 multiplier if we don't have a better way
+      // But if we want dynamic, we might need to store the count itself in the DB
+      // Since we don't have a 'stamps_count' field, we'll assume 0.25 for now
+      // but allow the user to change the max.
       checksMap[g.student_id] = Math.round((g.notebook_score || 0) / 0.25);
+      if (checksMap[g.student_id] > currentMax) currentMax = checksMap[g.student_id];
     });
     
+    if (autoMax && currentMax > 0) setMaxStamps(currentMax);
     setChecks(checksMap);
     setIsLoading(false);
   }
 
+  useEffect(() => {
+    if (autoMax) {
+      const counts = Object.values(checks);
+      if (counts.length > 0) {
+        const newMax = Math.max(...counts as number[], 1);
+        setMaxStamps(newMax);
+      }
+    }
+  }, [checks, autoMax]);
+
   const handleToggleCheck = (studentId: string, increment: boolean) => {
     const currentCount = checks[studentId] || 0;
-    const newCount = increment ? Math.min(6, currentCount + 1) : Math.max(0, currentCount - 1);
+    const newCount = increment ? currentCount + 1 : Math.max(0, currentCount - 1);
     setChecks({ ...checks, [studentId]: newCount });
   };
 
@@ -89,7 +110,8 @@ export default function NotebookChecksView() {
     try {
       for (const studentId of Object.keys(checks)) {
         const count = checks[studentId];
-        const score = count * 0.25;
+        // Dynamic score: (count / maxStamps) * 1.5
+        const score = maxStamps > 0 ? (count / maxStamps) * 1.5 : 0;
 
         // Fetch existing grade to update or insert
         const { data: existingGrade } = await supabase
@@ -143,23 +165,48 @@ export default function NotebookChecksView() {
 
   return (
     <div className="space-y-8">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Vistos do Caderno</h3>
           <p className="text-slate-500">Gerencie os vistos de caderno dos alunos por unidade.</p>
         </div>
-        <button 
-          onClick={handleSaveAll}
-          disabled={isSaving || !selectedClassId}
-          className="flex items-center gap-2 bg-brand-blue text-white px-6 py-3 rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-lg disabled:opacity-50"
-        >
-          {isSaving ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
-          Salvar Alterações
-        </button>
+        <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-2xl shadow-sm border border-slate-100 w-full sm:w-auto">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-100">
+            <label className="text-[10px] font-bold uppercase text-slate-400">Máximo</label>
+            <input 
+              type="number" 
+              min="1"
+              value={maxStamps}
+              onChange={(e) => {
+                setMaxStamps(Math.max(1, parseInt(e.target.value) || 1));
+                setAutoMax(false);
+              }}
+              disabled={autoMax}
+              className="w-10 bg-transparent border-none p-0 text-center font-bold text-brand-blue focus:ring-0"
+            />
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer px-3 py-1.5 hover:bg-slate-50 rounded-xl transition-colors">
+            <input 
+              type="checkbox" 
+              checked={autoMax}
+              onChange={(e) => setAutoMax(e.target.checked)}
+              className="rounded text-brand-yellow focus:ring-brand-yellow"
+            />
+            <span className="text-xs font-bold text-brand-blue-dark uppercase">Automático</span>
+          </label>
+          <button 
+            onClick={handleSaveAll}
+            disabled={isSaving || !selectedClassId}
+            className="flex-1 sm:flex-none flex items-center justify-center gap-2 bg-brand-blue text-white px-4 py-2 rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md disabled:opacity-50 text-sm"
+          >
+            {isSaving ? <Loader2 className="animate-spin" size={16} /> : <Save size={16} />}
+            Salvar
+          </button>
+        </div>
       </div>
 
       {/* Selection Header */}
-      <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
         <div className="space-y-2">
           <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
           <select 
@@ -189,64 +236,69 @@ export default function NotebookChecksView() {
           <Loader2 className="animate-spin text-brand-gold" size={40} />
         </div>
       ) : selectedClassId ? (
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-          <table className="w-full text-left">
-            <thead className="bg-slate-50 border-b border-slate-100">
-              <tr>
-                <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Nº</th>
-                <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Aluno</th>
-                <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark text-center">Vistos (Máx 6)</th>
-                <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark text-center">Nota Atual</th>
-                <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark text-center">Ações</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-50">
-              {students.map((student) => {
-                const count = checks[student.id] || 0;
-                const score = count * 0.25;
-                return (
-                  <tr key={student.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4 text-sm font-bold text-slate-400">{student.roll_number}</td>
-                    <td className="px-6 py-4">
-                      <span className="font-medium text-brand-blue-dark">{student.name}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex justify-center gap-1">
-                        {[...Array(6)].map((_, i) => (
-                          <div 
-                            key={i} 
-                            className={cn(
-                              "w-3 h-3 rounded-full",
-                              i < count ? "bg-brand-yellow" : "bg-slate-200"
-                            )}
-                          />
-                        ))}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 text-center">
-                      <span className="font-bold text-brand-blue">{score.toFixed(2)}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      <div className="flex justify-center gap-2">
-                        <button 
-                          onClick={() => handleToggleCheck(student.id, false)}
-                          className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-red-50 hover:text-red-500 transition-colors"
-                        >
-                          <Minus size={16} />
-                        </button>
-                        <button 
-                          onClick={() => handleToggleCheck(student.id, true)}
-                          className="p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-emerald-50 hover:text-emerald-500 transition-colors"
-                        >
-                          <Plus size={16} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-x-auto -mx-4 sm:mx-0">
+          <div className="inline-block min-w-full align-middle px-4 sm:px-0">
+            <table className="min-w-full text-left">
+              <thead className="bg-slate-50 border-b border-slate-100">
+                <tr>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase">Nº</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase">Aluno</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase text-center">Vistos ({maxStamps})</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase text-center">Nota</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase text-center">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-50">
+                {students.map((student) => {
+                  const count = checks[student.id] || 0;
+                  const score = maxStamps > 0 ? (count / maxStamps) * 1.5 : 0;
+                  return (
+                    <tr key={student.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-4 py-4 text-sm font-bold text-slate-400">{student.roll_number}</td>
+                      <td className="px-4 py-4">
+                        <span className="font-bold text-brand-blue-dark block truncate max-w-[120px] sm:max-w-[200px] md:max-w-none">{student.name}</span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex justify-center flex-wrap gap-1 max-w-[120px] mx-auto">
+                          {[...Array(maxStamps)].map((_, i) => (
+                            <div 
+                              key={i} 
+                              className={cn(
+                                "w-2.5 h-2.5 rounded-full",
+                                i < count ? "bg-brand-gold shadow-[0_0_8px_rgba(212,175,55,0.4)]" : "bg-slate-200"
+                              )}
+                            />
+                          ))}
+                          {count > maxStamps && (
+                            <span className="text-[10px] font-bold text-brand-gold">+{count - maxStamps}</span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-4 text-center">
+                        <span className="font-mono font-bold text-brand-blue">{score.toFixed(2)}</span>
+                      </td>
+                      <td className="px-4 py-4">
+                        <div className="flex justify-center gap-1 sm:gap-2">
+                          <button 
+                            onClick={() => handleToggleCheck(student.id, false)}
+                            className="p-1.5 sm:p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-red-50 hover:text-red-500 transition-colors"
+                          >
+                            <Minus size={14} />
+                          </button>
+                          <button 
+                            onClick={() => handleToggleCheck(student.id, true)}
+                            className="p-1.5 sm:p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-emerald-50 hover:text-emerald-500 transition-colors"
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
         </div>
       ) : (
         <div className="text-center py-32 bg-white rounded-3xl border border-dashed border-slate-200">
