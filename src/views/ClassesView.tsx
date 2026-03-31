@@ -24,6 +24,8 @@ export default function ClassesView() {
   const [editClassYear, setEditClassYear] = useState(0);
   const [classStudents, setClassStudents] = useState<any[]>([]);
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+  const [newStudentName, setNewStudentName] = useState('');
+  const [isAddingStudent, setIsAddingStudent] = useState(false);
 
   useEffect(() => {
     fetchClasses();
@@ -61,6 +63,7 @@ export default function ClassesView() {
     setSelectedClass(cls);
     fetchClassStudents(cls.id);
     setShowStudentsModal(true);
+    setNewStudentName('');
   };
 
   const handleEditClick = (cls: any) => {
@@ -157,6 +160,67 @@ export default function ClassesView() {
     } catch (error) {
       console.error('Error deleting class:', error);
       alert('Erro ao excluir turma.');
+    }
+  }
+
+  async function handleDeleteStudent(studentId: string) {
+    if (!supabase) return;
+    if (!confirm('Deseja realmente excluir este aluno? Todas as notas e atividades associadas serão removidas.')) return;
+
+    try {
+      const { data: answers } = await supabase
+        .from('student_answers')
+        .select('id')
+        .eq('student_id', studentId);
+      
+      const answerIds = answers?.map(a => a.id) || [];
+      if (answerIds.length > 0) {
+        await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+      }
+      
+      await supabase.from('student_answers').delete().eq('student_id', studentId);
+      await supabase.from('assessment_results').delete().eq('student_id', studentId);
+      await supabase.from('grades').delete().eq('student_id', studentId);
+      
+      const { error } = await supabase.from('students').delete().eq('id', studentId);
+      if (error) throw error;
+
+      setClassStudents(classStudents.filter(s => s.id !== studentId));
+      fetchClasses();
+    } catch (error) {
+      console.error('Error deleting student:', error);
+      alert('Erro ao excluir aluno.');
+    }
+  }
+
+  async function handleAddStudent() {
+    if (!supabase || !selectedClass || !newStudentName.trim()) return;
+    setIsAddingStudent(true);
+    try {
+      const nextRollNumber = classStudents.length > 0 
+        ? Math.max(...classStudents.map(s => s.roll_number)) + 1 
+        : 1;
+
+      const { data, error } = await supabase
+        .from('students')
+        .insert([{
+          class_id: selectedClass.id,
+          name: newStudentName.trim(),
+          roll_number: nextRollNumber
+        }])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      setClassStudents([...classStudents, data].sort((a, b) => a.roll_number - b.roll_number));
+      setNewStudentName('');
+      fetchClasses();
+    } catch (error) {
+      console.error('Error adding student:', error);
+      alert('Erro ao adicionar aluno.');
+    } finally {
+      setIsAddingStudent(false);
     }
   }
 
@@ -413,18 +477,48 @@ export default function ClassesView() {
                   <Loader2 className="animate-spin text-brand-gold" size={32} />
                 </div>
               ) : (
-                <div className="grid grid-cols-1 gap-2">
-                  {classStudents.map((student) => (
-                    <div key={student.id} className="flex items-center gap-4 p-3 bg-slate-50 rounded-xl">
-                      <span className="w-8 h-8 flex items-center justify-center bg-brand-blue/10 text-brand-blue rounded-lg font-bold text-sm">
-                        {student.roll_number}
-                      </span>
-                      <span className="font-medium text-brand-blue-dark">{student.name}</span>
-                    </div>
-                  ))}
-                  {classStudents.length === 0 && (
-                    <p className="text-center py-10 text-slate-400 italic">Nenhum aluno cadastrado nesta turma.</p>
-                  )}
+                <div className="space-y-4">
+                  {/* Add Student Input */}
+                  <div className="flex gap-2 p-2 bg-slate-50 rounded-2xl border border-slate-100">
+                    <input 
+                      type="text" 
+                      placeholder="Nome do novo aluno..."
+                      value={newStudentName}
+                      onChange={(e) => setNewStudentName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleAddStudent()}
+                      className="flex-1 p-2 bg-transparent border-none focus:ring-0 text-sm font-medium"
+                    />
+                    <button 
+                      onClick={handleAddStudent}
+                      disabled={isAddingStudent || !newStudentName.trim()}
+                      className="p-2 bg-brand-blue text-white rounded-xl hover:bg-brand-blue-dark transition-all disabled:opacity-50"
+                    >
+                      {isAddingStudent ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2">
+                    {classStudents.map((student) => (
+                      <div key={student.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl group">
+                        <div className="flex items-center gap-4">
+                          <span className="w-8 h-8 flex items-center justify-center bg-brand-blue/10 text-brand-blue rounded-lg font-bold text-sm">
+                            {student.roll_number}
+                          </span>
+                          <span className="font-medium text-brand-blue-dark">{student.name}</span>
+                        </div>
+                        <button 
+                          onClick={() => handleDeleteStudent(student.id)}
+                          className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                          title="Excluir Aluno"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    ))}
+                    {classStudents.length === 0 && (
+                      <p className="text-center py-10 text-slate-400 italic">Nenhum aluno cadastrado nesta turma.</p>
+                    )}
+                  </div>
                 </div>
               )}
             </div>
