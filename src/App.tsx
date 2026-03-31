@@ -99,19 +99,41 @@ export default function App() {
   ];
 
   return (
-    <div className="flex h-screen bg-slate-50 overflow-hidden">
+    <div className="flex h-screen bg-slate-50 overflow-hidden relative">
+      {/* Mobile Menu Overlay */}
+      <AnimatePresence>
+        {isSidebarOpen && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          />
+        )}
+      </AnimatePresence>
+
       {/* Sidebar */}
       <motion.aside 
         initial={false}
-        animate={{ width: isSidebarOpen ? 280 : 80 }}
-        className="bg-brand-blue-dark text-white flex flex-col shadow-2xl z-20"
+        animate={{ 
+          width: isSidebarOpen ? 280 : (window.innerWidth < 1024 ? 0 : 80),
+          x: isSidebarOpen ? 0 : (window.innerWidth < 1024 ? -280 : 0)
+        }}
+        className={cn(
+          "bg-brand-blue-dark text-white flex flex-col shadow-2xl z-40 fixed lg:relative h-full transition-all duration-300",
+          !isSidebarOpen && window.innerWidth < 1024 && "pointer-events-none"
+        )}
       >
         <div className="p-6 flex items-center justify-between">
-          {isSidebarOpen && (
+          {(isSidebarOpen || window.innerWidth >= 1024) && (
             <motion.h1 
               initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              className="text-xl font-serif font-bold tracking-tight text-brand-yellow"
+              animate={{ opacity: isSidebarOpen ? 1 : 0 }}
+              className={cn(
+                "text-xl font-serif font-bold tracking-tight text-brand-yellow truncate",
+                !isSidebarOpen && "hidden"
+              )}
             >
               3 em 1 Correções
             </motion.h1>
@@ -124,11 +146,14 @@ export default function App() {
           </button>
         </div>
 
-        <nav className="flex-1 px-4 py-4 space-y-2">
+        <nav className="flex-1 px-4 py-4 space-y-2 overflow-y-auto">
           {navItems.map((item) => (
             <button
               key={item.id}
-              onClick={() => setActiveView(item.id as View)}
+              onClick={() => {
+                setActiveView(item.id as View);
+                if (window.innerWidth < 1024) setIsSidebarOpen(false);
+              }}
               className={cn(
                 "w-full flex items-center gap-4 p-3 rounded-xl transition-all duration-200 group",
                 activeView === item.id 
@@ -137,10 +162,11 @@ export default function App() {
               )}
             >
               <item.icon size={22} className={cn(activeView === item.id ? "text-brand-blue-dark" : "group-hover:text-white")} />
-              {isSidebarOpen && (
+              {(isSidebarOpen || (window.innerWidth < 1024 && isSidebarOpen)) && (
                 <motion.span
                   initial={{ opacity: 0, x: -10 }}
                   animate={{ opacity: 1, x: 0 }}
+                  className={cn(!isSidebarOpen && "lg:hidden")}
                 >
                   {item.label}
                 </motion.span>
@@ -151,7 +177,7 @@ export default function App() {
 
         <div className="p-4 border-t border-white/10">
           <div className={cn("flex items-center gap-3 p-2", !isSidebarOpen && "justify-center")}>
-            <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden flex items-center justify-center border-2 border-brand-yellow shadow-inner">
+            <div className="w-10 h-10 rounded-full bg-slate-200 overflow-hidden flex items-center justify-center border-2 border-brand-yellow shadow-inner shrink-0">
               <img 
                 src="/perfil.jpg" 
                 alt="Átila Alves"
@@ -171,29 +197,37 @@ export default function App() {
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-white/5 hover:text-white transition-all"
             >
               <LogOut size={20} />
-              <span>Sair</span>
+              {isSidebarOpen && <span>Sair</span>}
             </button>
           </div>
         </div>
       </motion.aside>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-y-auto relative">
-        <header className="sticky top-0 z-10 bg-white/80 backdrop-blur-md border-bottom border-slate-200 p-6 flex items-center justify-between">
-          <h2 className="text-xl font-serif font-bold text-brand-blue-dark">
-            {navItems.find(i => i.id === activeView)?.label}
-          </h2>
+      <main className="flex-1 overflow-y-auto relative w-full">
+        <header className="sticky top-0 z-10 bg-white/80 backdrop-blur-md border-b border-slate-200 p-4 sm:p-6 flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <button 
+              onClick={() => setIsSidebarOpen(true)}
+              className="p-2 hover:bg-slate-100 rounded-lg lg:hidden"
+            >
+              <Menu size={20} className="text-brand-blue-dark" />
+            </button>
+            <h2 className="text-lg sm:text-xl font-serif font-bold text-brand-blue-dark">
+              {navItems.find(i => i.id === activeView)?.label}
+            </h2>
+          </div>
           <div className="flex items-center gap-4">
             {!isSupabaseConfigured && (
-              <div className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm animate-pulse">
+              <div className="hidden sm:flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg text-amber-700 text-sm animate-pulse">
                 <AlertTriangle size={18} />
-                <span>Configuração do Supabase pendente</span>
+                <span>Configuração pendente</span>
               </div>
             )}
           </div>
         </header>
 
-        <div className="p-8 max-w-7xl mx-auto">
+        <div className="p-4 sm:p-8 max-w-7xl mx-auto">
           <AnimatePresence mode="wait">
             <motion.div
               key={activeView}
