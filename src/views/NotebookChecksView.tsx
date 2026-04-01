@@ -23,7 +23,6 @@ export default function NotebookChecksView() {
   const [isLoading, setIsLoading] = useState(false);
   const [checks, setChecks] = useState<Record<string, number>>({});
   const [maxStamps, setMaxStamps] = useState(6);
-  const [autoMax, setAutoMax] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
@@ -73,29 +72,25 @@ export default function NotebookChecksView() {
     let currentMax = 6;
     
     gradesData?.forEach(g => {
-      // If we're loading existing data, we might need to infer the count
-      // For now, we'll stick to the 0.25 multiplier if we don't have a better way
-      // But if we want dynamic, we might need to store the count itself in the DB
-      // Since we don't have a 'stamps_count' field, we'll assume 0.25 for now
-      // but allow the user to change the max.
-      checksMap[g.student_id] = Math.round((g.notebook_score || 0) / 0.25);
-      if (checksMap[g.student_id] > currentMax) currentMax = checksMap[g.student_id];
+      // If we're loading existing data, we'll assume 0.25 for now
+      // but we'll try to find the best fit for the current maxStamps
+      const count = Math.round((g.notebook_score || 0) / 0.25);
+      checksMap[g.student_id] = count;
+      if (count > currentMax) currentMax = count;
     });
     
-    if (autoMax && currentMax > 0) setMaxStamps(currentMax);
+    setMaxStamps(currentMax || 6);
     setChecks(checksMap);
     setIsLoading(false);
   }
 
-  useEffect(() => {
-    if (autoMax) {
-      const counts = Object.values(checks);
-      if (counts.length > 0) {
-        const newMax = Math.max(...counts as number[], 1);
-        setMaxStamps(newMax);
-      }
+  const handleRecalculateMax = () => {
+    const counts = Object.values(checks);
+    if (counts.length > 0) {
+      const newMax = Math.max(...counts as number[], 1);
+      setMaxStamps(newMax);
     }
-  }, [checks, autoMax]);
+  };
 
   const handleToggleCheck = (studentId: string, increment: boolean) => {
     const currentCount = checks[studentId] || 0;
@@ -172,28 +167,22 @@ export default function NotebookChecksView() {
         </div>
         <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-2xl shadow-sm border border-slate-100 w-full sm:w-auto">
           <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-100">
-            <label className="text-[10px] font-bold uppercase text-slate-400">Máximo</label>
+            <label className="text-[10px] font-bold uppercase text-slate-400">Total de Vistos</label>
             <input 
               type="number" 
               min="1"
               value={maxStamps}
-              onChange={(e) => {
-                setMaxStamps(Math.max(1, parseInt(e.target.value) || 1));
-                setAutoMax(false);
-              }}
-              disabled={autoMax}
+              onChange={(e) => setMaxStamps(Math.max(1, parseInt(e.target.value) || 1))}
               className="w-10 bg-transparent border-none p-0 text-center font-bold text-brand-blue focus:ring-0"
             />
           </div>
-          <label className="flex items-center gap-2 cursor-pointer px-3 py-1.5 hover:bg-slate-50 rounded-xl transition-colors">
-            <input 
-              type="checkbox" 
-              checked={autoMax}
-              onChange={(e) => setAutoMax(e.target.checked)}
-              className="rounded text-brand-yellow focus:ring-brand-yellow"
-            />
-            <span className="text-xs font-bold text-brand-blue-dark uppercase">Automático</span>
-          </label>
+          <button 
+            onClick={handleRecalculateMax}
+            className="px-3 py-1.5 bg-brand-yellow/10 text-brand-blue-dark text-xs font-bold uppercase rounded-xl hover:bg-brand-yellow/30 transition-colors"
+            title="Ajustar o total pelo aluno que tem mais vistos"
+          >
+            Sincronizar Maior
+          </button>
           <button 
             onClick={handleSaveAll}
             disabled={isSaving || !selectedClassId}
@@ -264,13 +253,16 @@ export default function NotebookChecksView() {
                             <div 
                               key={i} 
                               className={cn(
-                                "w-2.5 h-2.5 rounded-full",
+                                "w-2.5 h-2.5 rounded-full transition-all duration-300",
                                 i < count ? "bg-brand-gold shadow-[0_0_8px_rgba(212,175,55,0.4)]" : "bg-slate-200"
                               )}
                             />
                           ))}
                           {count > maxStamps && (
-                            <span className="text-[10px] font-bold text-brand-gold">+{count - maxStamps}</span>
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] font-bold text-red-500 animate-pulse">+{count - maxStamps}</span>
+                              <div className="w-2.5 h-2.5 rounded-full bg-red-500 shadow-[0_0_8px_rgba(239,68,68,0.4)]" />
+                            </div>
                           )}
                         </div>
                       </td>
