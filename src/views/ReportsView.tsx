@@ -67,7 +67,7 @@ export default function ReportsView() {
     // Score
     doc.setFontSize(16);
     doc.setTextColor(10, 37, 64);
-    doc.text(`Nota: ${result.total_score} / ${result.max_score} (${Math.round(result.percentage)}%)`, pageWidth - 20, 45, { align: 'right' });
+    doc.text(`Nota: ${result.total_score.toFixed(1)} / ${result.max_score} (${Math.round(result.percentage)}%)`, pageWidth - 20, 45, { align: 'right' });
 
     // Overall Feedback
     if (result.overall_feedback) {
@@ -86,7 +86,7 @@ export default function ReportsView() {
       corr.questions?.question_type,
       corr.answer_text || 'Sem resposta',
       corr.ai_corrections?.[0]?.correction_feedback || '',
-      `${corr.score} / ${corr.questions?.max_score}`
+      `${corr.score.toFixed(1)} / ${corr.questions?.max_score}`
     ]);
 
     autoTable(doc, {
@@ -274,7 +274,7 @@ export default function ReportsView() {
             </div>
             <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto pt-4 sm:pt-0 border-t sm:border-t-0 border-slate-50">
               <div className="text-left sm:text-right">
-                <p className="text-lg font-bold text-brand-blue-dark">{result.total_score} / {result.max_score}</p>
+                <p className="text-lg font-bold text-brand-blue-dark">{result.total_score.toFixed(1)} / {result.max_score}</p>
                 <p className="text-xs text-slate-400">Pontuação</p>
               </div>
               <div className="flex items-center gap-2">
@@ -332,7 +332,7 @@ export default function ReportsView() {
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white w-full max-w-4xl max-height-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col"
+            className="bg-white w-full max-w-4xl max-h-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col"
           >
             <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-brand-blue-dark text-white">
               <div>
@@ -352,7 +352,7 @@ export default function ReportsView() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div className="bg-slate-50 p-4 rounded-2xl text-center">
                   <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Nota Final</p>
-                  <p className="text-3xl font-bold text-brand-blue-dark">{selectedResult.total_score} / {selectedResult.max_score}</p>
+                  <p className="text-3xl font-bold text-brand-blue-dark">{selectedResult.total_score.toFixed(1)} / {selectedResult.max_score}</p>
                 </div>
                 <div className="bg-slate-50 p-4 rounded-2xl text-center">
                   <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Aproveitamento</p>
@@ -397,7 +397,7 @@ export default function ReportsView() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className="font-bold text-brand-blue-dark">{corr.score} / {corr.questions?.max_score}</p>
+                          <p className="font-bold text-brand-blue-dark">{corr.score.toFixed(1)} / {corr.questions?.max_score}</p>
                           <p className="text-[10px] text-slate-400 font-bold uppercase">Pontos</p>
                         </div>
                       </div>

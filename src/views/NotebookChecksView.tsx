@@ -107,6 +107,7 @@ export default function NotebookChecksView() {
         const count = checks[studentId];
         // Dynamic score: (count / maxStamps) * 1.5
         const score = maxStamps > 0 ? (count / maxStamps) * 1.5 : 0;
+        const roundedScore = Number(score.toFixed(1));
 
         // Fetch existing grade to update or insert
         const { data: existingGrade } = await supabase
@@ -119,7 +120,7 @@ export default function NotebookChecksView() {
         const dataToSave: any = {
           student_id: studentId,
           unit_id: selectedUnitId,
-          notebook_score: score
+          notebook_score: roundedScore
         };
 
         if (existingGrade) {
@@ -127,7 +128,7 @@ export default function NotebookChecksView() {
                       (existingGrade.list2_score || 0) + 
                       (existingGrade.list3_score || 0) + 
                       (existingGrade.exam_score || 0) + 
-                      score + 
+                      roundedScore + 
                       (existingGrade.anki_score || 0);
           
           let average = Math.min(10, sum);
@@ -141,12 +142,12 @@ export default function NotebookChecksView() {
 
           await supabase
             .from('grades')
-            .update({ notebook_score: score, unit_average: average })
+            .update({ notebook_score: roundedScore, unit_average: Number(average.toFixed(1)) })
             .eq('id', existingGrade.id);
         } else {
           await supabase
             .from('grades')
-            .insert([{ ...dataToSave, unit_average: score }]);
+            .insert([{ ...dataToSave, unit_average: roundedScore }]);
         }
       }
       alert('Vistos salvos e médias atualizadas com sucesso!');
@@ -267,7 +268,7 @@ export default function NotebookChecksView() {
                         </div>
                       </td>
                       <td className="px-4 py-4 text-center">
-                        <span className="font-mono font-bold text-brand-blue">{score.toFixed(2)}</span>
+                        <span className="font-mono font-bold text-brand-blue">{score.toFixed(1)}</span>
                       </td>
                       <td className="px-4 py-4">
                         <div className="flex justify-center gap-1 sm:gap-2">

@@ -318,12 +318,13 @@ export default function GradingView() {
 
       // 3. Save overall result
       console.log('Salvando resultado geral...');
+      const roundedTotalScore = Number(result.totalScore.toFixed(1));
       const { error: resultError } = await supabase.from('assessment_results').insert([{
         student_id: studentId,
         assessment_id: assessmentId,
-        total_score: result.totalScore,
+        total_score: roundedTotalScore,
         max_score: result.maxScore,
-        percentage: (result.totalScore / result.maxScore) * 100,
+        percentage: (roundedTotalScore / result.maxScore) * 100,
         ai_corrected: true,
         overall_feedback: result.overallFeedback,
         user_id: user.id
@@ -355,7 +356,7 @@ export default function GradingView() {
         'list1_score';
       
       if (existingGrade) {
-        const updatedGrade = { ...existingGrade, [fieldToUpdate]: result.totalScore };
+        const updatedGrade = { ...existingGrade, [fieldToUpdate]: roundedTotalScore };
         const sum = (updatedGrade.list1_score || 0) + 
                     (updatedGrade.list2_score || 0) + 
                     (updatedGrade.list3_score || 0) + 
@@ -374,7 +375,7 @@ export default function GradingView() {
         
         const { error: updateError } = await supabase
           .from('grades')
-          .update({ [fieldToUpdate]: result.totalScore, unit_average: average })
+          .update({ [fieldToUpdate]: roundedTotalScore, unit_average: Number(average.toFixed(1)) })
           .eq('id', existingGrade.id);
           
         if (updateError) {
@@ -387,8 +388,8 @@ export default function GradingView() {
           .insert([{ 
             student_id: studentId,
             unit_id: assessment.unit_id,
-            [fieldToUpdate]: result.totalScore,
-            unit_average: result.totalScore,
+            [fieldToUpdate]: roundedTotalScore,
+            unit_average: roundedTotalScore,
             user_id: user.id
           }]);
           
@@ -444,7 +445,7 @@ export default function GradingView() {
     // Score
     doc.setFontSize(16);
     doc.setTextColor(10, 37, 64);
-    doc.text(`Nota: ${result.totalScore} / ${result.maxScore} (${Math.round((result.totalScore / result.maxScore) * 100)}%)`, pageWidth - 20, 45, { align: 'right' });
+    doc.text(`Nota: ${result.totalScore.toFixed(1)} / ${result.maxScore} (${Math.round((result.totalScore / result.maxScore) * 100)}%)`, pageWidth - 20, 45, { align: 'right' });
 
     // Overall Feedback
     if (result.overallFeedback) {
@@ -463,7 +464,7 @@ export default function GradingView() {
       'Questão', // Type could be added if available
       corr.studentAnswer || 'Sem resposta',
       corr.feedback || '',
-      `${corr.score} pts`
+      `${corr.score.toFixed(1)} pts`
     ]);
 
     autoTable(doc, {
@@ -665,7 +666,7 @@ export default function GradingView() {
                   <p className="text-slate-500">Processado por IA • {new Date().toLocaleDateString()}</p>
                 </div>
                 <div className="text-right">
-                  <div className="text-4xl font-bold text-brand-blue">{result.totalScore}</div>
+                  <div className="text-4xl font-bold text-brand-blue">{result.totalScore.toFixed(1)}</div>
                   <div className="text-sm text-slate-400">de {result.maxScore} pontos</div>
                 </div>
               </div>
@@ -692,7 +693,7 @@ export default function GradingView() {
                           "text-sm font-bold",
                           corr.score > 0 ? "text-emerald-600" : "text-red-500"
                         )}>
-                          {corr.score} pts
+                          {corr.score.toFixed(1)} pts
                         </span>
                       </div>
                       <p className="text-sm text-slate-600 mb-2 italic">"{corr.studentAnswer}"</p>
