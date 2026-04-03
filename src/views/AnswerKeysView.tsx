@@ -5,6 +5,7 @@ import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
 import { ai } from '../lib/gemini';
 import { cn } from '../lib/utils';
+import CustomModal from '../components/CustomModal';
 
 export default function AnswerKeysView() {
   const [assessments, setAssessments] = useState<any[]>([]);
@@ -16,6 +17,19 @@ export default function AnswerKeysView() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [editingAssessment, setEditingAssessment] = useState<any>(null);
   const [newAssessmentName, setNewAssessmentName] = useState('');
+
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
 
   // Form State
   const [formData, setFormData] = useState({
@@ -51,73 +65,90 @@ export default function AnswerKeysView() {
 
   async function handleDeleteAssessment(assessmentId: string, title: string) {
     if (!supabase) return;
-    if (!confirm(`Deseja realmente excluir o gabarito "${title}"? Todas as correções e notas associadas serão removidas permanentemente.`)) return;
-
-    try {
-      // 1. Get assessment info before deleting
-      const { data: assessment } = await supabase.from('assessments').select('*').eq('id', assessmentId).single();
-      
-      if (assessment) {
-        // 2. Update grades for all students in this class/unit
-        const { data: grades } = await supabase
-          .from('grades')
-          .select('*')
-          .eq('unit_id', assessment.unit_id);
-        
-        if (grades && grades.length > 0) {
-          const fieldToUpdate = 
-            assessment.type === 'prova' ? 'exam_score' : 
-            assessment.type === 'lista2' ? 'list2_score' : 
-            assessment.type === 'lista3' ? 'list3_score' : 
-            'list1_score';
+    
+    setModal({
+      isOpen: true,
+      title: 'Excluir Gabarito',
+      message: `Deseja realmente excluir o gabarito "${title}"? Todas as correções e notas associadas serão removidas permanentemente.`,
+      type: 'confirm',
+      onConfirm: async () => {
+        try {
+          // 1. Get assessment info before deleting
+          const { data: assessment } = await supabase.from('assessments').select('*').eq('id', assessmentId).single();
           
-          for (const grade of grades) {
-            const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
-            const sum = (updatedGrade.list1_score || 0) + 
-                        (updatedGrade.list2_score || 0) + 
-                        (updatedGrade.list3_score || 0) + 
-                        (updatedGrade.exam_score || 0) + 
-                        (updatedGrade.notebook_score || 0) + 
-                        (updatedGrade.anki_score || 0);
+          if (assessment) {
+            // 2. Update grades for all students in this class/unit
+            const { data: grades } = await supabase
+              .from('grades')
+              .select('*')
+              .eq('unit_id', assessment.unit_id);
             
-            let average = Math.min(10, sum);
-            if (updatedGrade.recovery_score !== null) {
-              if (sum < 5) {
-                average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
-              } else {
-                average = Math.min(10, sum + updatedGrade.recovery_score);
+            if (grades && grades.length > 0) {
+              const fieldToUpdate = 
+                assessment.type === 'prova' ? 'exam_score' : 
+                assessment.type === 'lista2' ? 'list2_score' : 
+                assessment.type === 'lista3' ? 'list3_score' : 
+                'list1_score';
+              
+              for (const grade of grades) {
+                const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
+                const sum = (updatedGrade.list1_score || 0) + 
+                            (updatedGrade.list2_score || 0) + 
+                            (updatedGrade.list3_score || 0) + 
+                            (updatedGrade.exam_score || 0) + 
+                            (updatedGrade.notebook_score || 0) + 
+                            (updatedGrade.anki_score || 0);
+                
+                let average = Math.min(10, sum);
+                if (updatedGrade.recovery_score !== null) {
+                  if (sum < 5) {
+                    average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
+                  } else {
+                    average = Math.min(10, sum + updatedGrade.recovery_score);
+                  }
+                }
+                await supabase.from('grades').update({ [fieldToUpdate]: 0, unit_average: Number(average.toFixed(1)) }).eq('id', grade.id);
               }
             }
-            await supabase.from('grades').update({ [fieldToUpdate]: 0, unit_average: average }).eq('id', grade.id);
           }
+
+          // 3. Delete AI Corrections, assessment_results and student_answers
+          const { data: answers } = await supabase.from('student_answers').select('id').eq('assessment_id', assessmentId);
+          const answerIds = answers?.map(a => a.id) || [];
+          
+          if (answerIds.length > 0) {
+            await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+          }
+
+          await supabase.from('assessment_results').delete().eq('assessment_id', assessmentId);
+          await supabase.from('student_answers').delete().eq('assessment_id', assessmentId);
+          
+          // 4. Delete questions
+          await supabase.from('questions').delete().eq('assessment_id', assessmentId);
+
+          // 5. Delete assessment
+          const { error } = await supabase.from('assessments').delete().eq('id', assessmentId);
+
+          if (error) throw error;
+
+          setAssessments(assessments.filter(a => a.id !== assessmentId));
+          setModal({
+            isOpen: true,
+            title: 'Sucesso',
+            message: 'Gabarito excluído e notas atualizadas com sucesso!',
+            type: 'success'
+          });
+        } catch (error) {
+          console.error('Error deleting assessment:', error);
+          setModal({
+            isOpen: true,
+            title: 'Erro',
+            message: 'Erro ao excluir gabarito.',
+            type: 'error'
+          });
         }
       }
-
-      // 3. Delete AI Corrections, assessment_results and student_answers
-      const { data: answers } = await supabase.from('student_answers').select('id').eq('assessment_id', assessmentId);
-      const answerIds = answers?.map(a => a.id) || [];
-      
-      if (answerIds.length > 0) {
-        await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
-      }
-
-      await supabase.from('assessment_results').delete().eq('assessment_id', assessmentId);
-      await supabase.from('student_answers').delete().eq('assessment_id', assessmentId);
-      
-      // 4. Delete questions
-      await supabase.from('questions').delete().eq('assessment_id', assessmentId);
-
-      // 5. Delete assessment
-      const { error } = await supabase.from('assessments').delete().eq('id', assessmentId);
-
-      if (error) throw error;
-
-      setAssessments(assessments.filter(a => a.id !== assessmentId));
-      alert('Gabarito excluído e notas atualizadas com sucesso!');
-    } catch (error) {
-      console.error('Error deleting assessment:', error);
-      alert('Erro ao excluir gabarito.');
-    }
+    });
   }
 
   const onDrop = async (acceptedFiles: File[]) => {
@@ -179,7 +210,12 @@ export default function AnswerKeysView() {
           });
         } catch (err) {
           console.error('AI Processing Error:', err);
-          alert('Erro ao processar o PDF com IA. Tente novamente.');
+          setModal({
+            isOpen: true,
+            title: 'Erro de Processamento',
+            message: 'Erro ao processar o PDF com IA. Tente novamente.',
+            type: 'error'
+          });
         } finally {
           setIsProcessing(false);
         }
@@ -241,9 +277,20 @@ export default function AnswerKeysView() {
       ));
       setShowEditModal(false);
       setEditingAssessment(null);
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'Nome do gabarito atualizado com sucesso!',
+        type: 'success'
+      });
     } catch (error) {
       console.error('Error updating assessment name:', error);
-      alert('Erro ao atualizar o nome do gabarito.');
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao atualizar o nome do gabarito.',
+        type: 'error'
+      });
     } finally {
       setIsLoading(false);
     }
@@ -251,7 +298,12 @@ export default function AnswerKeysView() {
 
   const handleSave = async () => {
     if (!formData.title || !formData.unit_id) {
-      alert('Preencha todos os campos obrigatórios (Título e Unidade).');
+      setModal({
+        isOpen: true,
+        title: 'Campos Obrigatórios',
+        message: 'Preencha todos os campos obrigatórios (Título e Unidade).',
+        type: 'warning'
+      });
       return;
     }
 
@@ -271,7 +323,12 @@ export default function AnswerKeysView() {
 
     if (assessmentError) {
       console.error(assessmentError);
-      alert('Erro ao salvar atividade.');
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao salvar atividade.',
+        type: 'error'
+      });
       return;
     }
 
@@ -291,7 +348,12 @@ export default function AnswerKeysView() {
 
     if (questionsError) {
       console.error(questionsError);
-      alert('Erro ao salvar questões.');
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao salvar questões.',
+        type: 'error'
+      });
       return;
     }
 
@@ -303,10 +365,26 @@ export default function AnswerKeysView() {
       type: 'prova',
       questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }]
     });
+    setModal({
+      isOpen: true,
+      title: 'Sucesso',
+      message: 'Gabarito salvo com sucesso!',
+      type: 'success'
+    });
   };
 
   return (
     <div className="space-y-6">
+      {/* Custom Modal */}
+      <CustomModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        onConfirm={modal.onConfirm}
+      />
+
       <div className="flex justify-between items-center">
         <div>
           <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Gabaritos</h3>

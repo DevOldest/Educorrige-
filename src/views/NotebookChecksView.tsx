@@ -13,6 +13,7 @@ import {
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
+import CustomModal from '../components/CustomModal';
 
 export default function NotebookChecksView() {
   const [classes, setClasses] = useState<any[]>([]);
@@ -24,6 +25,19 @@ export default function NotebookChecksView() {
   const [checks, setChecks] = useState<Record<string, number>>({});
   const [maxStamps, setMaxStamps] = useState(6);
   const [isSaving, setIsSaving] = useState(false);
+
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
 
   useEffect(() => {
     fetchInitialData();
@@ -69,17 +83,26 @@ export default function NotebookChecksView() {
       .in('student_id', studentsData?.map(s => s.id) || []);
 
     const checksMap: Record<string, number> = {};
-    let currentMax = 6;
+    let foundMax = 0;
     
     gradesData?.forEach(g => {
       // If we're loading existing data, we'll assume 0.25 for now
       // but we'll try to find the best fit for the current maxStamps
+      // Notebook score is out of 1.5. Each visto is worth (1.5 / maxStamps)
+      // If we don't know maxStamps, we can't perfectly reverse it.
+      // However, we can use a default of 6 (0.25 each) to guess the count.
       const count = Math.round((g.notebook_score || 0) / 0.25);
       checksMap[g.student_id] = count;
-      if (count > currentMax) currentMax = count;
+      if (count > foundMax) foundMax = count;
     });
     
-    setMaxStamps(currentMax || 6);
+    // We don't automatically set maxStamps here to avoid "sei la como" changes.
+    // The user can use the "Sincronizar Maior" button if needed.
+    // Only set if it's the first time and we found some data.
+    if (foundMax > maxStamps) {
+      setMaxStamps(foundMax);
+    }
+
     setChecks(checksMap);
     setIsLoading(false);
   }
@@ -150,10 +173,20 @@ export default function NotebookChecksView() {
             .insert([{ ...dataToSave, unit_average: roundedScore }]);
         }
       }
-      alert('Vistos salvos e médias atualizadas com sucesso!');
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'Vistos salvos e médias atualizadas com sucesso!',
+        type: 'success'
+      });
     } catch (error) {
       console.error('Error saving checks:', error);
-      alert('Erro ao salvar vistos.');
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao salvar vistos.',
+        type: 'error'
+      });
     } finally {
       setIsSaving(false);
     }
@@ -161,6 +194,16 @@ export default function NotebookChecksView() {
 
   return (
     <div className="space-y-8">
+      {/* Custom Modal */}
+      <CustomModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        onConfirm={modal.onConfirm}
+      />
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Vistos do Caderno</h3>

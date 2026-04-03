@@ -5,6 +5,7 @@ import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
 import { ai } from '../lib/gemini';
 import { cn } from '../lib/utils';
+import CustomModal from '../components/CustomModal';
 
 export default function ClassesView() {
   const [classes, setClasses] = useState<any[]>([]);
@@ -26,6 +27,19 @@ export default function ClassesView() {
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
   const [newStudentName, setNewStudentName] = useState('');
   const [isAddingStudent, setIsAddingStudent] = useState(false);
+
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
 
   useEffect(() => {
     fetchClasses();
@@ -85,112 +99,151 @@ export default function ClassesView() {
       
       setShowEditModal(false);
       fetchClasses();
-      alert('Turma atualizada com sucesso!');
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'Turma atualizada com sucesso!',
+        type: 'success'
+      });
     } catch (error) {
       console.error('Error updating class:', error);
-      alert('Erro ao atualizar turma.');
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao atualizar turma.',
+        type: 'error'
+      });
     }
   }
 
   async function handleDeleteClass(classId: string, className: string) {
     if (!supabase) return;
-    if (!confirm(`Deseja realmente excluir a turma "${className}"? Todos os alunos, notas e atividades associadas serão removidos permanentemente.`)) return;
+    
+    setModal({
+      isOpen: true,
+      title: 'Confirmar Exclusão',
+      message: `Deseja realmente excluir a turma "${className}"? Todos os alunos, notas e atividades associadas serão removidos permanentemente.`,
+      type: 'confirm',
+      onConfirm: async () => {
+        try {
+          // 1. Get all students of this class
+          const { data: students } = await supabase.from('students').select('id').eq('class_id', classId);
+          const studentIds = students?.map(s => s.id) || [];
 
-    try {
-      // 1. Get all students of this class
-      const { data: students } = await supabase.from('students').select('id').eq('class_id', classId);
-      const studentIds = students?.map(s => s.id) || [];
+          // 2. Get all assessments of this class
+          const { data: assessments } = await supabase.from('assessments').select('id').eq('class_id', classId);
+          const assessmentIds = assessments?.map(a => a.id) || [];
 
-      // 2. Get all assessments of this class
-      const { data: assessments } = await supabase.from('assessments').select('id').eq('class_id', classId);
-      const assessmentIds = assessments?.map(a => a.id) || [];
+          // 3. Delete AI Corrections (linked to student_answers)
+          if (studentIds.length > 0) {
+            const { data: answers } = await supabase
+              .from('student_answers')
+              .select('id')
+              .in('student_id', studentIds);
+            
+            const answerIds = answers?.map(a => a.id) || [];
+            if (answerIds.length > 0) {
+              await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+            }
+          }
 
-      // 3. Delete AI Corrections (linked to student_answers)
-      if (studentIds.length > 0) {
-        const { data: answers } = await supabase
-          .from('student_answers')
-          .select('id')
-          .in('student_id', studentIds);
-        
-        const answerIds = answers?.map(a => a.id) || [];
-        if (answerIds.length > 0) {
-          await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+          // 4. Delete Student Answers
+          if (studentIds.length > 0) {
+            await supabase.from('student_answers').delete().in('student_id', studentIds);
+          }
+          if (assessmentIds.length > 0) {
+            await supabase.from('student_answers').delete().in('assessment_id', assessmentIds);
+          }
+
+          // 5. Delete Assessment Results
+          if (studentIds.length > 0) {
+            await supabase.from('assessment_results').delete().in('student_id', studentIds);
+          }
+          if (assessmentIds.length > 0) {
+            await supabase.from('assessment_results').delete().in('assessment_id', assessmentIds);
+          }
+
+          // 6. Delete Questions
+          if (assessmentIds.length > 0) {
+            await supabase.from('questions').delete().in('assessment_id', assessmentIds);
+          }
+
+          // 7. Delete Assessments
+          await supabase.from('assessments').delete().eq('class_id', classId);
+
+          // 8. Delete Grades
+          if (studentIds.length > 0) {
+            await supabase.from('grades').delete().in('student_id', studentIds);
+          }
+
+          // 9. Delete Students
+          await supabase.from('students').delete().eq('class_id', classId);
+
+          // 10. Delete Class
+          const { error } = await supabase.from('classes').delete().eq('id', classId);
+
+          if (error) throw error;
+
+          setClasses(classes.filter(c => c.id !== classId));
+          setModal({
+            isOpen: true,
+            title: 'Sucesso',
+            message: 'Turma excluída com sucesso!',
+            type: 'success'
+          });
+        } catch (error) {
+          console.error('Error deleting class:', error);
+          setModal({
+            isOpen: true,
+            title: 'Erro',
+            message: 'Erro ao excluir turma.',
+            type: 'error'
+          });
         }
       }
-
-      // 4. Delete Student Answers
-      if (studentIds.length > 0) {
-        await supabase.from('student_answers').delete().in('student_id', studentIds);
-      }
-      if (assessmentIds.length > 0) {
-        await supabase.from('student_answers').delete().in('assessment_id', assessmentIds);
-      }
-
-      // 5. Delete Assessment Results
-      if (studentIds.length > 0) {
-        await supabase.from('assessment_results').delete().in('student_id', studentIds);
-      }
-      if (assessmentIds.length > 0) {
-        await supabase.from('assessment_results').delete().in('assessment_id', assessmentIds);
-      }
-
-      // 6. Delete Questions
-      if (assessmentIds.length > 0) {
-        await supabase.from('questions').delete().in('assessment_id', assessmentIds);
-      }
-
-      // 7. Delete Assessments
-      await supabase.from('assessments').delete().eq('class_id', classId);
-
-      // 8. Delete Grades
-      if (studentIds.length > 0) {
-        await supabase.from('grades').delete().in('student_id', studentIds);
-      }
-
-      // 9. Delete Students
-      await supabase.from('students').delete().eq('class_id', classId);
-
-      // 10. Delete Class
-      const { error } = await supabase.from('classes').delete().eq('id', classId);
-
-      if (error) throw error;
-
-      setClasses(classes.filter(c => c.id !== classId));
-      alert('Turma excluída com sucesso!');
-    } catch (error) {
-      console.error('Error deleting class:', error);
-      alert('Erro ao excluir turma.');
-    }
+    });
   }
 
   async function handleDeleteStudent(studentId: string) {
     if (!supabase) return;
-    if (!confirm('Deseja realmente excluir este aluno? Todas as notas e atividades associadas serão removidas.')) return;
+    
+    setModal({
+      isOpen: true,
+      title: 'Confirmar Exclusão',
+      message: 'Deseja realmente excluir este aluno? Todas as notas e atividades associadas serão removidas.',
+      type: 'confirm',
+      onConfirm: async () => {
+        try {
+          const { data: answers } = await supabase
+            .from('student_answers')
+            .select('id')
+            .eq('student_id', studentId);
+          
+          const answerIds = answers?.map(a => a.id) || [];
+          if (answerIds.length > 0) {
+            await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+          }
+          
+          await supabase.from('student_answers').delete().eq('student_id', studentId);
+          await supabase.from('assessment_results').delete().eq('student_id', studentId);
+          await supabase.from('grades').delete().eq('student_id', studentId);
+          
+          const { error } = await supabase.from('students').delete().eq('id', studentId);
+          if (error) throw error;
 
-    try {
-      const { data: answers } = await supabase
-        .from('student_answers')
-        .select('id')
-        .eq('student_id', studentId);
-      
-      const answerIds = answers?.map(a => a.id) || [];
-      if (answerIds.length > 0) {
-        await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+          setClassStudents(classStudents.filter(s => s.id !== studentId));
+          fetchClasses();
+        } catch (error) {
+          console.error('Error deleting student:', error);
+          setModal({
+            isOpen: true,
+            title: 'Erro',
+            message: 'Erro ao excluir aluno.',
+            type: 'error'
+          });
+        }
       }
-      
-      await supabase.from('student_answers').delete().eq('student_id', studentId);
-      await supabase.from('assessment_results').delete().eq('student_id', studentId);
-      await supabase.from('grades').delete().eq('student_id', studentId);
-      
-      const { error } = await supabase.from('students').delete().eq('id', studentId);
-      if (error) throw error;
-
-      setClassStudents(classStudents.filter(s => s.id !== studentId));
-      fetchClasses();
-    } catch (error) {
-      console.error('Error deleting student:', error);
-      alert('Erro ao excluir aluno.');
-    }
+    });
   }
 
   async function handleAddStudent() {
@@ -218,7 +271,12 @@ export default function ClassesView() {
       fetchClasses();
     } catch (error) {
       console.error('Error adding student:', error);
-      alert('Erro ao adicionar aluno.');
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao adicionar aluno.',
+        type: 'error'
+      });
     } finally {
       setIsAddingStudent(false);
     }
@@ -279,7 +337,12 @@ export default function ClassesView() {
           });
         } catch (err) {
           console.error('AI Processing Error:', err);
-          alert('Erro ao processar o PDF com IA. Verifique se o arquivo é um PDF válido e tente novamente.');
+          setModal({
+            isOpen: true,
+            title: 'Erro de Processamento',
+            message: 'Erro ao processar o PDF com IA. Verifique se o arquivo é um PDF válido e tente novamente.',
+            type: 'error'
+          });
         } finally {
           setIsProcessing(false);
         }
@@ -334,10 +397,20 @@ export default function ClassesView() {
       setPreviewData(null);
       setShowUploadModal(false);
       fetchClasses();
-      alert('Turma e alunos salvos com sucesso!');
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'Turma e alunos salvos com sucesso!',
+        type: 'success'
+      });
     } catch (error) {
       console.error('Error saving class:', error);
-      alert('Erro ao salvar a turma no banco de dados.');
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao salvar a turma no banco de dados.',
+        type: 'error'
+      });
     }
   }
 
@@ -400,6 +473,16 @@ export default function ClassesView() {
           ))}
         </div>
       )}
+
+      {/* Custom Modal */}
+      <CustomModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        onConfirm={modal.onConfirm}
+      />
 
       {/* Edit Class Modal */}
       {showEditModal && (

@@ -5,21 +5,52 @@ import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import CustomModal from '../components/CustomModal';
 
 export default function ReportsView() {
   const [results, setResults] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const [classes, setClasses] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(false);
   const [selectedResult, setSelectedResult] = useState<any>(null);
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
+  const [isBulkDownloading, setIsBulkDownloading] = useState(false);
   
   const [filters, setFilters] = useState({
-    search: ''
+    search: '',
+    classId: ''
+  });
+
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
   });
 
   useEffect(() => {
-    fetchData();
+    fetchClasses();
   }, []);
+
+  useEffect(() => {
+    if (filters.search.length >= 3 || filters.classId) {
+      fetchData();
+    } else if (!filters.search && !filters.classId) {
+      setResults([]);
+    }
+  }, [filters.search, filters.classId]);
+
+  async function fetchClasses() {
+    if (!supabase) return;
+    const { data } = await supabase.from('classes').select('*').order('name');
+    if (data) setClasses(data);
+  }
 
   async function fetchData() {
     if (!supabase) {
@@ -27,57 +58,69 @@ export default function ReportsView() {
       return;
     }
     setIsLoading(true);
-    const { data } = await supabase
+    
+    let query = supabase
       .from('assessment_results')
-      .select('*, students(name, classes(name)), assessments(title, type)')
+      .select('*, students!inner(name, class_id, classes(name)), assessments(title, type)')
       .order('created_at', { ascending: false });
 
-    if (data) setResults(data);
+    if (filters.search) {
+      query = query.ilike('students.name', `%${filters.search}%`);
+    }
+
+    if (filters.classId) {
+      query = query.eq('students.class_id', filters.classId);
+    }
+
+    const { data, error } = await query.limit(50);
+
+    if (error) {
+      console.error('Error fetching data:', error);
+    } else if (data) {
+      setResults(data);
+    }
     setIsLoading(false);
   }
 
-  const filteredResults = results.filter(r => {
-    if (!filters.search) return true;
-    const searchLower = filters.search.toLowerCase();
-    return r.students?.name?.toLowerCase().includes(searchLower);
-  });
-
   const handleClearFilters = () => {
-    setFilters({ search: '' });
+    setFilters({ search: '', classId: '' });
+    setResults([]);
   };
 
-  const exportToPDF = (result: any) => {
+  const exportToPDF = (result: any, doc?: jsPDF, isLast?: boolean) => {
     if (!result) return;
-    const doc = new jsPDF();
-    const pageWidth = doc.internal.pageSize.getWidth();
+    const currentDoc = doc || new jsPDF();
+    const pageWidth = currentDoc.internal.pageSize.getWidth();
 
     // Header
-    doc.setFontSize(20);
-    doc.setTextColor(10, 37, 64); // brand-blue-dark
-    doc.text('Relatório de Correção', pageWidth / 2, 20, { align: 'center' });
+    currentDoc.setFontSize(20);
+    currentDoc.setTextColor(10, 37, 64); // brand-blue-dark
+    currentDoc.text('Relatório de Correção', pageWidth / 2, 20, { align: 'center' });
 
     // Student Info
-    doc.setFontSize(12);
-    doc.setTextColor(100);
-    doc.text(`Aluno: ${result.students?.name}`, 20, 35);
-    doc.text(`Turma: ${result.students?.classes?.name}`, 20, 42);
-    doc.text(`Atividade: ${result.assessments?.title}`, 20, 49);
-    doc.text(`Data: ${new Date(result.created_at).toLocaleDateString()}`, 20, 56);
+    currentDoc.setFontSize(12);
+    currentDoc.setTextColor(100);
+    currentDoc.text(`Aluno: ${result.students?.name}`, 20, 35);
+    currentDoc.text(`Turma: ${result.students?.classes?.name}`, 20, 42);
+    currentDoc.text(`Atividade: ${result.assessments?.title}`, 20, 49);
+    currentDoc.text(`Data: ${new Date(result.created_at).toLocaleDateString()}`, 20, 56);
 
     // Score
-    doc.setFontSize(16);
-    doc.setTextColor(10, 37, 64);
-    doc.text(`Nota: ${result.total_score.toFixed(1)} / ${result.max_score} (${Math.round(result.percentage)}%)`, pageWidth - 20, 45, { align: 'right' });
+    currentDoc.setFontSize(16);
+    currentDoc.setTextColor(10, 37, 64);
+    currentDoc.text(`Nota: ${result.total_score.toFixed(1)} / ${result.max_score} (${Math.round(result.percentage)}%)`, pageWidth - 20, 45, { align: 'right' });
 
     // Overall Feedback
+    let currentY = 70;
     if (result.overall_feedback) {
-      doc.setFontSize(12);
-      doc.setTextColor(10, 37, 64);
-      doc.text('Feedback Geral:', 20, 70);
-      doc.setFontSize(10);
-      doc.setTextColor(80);
-      const splitFeedback = doc.splitTextToSize(result.overall_feedback, pageWidth - 40);
-      doc.text(splitFeedback, 20, 77);
+      currentDoc.setFontSize(12);
+      currentDoc.setTextColor(10, 37, 64);
+      currentDoc.text('Feedback Geral:', 20, 70);
+      currentDoc.setFontSize(10);
+      currentDoc.setTextColor(80);
+      const splitFeedback = currentDoc.splitTextToSize(result.overall_feedback, pageWidth - 40);
+      currentDoc.text(splitFeedback, 20, 77);
+      currentY = 77 + (splitFeedback.length * 5) + 10;
     }
 
     // Table of corrections
@@ -89,8 +132,8 @@ export default function ReportsView() {
       `${corr.score.toFixed(1)} / ${corr.questions?.max_score}`
     ]);
 
-    autoTable(doc, {
-      startY: result.overall_feedback ? 100 : 70,
+    autoTable(currentDoc, {
+      startY: currentY,
       head: [['Nº', 'Tipo', 'Resposta do Aluno', 'Feedback da IA', 'Pontos']],
       body: tableData,
       headStyles: { fillColor: [10, 37, 64] },
@@ -101,7 +144,53 @@ export default function ReportsView() {
       }
     });
 
-    doc.save(`Relatorio_${result.students?.name}_${result.assessments?.title}.pdf`);
+    if (!doc) {
+      currentDoc.save(`Relatorio_${result.students?.name}_${result.assessments?.title}.pdf`);
+    } else if (!isLast) {
+      currentDoc.addPage();
+    }
+    
+    return currentDoc;
+  };
+
+  const handleBulkDownload = async () => {
+    if (!filters.classId || results.length === 0) return;
+    
+    setIsBulkDownloading(true);
+    try {
+      const doc = new jsPDF();
+      
+      for (let i = 0; i < results.length; i++) {
+        const result = results[i];
+        const { data: corrections } = await supabase!
+          .from('student_answers')
+          .select('*, questions(*), ai_corrections(*)')
+          .eq('student_id', result.student_id)
+          .eq('assessment_id', result.assessment_id);
+        
+        exportToPDF({ ...result, corrections }, doc, i === results.length - 1);
+      }
+      
+      const className = classes.find(c => c.id === filters.classId)?.name || 'Turma';
+      doc.save(`Relatorios_${className}_${new Date().toLocaleDateString()}.pdf`);
+      
+      setModal({
+        isOpen: true,
+        title: 'Sucesso!',
+        message: `${results.length} relatórios foram compilados em um único arquivo PDF.`,
+        type: 'success'
+      });
+    } catch (error) {
+      console.error('Error in bulk download:', error);
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Ocorreu um erro ao gerar os relatórios em massa.',
+        type: 'error'
+      });
+    } finally {
+      setIsBulkDownloading(false);
+    }
   };
 
   const fetchResultDetails = async (result: any) => {
@@ -124,76 +213,93 @@ export default function ReportsView() {
 
   const handleDeleteResult = async (result: any) => {
     if (!supabase) return;
-    if (!confirm(`Deseja realmente excluir a correção de ${result.students?.name}? Esta ação não pode ser desfeita.`)) return;
-
-    setIsDeleting(result.id);
-    try {
-      // 1. Delete AI Corrections and student_answers
-      const { data: answers } = await supabase
-        .from('student_answers')
-        .select('id')
-        .eq('assessment_id', result.assessment_id)
-        .eq('student_id', result.student_id);
-      
-      const answerIds = answers?.map(a => a.id) || [];
-      if (answerIds.length > 0) {
-        await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
-      }
-
-      await supabase.from('student_answers').delete().eq('assessment_id', result.assessment_id).eq('student_id', result.student_id);
-      
-      // 2. Delete assessment_result
-      await supabase.from('assessment_results').delete().eq('id', result.id);
-
-      // 3. Update grade in Management
-      const { data: assessment } = await supabase.from('assessments').select('type, unit_id').eq('id', result.assessment_id).single();
-      
-      if (assessment) {
-        const { data: grade } = await supabase
-          .from('grades')
-          .select('*')
-          .eq('student_id', result.student_id)
-          .eq('unit_id', assessment.unit_id)
-          .maybeSingle();
-
-        if (grade) {
-          const fieldToUpdate = 
-            assessment.type === 'prova' ? 'exam_score' : 
-            assessment.type === 'lista2' ? 'list2_score' : 
-            assessment.type === 'lista3' ? 'list3_score' : 
-            'list1_score';
-            
-          const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
+    
+    setModal({
+      isOpen: true,
+      title: 'Confirmar Exclusão',
+      message: `Deseja realmente excluir a correção de ${result.students?.name}? Esta ação não pode ser desfeita e a nota será removida da gestão.`,
+      type: 'confirm',
+      onConfirm: async () => {
+        setIsDeleting(result.id);
+        try {
+          // 1. Delete AI Corrections and student_answers
+          const { data: answers } = await supabase
+            .from('student_answers')
+            .select('id')
+            .eq('assessment_id', result.assessment_id)
+            .eq('student_id', result.student_id);
           
-          // Recalculate average
-          const sum = (updatedGrade.list1_score || 0) + 
-                      (updatedGrade.list2_score || 0) + 
-                      (updatedGrade.list3_score || 0) + 
-                      (updatedGrade.exam_score || 0) + 
-                      (updatedGrade.notebook_score || 0) + 
-                      (updatedGrade.anki_score || 0);
+          const answerIds = answers?.map(a => a.id) || [];
+          if (answerIds.length > 0) {
+            await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
+          }
+
+          await supabase.from('student_answers').delete().eq('assessment_id', result.assessment_id).eq('student_id', result.student_id);
           
-          let average = Math.min(10, sum);
-          if (updatedGrade.recovery_score !== null) {
-            if (sum < 5) {
-              average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
-            } else {
-              average = Math.min(10, sum + updatedGrade.recovery_score);
+          // 2. Delete assessment_result
+          await supabase.from('assessment_results').delete().eq('id', result.id);
+
+          // 3. Update grade in Management
+          const { data: assessment } = await supabase.from('assessments').select('type, unit_id').eq('id', result.assessment_id).single();
+          
+          if (assessment) {
+            const { data: grade } = await supabase
+              .from('grades')
+              .select('*')
+              .eq('student_id', result.student_id)
+              .eq('unit_id', assessment.unit_id)
+              .maybeSingle();
+
+            if (grade) {
+              const fieldToUpdate = 
+                assessment.type === 'prova' ? 'exam_score' : 
+                assessment.type === 'lista2' ? 'list2_score' : 
+                assessment.type === 'lista3' ? 'list3_score' : 
+                'list1_score';
+                
+              const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
+              
+              // Recalculate average
+              const sum = (updatedGrade.list1_score || 0) + 
+                          (updatedGrade.list2_score || 0) + 
+                          (updatedGrade.list3_score || 0) + 
+                          (updatedGrade.exam_score || 0) + 
+                          (updatedGrade.notebook_score || 0) + 
+                          (updatedGrade.anki_score || 0);
+              
+              let average = Math.min(10, sum);
+              if (updatedGrade.recovery_score !== null) {
+                if (sum < 5) {
+                  average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
+                } else {
+                  average = Math.min(10, sum + updatedGrade.recovery_score);
+                }
+              }
+
+              await supabase.from('grades').update({ [fieldToUpdate]: 0, unit_average: Number(average.toFixed(1)) }).eq('id', grade.id);
             }
           }
 
-          await supabase.from('grades').update({ [fieldToUpdate]: 0, unit_average: average }).eq('id', grade.id);
+          setResults(results.filter(r => r.id !== result.id));
+          setModal({
+            isOpen: true,
+            title: 'Sucesso',
+            message: 'Correção excluída e nota atualizada com sucesso!',
+            type: 'success'
+          });
+        } catch (error) {
+          console.error('Error deleting result:', error);
+          setModal({
+            isOpen: true,
+            title: 'Erro',
+            message: 'Erro ao excluir correção.',
+            type: 'error'
+          });
+        } finally {
+          setIsDeleting(null);
         }
       }
-
-      setResults(results.filter(r => r.id !== result.id));
-      alert('Correção excluída e nota atualizada com sucesso!');
-    } catch (error) {
-      console.error('Error deleting result:', error);
-      alert('Erro ao excluir correção.');
-    } finally {
-      setIsDeleting(null);
-    }
+    });
   };
 
   return (
@@ -206,33 +312,61 @@ export default function ReportsView() {
       </div>
 
       {/* Simplified Search Bar */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-        <div className="relative max-w-2xl mx-auto">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={24} />
-          <input 
-            type="text"
-            placeholder="Digite o nome do aluno para ver seus relatórios..."
-            value={filters.search}
-            onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-            className="w-full pl-14 pr-12 py-5 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-brand-yellow text-lg shadow-inner"
-          />
-          {filters.search && (
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="relative">
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+            <input 
+              type="text"
+              placeholder="Nome do aluno (mín. 3 letras)..."
+              value={filters.search}
+              onChange={(e) => setFilters({ ...filters, search: e.target.value })}
+              className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner"
+            />
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={filters.classId}
+              onChange={(e) => setFilters({ ...filters, classId: e.target.value })}
+              className="flex-1 px-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner"
+            >
+              <option value="">Todas as Turmas</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
             <button 
               onClick={handleClearFilters}
-              className="absolute right-4 top-1/2 -translate-y-1/2 text-slate-400 hover:text-brand-blue-dark transition-colors"
+              className="px-4 py-3 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
+              title="Limpar Filtros"
             >
               <Trash2 size={20} />
             </button>
+          </div>
+        </div>
+        
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-50">
+          <p className="text-xs text-slate-400">
+            {results.length > 0 ? `${results.length} resultados encontrados.` : 'Use os filtros para buscar relatórios.'}
+          </p>
+          {filters.classId && results.length > 0 && (
+            <button
+              onClick={handleBulkDownload}
+              disabled={isBulkDownloading}
+              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md disabled:opacity-50"
+            >
+              {isBulkDownloading ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+              Baixar Todos da Turma
+            </button>
           )}
         </div>
-        <p className="text-center text-xs text-slate-400 mt-3">
-          Os resultados serão filtrados automaticamente conforme você digita.
-        </p>
       </div>
 
       {/* Results List */}
       <div className="space-y-4">
-        {filteredResults.map((result, i) => (
+        {isLoading ? (
+          <div className="flex justify-center py-20">
+            <Loader2 className="animate-spin text-brand-gold" size={40} />
+          </div>
+        ) : results.map((result, i) => (
           <motion.div
             key={result.id}
             initial={{ opacity: 0, y: 10 }}
@@ -318,13 +452,27 @@ export default function ReportsView() {
           </motion.div>
         ))}
 
-        {filteredResults.length === 0 && !isLoading && (
+        {results.length === 0 && !isLoading && (
           <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-200">
             <BarChart3 size={48} className="mx-auto text-slate-300 mb-4" />
-            <p className="text-slate-500 font-medium">Nenhum resultado encontrado com os filtros selecionados.</p>
+            <p className="text-slate-500 font-medium">
+              {filters.search || filters.classId 
+                ? 'Nenhum resultado encontrado com os filtros selecionados.' 
+                : 'Busque por nome ou selecione uma turma para ver os relatórios.'}
+            </p>
           </div>
         )}
       </div>
+
+      {/* Custom Modal */}
+      <CustomModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        onConfirm={modal.onConfirm}
+      />
 
       {/* Details Modal */}
       {selectedResult && (
@@ -347,18 +495,18 @@ export default function ReportsView() {
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-6 space-y-8">
+            <div className="flex-1 overflow-y-auto p-6 space-y-8 overscroll-contain custom-scrollbar">
               {/* Summary */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-slate-50 p-4 rounded-2xl text-center">
+                <div className="bg-slate-50 p-4 rounded-2xl text-center border border-slate-100">
                   <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Nota Final</p>
-                  <p className="text-3xl font-bold text-brand-blue-dark">{selectedResult.total_score.toFixed(1)} / {selectedResult.max_score}</p>
+                  <p className="text-3xl font-bold text-brand-blue-dark">{(selectedResult.total_score || 0).toFixed(1)} / {selectedResult.max_score}</p>
                 </div>
-                <div className="bg-slate-50 p-4 rounded-2xl text-center">
+                <div className="bg-slate-50 p-4 rounded-2xl text-center border border-slate-100">
                   <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Aproveitamento</p>
-                  <p className="text-3xl font-bold text-emerald-600">{Math.round(selectedResult.percentage)}%</p>
+                  <p className="text-3xl font-bold text-emerald-600">{Math.round(selectedResult.percentage || 0)}%</p>
                 </div>
-                <div className="bg-slate-50 p-4 rounded-2xl text-center">
+                <div className="bg-slate-50 p-4 rounded-2xl text-center border border-slate-100">
                   <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Data</p>
                   <p className="text-xl font-bold text-brand-blue-dark">{new Date(selectedResult.created_at).toLocaleDateString()}</p>
                 </div>

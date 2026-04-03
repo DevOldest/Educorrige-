@@ -22,6 +22,7 @@ import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
 import { ai } from '../lib/gemini';
 import { cn } from '../lib/utils';
+import CustomModal from '../components/CustomModal';
 
 export default function GradingView() {
   const [classes, setClasses] = useState<any[]>([]);
@@ -44,6 +45,19 @@ export default function GradingView() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const [gradingContext, setGradingContext] = useState<any>(null);
+
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
 
   useEffect(() => {
     fetchInitialData();
@@ -127,7 +141,12 @@ export default function GradingView() {
 
   const handleGrade = async () => {
     if (!selectedAssessmentId || !selectedStudentId || files.length === 0 || !ai) {
-      alert('Selecione o aluno, a atividade e envie as fotos.');
+      setModal({
+        isOpen: true,
+        title: 'Campos Incompletos',
+        message: 'Selecione o aluno, a atividade e envie as fotos antes de iniciar a correção.',
+        type: 'warning'
+      });
       return;
     }
 
@@ -401,10 +420,20 @@ export default function GradingView() {
 
       console.log('Salvamento concluído com sucesso!');
       setHasSaved(true);
-      alert('Resultados salvos com sucesso no banco de dados!');
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'Resultados salvos com sucesso no banco de dados!',
+        type: 'success'
+      });
     } catch (error: any) {
       console.error('Erro fatal no saveResults:', error);
-      alert('Erro ao salvar resultados: ' + (error.message || JSON.stringify(error)));
+      setModal({
+        isOpen: true,
+        title: 'Erro ao Salvar',
+        message: 'Erro ao salvar resultados: ' + (error.message || JSON.stringify(error)),
+        type: 'error'
+      });
     } finally {
       setIsSaving(false);
     }
@@ -484,6 +513,16 @@ export default function GradingView() {
 
   return (
     <div className="space-y-6">
+      {/* Custom Modal */}
+      <CustomModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        onConfirm={modal.onConfirm}
+      />
+
       {!ai && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex items-center gap-3 mb-6">
           <AlertCircle size={24} />

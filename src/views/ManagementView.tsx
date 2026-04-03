@@ -17,6 +17,7 @@ import {
 import { motion } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
+import CustomModal from '../components/CustomModal';
 
 export default function ManagementView() {
   const [classes, setClasses] = useState<any[]>([]);
@@ -28,6 +29,19 @@ export default function ManagementView() {
   const [grades, setGrades] = useState<any[]>([]);
   const [units, setUnits] = useState<any[]>([]);
   const [selectedUnitId, setSelectedUnitId] = useState('');
+
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
 
   useEffect(() => {
     fetchInitialData();
@@ -133,7 +147,19 @@ export default function ManagementView() {
 
     if (!res.error) {
       fetchGrades(selectedStudentId);
-      alert('Notas salvas com sucesso!');
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'Notas salvas com sucesso!',
+        type: 'success'
+      });
+    } else {
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao salvar notas.',
+        type: 'error'
+      });
     }
   };
 
@@ -162,6 +188,16 @@ export default function ManagementView() {
 
   return (
     <div className="space-y-8">
+      {/* Custom Modal */}
+      <CustomModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        onConfirm={modal.onConfirm}
+      />
+
       {/* Selection Header */}
       <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
         <div className="space-y-2">
