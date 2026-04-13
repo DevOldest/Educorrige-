@@ -18,7 +18,8 @@ export default function ReportsView() {
   
   const [filters, setFilters] = useState({
     search: '',
-    classId: ''
+    classId: '',
+    activityType: ''
   });
 
   const [modal, setModal] = useState<{
@@ -39,12 +40,12 @@ export default function ReportsView() {
   }, []);
 
   useEffect(() => {
-    if (filters.search.length >= 3 || filters.classId) {
+    if (filters.search.length >= 3 || filters.classId || filters.activityType) {
       fetchData();
-    } else if (!filters.search && !filters.classId) {
+    } else if (!filters.search && !filters.classId && !filters.activityType) {
       setResults([]);
     }
-  }, [filters.search, filters.classId]);
+  }, [filters.search, filters.classId, filters.activityType]);
 
   async function fetchClasses() {
     if (!supabase) return;
@@ -61,7 +62,7 @@ export default function ReportsView() {
     
     let query = supabase
       .from('assessment_results')
-      .select('*, students!inner(name, class_id, classes(name)), assessments(title, type)')
+      .select('*, students!inner(name, class_id, classes(name)), assessments!inner(title, type)')
       .order('created_at', { ascending: false });
 
     if (filters.search) {
@@ -70,6 +71,10 @@ export default function ReportsView() {
 
     if (filters.classId) {
       query = query.eq('students.class_id', filters.classId);
+    }
+
+    if (filters.activityType) {
+      query = query.eq('assessments.type', filters.activityType);
     }
 
     const { data, error } = await query.limit(50);
@@ -83,7 +88,7 @@ export default function ReportsView() {
   }
 
   const handleClearFilters = () => {
-    setFilters({ search: '', classId: '' });
+    setFilters({ search: '', classId: '', activityType: '' });
     setResults([]);
   };
 
@@ -313,7 +318,7 @@ export default function ReportsView() {
 
       {/* Simplified Search Bar */}
       <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="relative">
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
             <input 
@@ -333,6 +338,19 @@ export default function ReportsView() {
               <option value="">Todas as Turmas</option>
               {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
             </select>
+          </div>
+          <div className="flex gap-2">
+            <select
+              value={filters.activityType}
+              onChange={(e) => setFilters({ ...filters, activityType: e.target.value })}
+              className="flex-1 px-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner"
+            >
+              <option value="">Todas as Atividades</option>
+              <option value="prova">Prova</option>
+              <option value="lista1">Lista 1</option>
+              <option value="lista2">Lista 2</option>
+              <option value="lista3">Lista 3</option>
+            </select>
             <button 
               onClick={handleClearFilters}
               className="px-4 py-3 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
@@ -347,14 +365,15 @@ export default function ReportsView() {
           <p className="text-xs text-slate-400">
             {results.length > 0 ? `${results.length} resultados encontrados.` : 'Use os filtros para buscar relatórios.'}
           </p>
-          {filters.classId && results.length > 0 && (
+          {results.length > 0 && (filters.classId || filters.activityType) && (
             <button
               onClick={handleBulkDownload}
               disabled={isBulkDownloading}
               className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md disabled:opacity-50"
             >
               {isBulkDownloading ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
-              Baixar Todos da Turma
+              {filters.classId && filters.activityType ? 'Baixar Turma + Atividade' : 
+               filters.classId ? 'Baixar Todos da Turma' : 'Baixar Todos da Atividade'}
             </button>
           )}
         </div>
