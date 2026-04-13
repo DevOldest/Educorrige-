@@ -51,7 +51,10 @@ export default function AnswerKeysView() {
       supabase.from('units').select('*').order('name')
     ]);
 
-    if (assessmentsRes.data) setAssessments(assessmentsRes.data);
+    if (assessmentsRes.data) {
+      // Filter out special notebook settings records
+      setAssessments(assessmentsRes.data.filter(a => !a.title.startsWith('__notebook_settings_')));
+    }
     if (classesRes.data) setClasses(classesRes.data);
     if (unitsRes.data) {
       // Remove potential duplicates by name just in case

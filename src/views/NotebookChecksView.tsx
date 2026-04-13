@@ -66,45 +66,53 @@ export default function NotebookChecksView() {
     if (!supabase) return;
     setIsLoading(true);
     
-    // Fetch students
-    const { data: studentsData } = await supabase
-      .from('students')
-      .select('*')
-      .eq('class_id', classId)
-      .order('name');
-    
-    if (studentsData) setStudents(studentsData);
+    try {
+      // 1. Fetch maxStamps from special assessment record
+      const { data: settingsData } = await supabase
+        .from('assessments')
+        .select('total_questions')
+        .eq('unit_id', unitId)
+        .eq('title', `__notebook_settings_${classId}__`)
+        .maybeSingle();
 
-    // Fetch existing checks from grades table
-    const { data: gradesData } = await supabase
-      .from('grades')
-      .select('student_id, notebook_score')
-      .eq('unit_id', unitId)
-      .in('student_id', studentsData?.map(s => s.id) || []);
+      if (settingsData) {
+        setMaxStamps(settingsData.total_questions || 6);
+      } else {
+        setMaxStamps(6);
+      }
 
-    const checksMap: Record<string, number> = {};
-    let foundMax = 0;
-    
-    gradesData?.forEach(g => {
-      // If we're loading existing data, we'll assume 0.25 for now
-      // but we'll try to find the best fit for the current maxStamps
-      // Notebook score is out of 1.5. Each visto is worth (1.5 / maxStamps)
-      // If we don't know maxStamps, we can't perfectly reverse it.
-      // However, we can use a default of 6 (0.25 each) to guess the count.
-      const count = Math.round((g.notebook_score || 0) / 0.25);
-      checksMap[g.student_id] = count;
-      if (count > foundMax) foundMax = count;
-    });
-    
-    // We don't automatically set maxStamps here to avoid "sei la como" changes.
-    // The user can use the "Sincronizar Maior" button if needed.
-    // Only set if it's the first time and we found some data.
-    if (foundMax > maxStamps) {
-      setMaxStamps(foundMax);
+      // 2. Fetch students
+      const { data: studentsData } = await supabase
+        .from('students')
+        .select('*')
+        .eq('class_id', classId)
+        .order('name');
+      
+      if (studentsData) setStudents(studentsData);
+
+      // 3. Fetch existing checks from grades table
+      const { data: gradesData } = await supabase
+        .from('grades')
+        .select('student_id, notebook_score')
+        .eq('unit_id', unitId)
+        .in('student_id', studentsData?.map(s => s.id) || []);
+
+      const checksMap: Record<string, number> = {};
+      
+      gradesData?.forEach(g => {
+        // Use the loaded maxStamps to reverse the score to a count
+        // Score = (count / maxStamps) * 1.5 => count = (Score * maxStamps) / 1.5
+        const currentMax = settingsData?.total_questions || 6;
+        const count = Math.round(((g.notebook_score || 0) * currentMax) / 1.5);
+        checksMap[g.student_id] = count;
+      });
+      
+      setChecks(checksMap);
+    } catch (error) {
+      console.error('Error fetching data:', error);
+    } finally {
+      setIsLoading(false);
     }
-
-    setChecks(checksMap);
-    setIsLoading(false);
   }
 
   const handleRecalculateMax = () => {
@@ -126,6 +134,36 @@ export default function NotebookChecksView() {
     setIsSaving(true);
 
     try {
+      const { data: { user } } = await supabase.auth.getUser();
+
+      // 1. Save maxStamps setting
+      const settingsTitle = `__notebook_settings_${selectedClassId}__`;
+      const { data: existingSettings } = await supabase
+        .from('assessments')
+        .select('id')
+        .eq('unit_id', selectedUnitId)
+        .eq('title', settingsTitle)
+        .maybeSingle();
+
+      if (existingSettings) {
+        await supabase
+          .from('assessments')
+          .update({ total_questions: maxStamps })
+          .eq('id', existingSettings.id);
+      } else {
+        await supabase
+          .from('assessments')
+          .insert([{
+            title: settingsTitle,
+            unit_id: selectedUnitId,
+            type: 'lista1', // Using an existing type
+            total_questions: maxStamps,
+            user_id: user?.id,
+            class_id: selectedClassId
+          }]);
+      }
+
+      // 2. Save student scores
       for (const studentId of Object.keys(checks)) {
         const count = checks[studentId];
         // Dynamic score: (count / maxStamps) * 1.5

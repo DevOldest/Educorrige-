@@ -117,7 +117,10 @@ export default function GradingView() {
         .order('created_at', { ascending: false });
       
       if (error) throw error;
-      if (data) setAssessments(data);
+      if (data) {
+        // Filter out special notebook settings records
+        setAssessments(data.filter(a => !a.title.startsWith('__notebook_settings_')));
+      }
     } catch (error) {
       console.error('Error fetching assessments:', error);
     } finally {
