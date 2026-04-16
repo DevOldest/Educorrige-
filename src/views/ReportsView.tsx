@@ -134,7 +134,7 @@ export default function ReportsView() {
       corr.questions?.question_type,
       corr.answer_text || 'Sem resposta',
       corr.ai_corrections?.[0]?.correction_feedback || '',
-      `${corr.score.toFixed(1)} / ${corr.questions?.max_score}`
+      `${corr.score.toFixed(3)} / ${(corr.questions?.max_score || 0).toFixed(3)}`
     ]);
 
     autoTable(currentDoc, {
@@ -564,7 +564,7 @@ export default function ReportsView() {
                           </div>
                         </div>
                         <div className="text-right">
-                          <p className="font-bold text-brand-blue-dark">{corr.score.toFixed(1)} / {corr.questions?.max_score}</p>
+                          <p className="font-bold text-brand-blue-dark">{corr.score.toFixed(3)} / {(corr.questions?.max_score || 0).toFixed(3)}</p>
                           <p className="text-[10px] text-slate-400 font-bold uppercase">Pontos</p>
                         </div>
                       </div>

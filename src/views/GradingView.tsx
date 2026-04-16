@@ -185,7 +185,9 @@ export default function GradingView() {
         TIPO DE ATIVIDADE: ${activityType.toUpperCase()}
         VALOR TOTAL DA ATIVIDADE: ${targetScore.toFixed(1)} pontos
         NÚMERO DE QUESTÕES: ${questions?.length || 0}
-        PESO POR QUESTÃO: ${questionWeight.toFixed(4)} pontos (Calculado como ${targetScore} / ${questions?.length || 1})
+        PESO POR QUESTÃO: ${questionWeight.toFixed(4)} pontos
+        
+        IMPORTANTE: Use 3 casas decimais para todas as notas intermediárias (ex: 0.125, 0.875). Não arredonde as notas das questões.
 
         GABARITO:
         ${questions?.map(q => `
@@ -198,22 +200,22 @@ export default function GradingView() {
         
         INSTRUÇÕES:
         - Identifique as respostas do aluno para cada questão nas imagens.
-        - Para questões objetivas, dê a nota total (${questionWeight.toFixed(4)}) se estiver correta, ou 0 se errada.
-        - Para questões dissertativas, avalie a qualidade da resposta baseada estritamente no CRITÉRIO DE CORREÇÃO fornecido e dê uma nota proporcional ao peso da questão (${questionWeight.toFixed(4)}).
+        - Para questões objetivas, dê a nota total exata se estiver correta, ou 0 se errada.
+        - Para questões dissertativas, avalie a qualidade da resposta baseada estritamente no CRITÉRIO DE CORREÇÃO fornecido e dê uma nota proporcional ao peso da questão, usando até 3 casas decimais.
         - Forneça um feedback curto e construtivo para cada questão.
-        - Forneça um resumo geral da atividade, destacando pontos fortes e áreas de melhoria.
-        - Referencie as habilidades da BNCC que o aluno demonstrou domínio ou que ainda precisa desenvolver.
-        - O "totalScore" final deve ser a soma das notas de cada questão, não ultrapassando ${targetScore.toFixed(1)}.
+        - Forneça um resumo geral da atividade.
+        - O "totalScore" final deve ser a SOMA EXATA das notas de cada questão (com 3 casas decimais), não ultrapassando ${targetScore.toFixed(1)}.
+        - NÃO ARREDONDE nada no JSON. O sistema fará o arredondamento final.
 
         RETORNE UM JSON NO FORMATO:
         {
           "overallFeedback": "Texto curto relatando de forma geral a atividade",
-          "totalScore": 0.0,
+          "totalScore": 0.000,
           "maxScore": ${targetScore.toFixed(1)},
           "corrections": [
             {
               "questionNumber": 1,
-              "score": 0.0,
+              "score": 0.000,
               "feedback": "Resposta correta e bem fundamentada.",
               "studentAnswer": "Texto da resposta do aluno",
               "skillsMastered": ["EF01MA01"],
@@ -340,7 +342,11 @@ export default function GradingView() {
 
       // 3. Save overall result
       console.log('Salvando resultado geral...');
-      const roundedTotalScore = Number(result.totalScore.toFixed(1));
+      
+      // Calculate totalScore locally to ensure precision before rounding
+      const preciseTotal = result.corrections.reduce((sum: number, c: any) => sum + (c.score || 0), 0);
+      const roundedTotalScore = Math.round(preciseTotal * 10) / 10;
+      
       const { error: resultError } = await supabase.from('assessment_results').insert([{
         student_id: studentId,
         assessment_id: assessmentId,
@@ -395,9 +401,11 @@ export default function GradingView() {
           }
         }
         
+        const roundedAverage = Math.round(average * 10) / 10;
+        
         const { error: updateError } = await supabase
           .from('grades')
-          .update({ [fieldToUpdate]: roundedTotalScore, unit_average: Number(average.toFixed(1)) })
+          .update({ [fieldToUpdate]: roundedTotalScore, unit_average: roundedAverage })
           .eq('id', existingGrade.id);
           
         if (updateError) {
@@ -496,7 +504,7 @@ export default function GradingView() {
       'Questão', // Type could be added if available
       corr.studentAnswer || 'Sem resposta',
       corr.feedback || '',
-      `${corr.score.toFixed(1)} pts`
+      `${corr.score.toFixed(3)} pts`
     ]);
 
     autoTable(doc, {
@@ -735,7 +743,7 @@ export default function GradingView() {
                           "text-sm font-bold",
                           corr.score > 0 ? "text-emerald-600" : "text-red-500"
                         )}>
-                          {corr.score.toFixed(1)} pts
+                          {corr.score.toFixed(3)} pts
                         </span>
                       </div>
                       <p className="text-sm text-slate-600 mb-2 italic">"{corr.studentAnswer}"</p>

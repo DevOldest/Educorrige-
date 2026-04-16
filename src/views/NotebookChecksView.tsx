@@ -168,7 +168,7 @@ export default function NotebookChecksView() {
         const count = checks[studentId];
         // Dynamic score: (count / maxStamps) * 1.5
         const score = maxStamps > 0 ? (count / maxStamps) * 1.5 : 0;
-        const roundedScore = Number(score.toFixed(1));
+        const roundedScore = Math.round(score * 10) / 10;
 
         // Fetch existing grade to update or insert
         const { data: existingGrade } = await supabase
@@ -203,7 +203,7 @@ export default function NotebookChecksView() {
 
           await supabase
             .from('grades')
-            .update({ notebook_score: roundedScore, unit_average: Number(average.toFixed(1)) })
+            .update({ notebook_score: roundedScore, unit_average: Math.round(average * 10) / 10 })
             .eq('id', existingGrade.id);
         } else {
           await supabase

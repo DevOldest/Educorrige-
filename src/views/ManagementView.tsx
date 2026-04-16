@@ -113,26 +113,26 @@ export default function ManagementView() {
     // Case 2: Student was 5 or above. New grade is original + recovery, max 10.
     if (grade.recovery_score !== undefined && grade.recovery_score !== null) {
       if (sum < 5) {
-        return Number(Math.min(5, Math.max(sum, grade.recovery_score)).toFixed(1));
+        return Math.round(Math.min(5, Math.max(sum, grade.recovery_score)) * 10) / 10;
       } else {
-        return Number(Math.min(10, sum + grade.recovery_score).toFixed(1));
+        return Math.round(Math.min(10, sum + grade.recovery_score) * 10) / 10;
       }
     }
     
-    return Number(Math.min(10, sum).toFixed(1));
+    return Math.round(Math.min(10, sum) * 10) / 10;
   };
 
   const handleSaveGrade = async (unitData: any) => {
     const average = calculateUnitAverage(unitData);
     const dataToSave = {
       ...unitData,
-      list1_score: Number(unitData.list1_score?.toFixed(1) || 0),
-      list2_score: Number(unitData.list2_score?.toFixed(1) || 0),
-      list3_score: Number(unitData.list3_score?.toFixed(1) || 0),
-      exam_score: Number(unitData.exam_score?.toFixed(1) || 0),
-      notebook_score: Number(unitData.notebook_score?.toFixed(1) || 0),
-      anki_score: Number(unitData.anki_score?.toFixed(1) || 0),
-      recovery_score: unitData.recovery_score !== null ? Number(unitData.recovery_score.toFixed(1)) : null,
+      list1_score: Math.round((unitData.list1_score || 0) * 10) / 10,
+      list2_score: Math.round((unitData.list2_score || 0) * 10) / 10,
+      list3_score: Math.round((unitData.list3_score || 0) * 10) / 10,
+      exam_score: Math.round((unitData.exam_score || 0) * 10) / 10,
+      notebook_score: Math.round((unitData.notebook_score || 0) * 10) / 10,
+      anki_score: Math.round((unitData.anki_score || 0) * 10) / 10,
+      recovery_score: unitData.recovery_score !== null ? Math.round((unitData.recovery_score || 0) * 10) / 10 : null,
       student_id: selectedStudentId,
       unit_id: selectedUnitId,
       unit_average: average
