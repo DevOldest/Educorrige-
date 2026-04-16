@@ -180,16 +180,21 @@ export default function GradingView() {
       const questionWeight = targetScore / (questions?.length || 1);
 
       const prompt = `
-        Você é um assistente de correção escolar especialista. Analise as imagens da atividade do aluno e compare com o gabarito fornecido.
+        Você é um assistente de correção escolar especialista e extremamente rigoroso. Analise as imagens da atividade do aluno e compare com o GABARITO OFICIAL fornecido abaixo.
         
+        IMPORTANTE: O GABARITO abaixo foi extraído diretamente do arquivo PDF enviado pelo professor. Use-o como única fonte de verdade absoluta.
+
         TIPO DE ATIVIDADE: ${activityType.toUpperCase()}
         VALOR TOTAL DA ATIVIDADE: ${targetScore.toFixed(1)} pontos
         NÚMERO DE QUESTÕES: ${questions?.length || 0}
         PESO POR QUESTÃO: ${questionWeight.toFixed(4)} pontos
         
-        IMPORTANTE: Use 3 casas decimais para todas as notas intermediárias (ex: 0.125, 0.875). Não arredonde as notas das questões.
-
-        GABARITO:
+        REGRAS CRÍTICAS DE CORREÇÃO:
+        1. QUESTÕES OBJETIVAS: A resposta do aluno deve ser EXATAMENTE IGUAL à "Resposta Esperada" do gabarito. Não aceite variações, aproximações ou interpretações para questões de múltipla escolha ou Verdadeiro/Falso. Se não coincidir perfeitamente, a nota é ZERO.
+        2. QUESTÕES DISSERTATIVAS: Avalie com base estrita no "Critério de Correção".
+        3. PRECISÃO: Use 3 casas decimais para todas as notas intermediárias (ex: 0.125, 0.875).
+        
+        GABARITO OFICIAL:
         ${questions?.map(q => `
           Questão ${q.question_number} (${q.question_type}):
           - Resposta Esperada: ${q.expected_answer}
@@ -198,14 +203,10 @@ export default function GradingView() {
           - Pontos Máximos: ${questionWeight.toFixed(4)}
         `).join('\n')}
         
-        INSTRUÇÕES:
+        INSTRUÇÕES DE RESPOSTA:
         - Identifique as respostas do aluno para cada questão nas imagens.
-        - Para questões objetivas, dê a nota total exata se estiver correta, ou 0 se errada.
-        - Para questões dissertativas, avalie a qualidade da resposta baseada estritamente no CRITÉRIO DE CORREÇÃO fornecido e dê uma nota proporcional ao peso da questão, usando até 3 casas decimais.
-        - Forneça um feedback curto e construtivo para cada questão.
-        - Forneça um resumo geral da atividade.
-        - O "totalScore" final deve ser a SOMA EXATA das notas de cada questão (com 3 casas decimais), não ultrapassando ${targetScore.toFixed(1)}.
-        - NÃO ARREDONDE nada no JSON. O sistema fará o arredondamento final.
+        - O "totalScore" final deve ser a SOMA EXATA das notas de cada questão, sem arredondamentos neste momento.
+        - Retorne o texto original do aluno no campo "studentAnswer".
 
         RETORNE UM JSON NO FORMATO:
         {
@@ -216,7 +217,7 @@ export default function GradingView() {
             {
               "questionNumber": 1,
               "score": 0.000,
-              "feedback": "Resposta correta e bem fundamentada.",
+              "feedback": "Feedback justificando a nota baseada no gabarito.",
               "studentAnswer": "Texto da resposta do aluno",
               "skillsMastered": ["EF01MA01"],
               "skillsToImprove": []
@@ -226,7 +227,7 @@ export default function GradingView() {
       `;
 
       const result = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-1.5-flash",
         contents: [{ parts: [{ text: prompt }, ...imageParts] }]
       });
 
@@ -324,7 +325,7 @@ export default function GradingView() {
           if (answer) {
             const { error: aiError } = await supabase.from('ai_corrections').insert([{
               student_answer_id: answer.id,
-              ai_model: 'gemini-3-flash-preview',
+              ai_model: 'gemini-1.5-flash',
               correction_feedback: corr.feedback,
               score_given: corr.score,
               skills_mastered: corr.skillsMastered || [],
