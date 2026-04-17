@@ -175,66 +175,96 @@ export default function GradingView() {
         };
       }));
 
-      // 3. AI Correction Prompt
+      // 3. AI Correction Prompt - STRICT HYBRID LOGIC
+      const discursiveQuestions = questions.filter(q => q.question_type === 'dissertativa' || q.question_type === 'discursive' || q.question_type === 'dissertativa');
+      const objectiveQuestions = questions.filter(q => q.question_type === 'objetiva' || q.question_type === 'objective' || q.question_type === 'multiple_choice');
+
       const targetScore = activityType === 'prova' ? 4.0 : 1.0;
       const questionWeight = targetScore / (questions?.length || 1);
 
       const prompt = `
-        Você é um assistente de correção escolar especialista e extremamente rigoroso. Analise as imagens da atividade do aluno e compare com o GABARITO OFICIAL fornecido abaixo.
+        Você é um assistente de extração e correção escolar. Sua tarefa é analisar as imagens e extrair as respostas do aluno.
         
-        IMPORTANTE: O GABARITO abaixo foi extraído diretamente do arquivo PDF enviado pelo professor. Use-o como única fonte de verdade absoluta.
-
-        TIPO DE ATIVIDADE: ${activityType.toUpperCase()}
-        VALOR TOTAL DA ATIVIDADE: ${targetScore.toFixed(1)} pontos
-        NÚMERO DE QUESTÕES: ${questions?.length || 0}
-        PESO POR QUESTÃO: ${questionWeight.toFixed(4)} pontos
+        VALOR POR QUESTÃO: ${questionWeight.toFixed(4)} pontos
         
-        REGRAS CRÍTICAS DE CORREÇÃO:
-        1. QUESTÕES OBJETIVAS: A resposta do aluno deve ser EXATAMENTE IGUAL à "Resposta Esperada" do gabarito. Não aceite variações, aproximações ou interpretações para questões de múltipla escolha ou Verdadeiro/Falso. Se não coincidir perfeitamente, a nota é ZERO.
-        2. QUESTÕES DISSERTATIVAS: Avalie com base estrita no "Critério de Correção".
-        3. PRECISÃO: Use 3 casas decimais para todas as notas intermediárias (ex: 0.125, 0.875).
+        INSTRUÇÕES RESTRITAS:
+        1. EXTRAÇÃO GERAL: No campo "studentAnswer", transcreva exatamente o que o aluno escreveu/marcou para TODAS as ${questions.length} questões.
+        2. QUESTÕES DISSERTATIVAS: Apenas para as questões listadas abaixo em "DISSERTATIVAS", realize a correção pedagógica baseada no Critério fornecido.
+        3. QUESTÕES OBJETIVAS: Para as questões objetivas, NÃO realize nenhum julgamento. Apenas capture a resposta.
         
-        GABARITO OFICIAL:
-        ${questions?.map(q => `
-          Questão ${q.question_number} (${q.question_type}):
-          - Resposta Esperada: ${q.expected_answer}
-          - Critério de Correção: ${q.criteria || 'Não especificado'}
-          - Habilidades BNCC: ${q.bncc_skills ? q.bncc_skills.join(', ') : 'Não especificado'}
-          - Pontos Máximos: ${questionWeight.toFixed(4)}
+        DISSERTATIVAS PARA CORREÇÃO:
+        ${discursiveQuestions.map(q => `
+          Questão ${q.question_number}:
+          - Critério: ${q.criteria}
+          - Skills: ${q.bncc_skills?.join(', ')}
         `).join('\n')}
-        
-        INSTRUÇÕES DE RESPOSTA:
-        - Identifique as respostas do aluno para cada questão nas imagens.
-        - O "totalScore" final deve ser a SOMA EXATA das notas de cada questão, sem arredondamentos neste momento.
-        - Retorne o texto original do aluno no campo "studentAnswer".
 
+        OBJETIVAS PARA TRANSCRIÇÃO:
+        ${objectiveQuestions.map(q => `Questão ${q.question_number}`).join(', ')}
+        
         RETORNE UM JSON NO FORMATO:
         {
-          "overallFeedback": "Texto curto relatando de forma geral a atividade",
-          "totalScore": 0.000,
-          "maxScore": ${targetScore.toFixed(1)},
+          "overallFeedback": "Resumo geral da correção",
           "corrections": [
             {
               "questionNumber": 1,
-              "score": 0.000,
-              "feedback": "Feedback justificando a nota baseada no gabarito.",
-              "studentAnswer": "Texto da resposta do aluno",
-              "skillsMastered": ["EF01MA01"],
+              "studentAnswer": "Transcrição da resposta",
+              "score": 0.0, (apenas para dissertativas)
+              "feedback": "Justificativa (apenas para dissertativas)",
+              "skillsMastered": [],
               "skillsToImprove": []
             }
           ]
         }
       `;
 
+      let correctionData: any = { overallFeedback: '', corrections: [] };
+
+      // Rule: Only call AI if there's something to process (always true if we need OCR)
       const result = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-2.5-flash",
         contents: [{ parts: [{ text: prompt }, ...imageParts] }]
       });
 
       const responseText = result.text || '';
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      
       if (jsonMatch) {
-        const correctionData = JSON.parse(jsonMatch[0]);
+        correctionData = JSON.parse(jsonMatch[0]);
+        
+        // PART 2: STERN OBJECTIVE GRADING BY CODE
+        correctionData.corrections = questions.map(q => {
+          const aiCorr = correctionData.corrections.find((c: any) => c.questionNumber === q.question_number);
+          const studentAnswer = (aiCorr?.studentAnswer || '').trim().toUpperCase();
+          const expectedAnswer = (q.expected_answer || '').trim().toUpperCase();
+          
+          if (q.question_type === 'objetiva' || q.question_type === 'objective' || q.question_type === 'multiple_choice') {
+            // PART 2 - Rule 6 & 7: Direct comparison and 100% match rule
+            const isCorrect = studentAnswer === expectedAnswer && studentAnswer !== '';
+            return {
+              questionNumber: q.question_number,
+              score: isCorrect ? questionWeight : 0,
+              feedback: isCorrect ? 'RESPOSTA CORRETA (Gabarito Oficial)' : `RESPOSTA INCORRETA. Gabarito: ${expectedAnswer}`,
+              studentAnswer: aiCorr?.studentAnswer || 'Não identificado',
+              skillsMastered: isCorrect ? (q.bncc_skills || []) : [],
+              skillsToImprove: isCorrect ? [] : (q.bncc_skills || [])
+            };
+          } else {
+            // PART 3: Keep AI grading for discursive
+            return {
+              ...aiCorr,
+              questionNumber: q.question_number,
+              score: aiCorr?.score || 0,
+              feedback: aiCorr?.feedback || 'Sem feedback disponível.',
+              studentAnswer: aiCorr?.studentAnswer || 'Não identificado'
+            };
+          }
+        });
+
+        // Recalculate total
+        correctionData.totalScore = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.score || 0), 0);
+        correctionData.maxScore = targetScore;
+        
         setResult(correctionData);
         setGradingContext({
           studentId: selectedStudentId,
@@ -246,7 +276,14 @@ export default function GradingView() {
       }
     } catch (error: any) {
       console.error('Grading error:', error);
-      setError(error.message || 'Erro na correção automática. Verifique as imagens e tente novamente.');
+      // PART 4: SAFETY FALLBACK
+      setError('Falha crítica na correção por IA. Atribuindo nota zero por segurança.');
+      setResult({
+        overallFeedback: "Erro de processamento. A atividade precisa de revisão manual.",
+        totalScore: 0,
+        maxScore: activityType === 'prova' ? 4.0 : 1.0,
+        corrections: []
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -325,7 +362,7 @@ export default function GradingView() {
           if (answer) {
             const { error: aiError } = await supabase.from('ai_corrections').insert([{
               student_answer_id: answer.id,
-              ai_model: 'gemini-1.5-flash',
+              ai_model: 'gemini-2.5-flash',
               correction_feedback: corr.feedback,
               score_given: corr.score,
               skills_mastered: corr.skillsMastered || [],
