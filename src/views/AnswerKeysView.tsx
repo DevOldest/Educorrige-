@@ -13,6 +13,8 @@ export default function AnswerKeysView() {
   const [units, setUnits] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [importMode, setImportMode] = useState<'pdf' | 'latex'>('pdf');
+  const [latexText, setLatexText] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
   const [showEditNameModal, setShowEditNameModal] = useState(false);
   const [editingAssessment, setEditingAssessment] = useState<any>(null);
@@ -270,6 +272,95 @@ export default function AnswerKeysView() {
     accept: { 'application/pdf': ['.pdf'] },
     multiple: false
   } as any);
+
+  const handleProcessLatex = async () => {
+    if (!latexText.trim() || !ai) return;
+
+    setIsProcessing(true);
+    try {
+      const prompt = `
+        Analise o seguinte código LaTeX ou texto de um gabarito escolar e extraia os dados estritamente no formato JSON abaixo.
+        
+        TEXTO DO GABARITO:
+        ${latexText}
+        
+        OBJETIVO:
+        - Identificar o título da atividade.
+        - Listar todas as questões com seu número, tipo (objetiva ou dissertativa) e a resposta correta.
+        
+        REGRAS DE EXTRAÇÃO:
+        1. Se o gabarito indicar apenas uma letra (ex: "1. A"), o tipo é "objetiva".
+        2. Se o gabarito tiver um texto explicativo ou critérios, o tipo é "dissertativa".
+        3. No caso de LaTeX, ignore comandos de formatação e foque no conteúdo da questão e resposta.
+        
+        FORMATO DE RETORNO (JSON PURO):
+        {
+          "title": "NOME DA ATIVIDADE",
+          "questions": [
+            {
+              "question_number": 1,
+              "question_type": "objetiva",
+              "expected_answer": "A",
+              "max_score": 1.0,
+              "criteria": "Critério de correção",
+              "bncc_skills": []
+            }
+          ]
+        }
+
+        Retorne APENAS o JSON, sem explicações.
+      `;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-3.1-pro-preview",
+        contents: {
+          parts: [
+            { text: prompt }
+          ]
+        }
+      });
+
+      const responseText = response.text || '';
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      
+      if (!jsonMatch) {
+        throw new Error("A IA não retornou um formato de dados válido.");
+      }
+
+      const data = JSON.parse(jsonMatch[0]);
+      
+      setFormData({
+        ...formData,
+        title: data.title || formData.title,
+        questions: data.questions.map((q: any) => ({
+          question_number: q.question_number || (formData.questions.length + 1),
+          question_type: q.question_type === 'dissertativa' ? 'dissertativa' : 'objetiva',
+          expected_answer: String(q.expected_answer || ''),
+          max_score: q.max_score || 1,
+          criteria: q.criteria || '',
+          bncc_skills: q.bncc_skills || []
+        }))
+      });
+      
+      setLatexText('');
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: `Gabarito extraído com ${data.questions.length} questões do texto.`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      console.error('Text Processing Error:', err);
+      setModal({
+        isOpen: true,
+        title: 'Erro de Processamento',
+        message: 'Erro ao processar o texto com IA: ' + err.message,
+        type: 'error'
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
 
   const addQuestion = () => {
     setFormData({
@@ -608,6 +699,8 @@ export default function AnswerKeysView() {
               <button onClick={() => {
                 setShowAddModal(false);
                 setEditingAssessment(null);
+                setLatexText('');
+                setImportMode('pdf');
                 setFormData({
                   title: '',
                   unit_id: '',
@@ -619,32 +712,84 @@ export default function AnswerKeysView() {
               </button>
             </div>
 
-            {/* PDF Upload Section */}
-            <div 
-              {...getRootProps()} 
-              className={cn(
-                "mb-8 border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-all cursor-pointer",
-                isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
-              )}
-            >
-              <input {...getInputProps()} />
-              {isProcessing ? (
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="animate-spin text-brand-gold" size={32} />
-                  <p className="text-brand-blue-dark font-medium">A IA está extraindo as questões do PDF...</p>
-                </div>
-              ) : (
-                <>
-                  <div className="p-3 bg-brand-gold/10 rounded-full text-brand-gold">
-                    <FileUp size={24} />
-                  </div>
-                  <div className="text-center">
-                    <p className="font-bold text-brand-blue-dark">Importar Gabarito via PDF</p>
-                    <p className="text-xs text-slate-500">Arraste a prova em PDF para extrair questões e critérios automaticamente</p>
-                  </div>
-                </>
-              )}
+            {/* Import Mode Toggle */}
+            <div className="flex bg-slate-100 p-1 rounded-xl mb-6">
+              <button
+                onClick={() => setImportMode('pdf')}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all",
+                  importMode === 'pdf' ? "bg-white text-brand-blue shadow-sm" : "text-slate-500 hover:text-slate-700"
+                )}
+              >
+                <FileUp size={16} />
+                Via PDF (OCR)
+              </button>
+              <button
+                onClick={() => setImportMode('latex')}
+                className={cn(
+                  "flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all",
+                  importMode === 'latex' ? "bg-white text-brand-blue shadow-sm" : "text-slate-500 hover:text-slate-700"
+                )}
+              >
+                <FileText size={16} />
+                Via Texto / LaTeX
+              </button>
             </div>
+
+            {/* Import Content */}
+            {importMode === 'pdf' ? (
+              <div 
+                {...getRootProps()} 
+                className={cn(
+                  "mb-8 border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-all cursor-pointer",
+                  isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
+                )}
+              >
+                <input {...getInputProps()} />
+                {isProcessing ? (
+                  <div className="flex flex-col items-center gap-3">
+                    <Loader2 className="animate-spin text-brand-gold" size={32} />
+                    <p className="text-brand-blue-dark font-medium">A IA está extraindo as questões do PDF...</p>
+                  </div>
+                ) : (
+                  <>
+                    <div className="p-3 bg-brand-gold/10 rounded-full text-brand-gold">
+                      <FileUp size={24} />
+                    </div>
+                    <div className="text-center">
+                      <p className="font-bold text-brand-blue-dark">Importar Gabarito via PDF</p>
+                      <p className="text-xs text-slate-500">Arraste a prova em PDF para extrair questões e critérios automaticamente</p>
+                    </div>
+                  </>
+                )}
+              </div>
+            ) : (
+              <div className="mb-8 space-y-4">
+                <div className="bg-brand-blue/5 p-4 rounded-2xl border border-brand-blue/10">
+                  <div className="flex items-center gap-2 text-brand-blue font-bold text-sm mb-2">
+                    <FileText size={18} />
+                    Modo Texto / LaTeX Direto
+                  </div>
+                  <p className="text-xs text-brand-blue/70 mb-4">
+                    Cole o código LaTeX ou o texto corrido do gabarito. A IA identificará o título e as questões instantaneamente.
+                  </p>
+                  <textarea
+                    value={latexText}
+                    onChange={(e) => setLatexText(e.target.value)}
+                    placeholder="Cole aqui o conteúdo LaTeX ou texto do gabarito..."
+                    className="w-full h-48 p-4 bg-white border border-slate-200 rounded-xl text-xs font-mono focus:ring-2 focus:ring-brand-blue resize-none"
+                  />
+                </div>
+                <button
+                  onClick={handleProcessLatex}
+                  disabled={isProcessing || !latexText.trim()}
+                  className="w-full flex items-center justify-center gap-2 p-4 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all disabled:opacity-50"
+                >
+                  {isProcessing ? <Loader2 size={20} className="animate-spin" /> : <FileText size={20} />}
+                  {isProcessing ? 'Processando...' : 'Extrair Gabarito do Texto'}
+                </button>
+              </div>
+            )}
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
               <div className="space-y-2">
