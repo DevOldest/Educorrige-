@@ -14,7 +14,7 @@ export default function AnswerKeysView() {
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
-  const [showEditModal, setShowEditModal] = useState(false);
+  const [showEditNameModal, setShowEditNameModal] = useState(false);
   const [editingAssessment, setEditingAssessment] = useState<any>(null);
   const [newAssessmentName, setNewAssessmentName] = useState('');
 
@@ -165,22 +165,33 @@ export default function AnswerKeysView() {
         const base64 = (reader.result as string).split(',')[1];
         
         const prompt = `
-          Analise este PDF de uma prova ou atividade escolar e extraia as questões, seus critérios de correção e as habilidades da BNCC relacionadas.
-          Retorne um JSON no formato:
+          Analise este PDF de um gabarito escolar e extraia os dados estritamente no formato JSON abaixo.
+          
+          OBJETIVO:
+          - Identificar o título da atividade.
+          - Listar todas as questões com seu número, tipo (objetiva ou dissertativa) e a resposta correta.
+          
+          REGRAS DE EXTRAÇÃO:
+          1. Se o gabarito indicar apenas uma letra (ex: "1. A"), o tipo é "objetiva".
+          2. Se o gabarito tiver um texto explicativo ou critérios, o tipo é "dissertativa".
+          3. Remova carácteres especiais e limpe as respostas.
+          
+          FORMATO DE RETORNO (JSON PURO):
           {
-            "title": "Título Sugerido da Atividade",
+            "title": "NOME DA ATIVIDADE",
             "questions": [
               {
                 "question_number": 1,
-                "question_type": "objetiva" ou "dissertativa",
-                "expected_answer": "Resposta correta ou palavras-chave",
+                "question_type": "objetiva",
+                "expected_answer": "A",
                 "max_score": 1.0,
-                "criteria": "Critério detalhado de correção",
-                "bncc_skills": ["EF01MA01", "EF01MA02"]
-              },
-              ...
+                "criteria": "Critério de correção",
+                "bncc_skills": []
+              }
             ]
           }
+
+          Retorne APENAS o JSON, sem explicações.
         `;
 
         try {
@@ -193,14 +204,15 @@ export default function AnswerKeysView() {
                   { inlineData: { mimeType: "application/pdf", data: base64 } }
                 ]
               }
-            ],
-            config: {
-              responseMimeType: "application/json"
-            }
+            ]
           });
 
           const responseText = result.text || '';
-          const data = JSON.parse(responseText);
+          // Robust JSON extraction
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (!jsonMatch) throw new Error("JSON não encontrado na resposta da IA");
+          
+          const data = JSON.parse(jsonMatch[0]);
           
           setFormData({
             ...formData,
@@ -257,10 +269,10 @@ export default function AnswerKeysView() {
     setFormData({ ...formData, questions: newQuestions });
   };
 
-  const handleEdit = (assessment: any) => {
+  const handleEditName = (assessment: any) => {
     setEditingAssessment(assessment);
     setNewAssessmentName(assessment.title);
-    setShowEditModal(true);
+    setShowEditNameModal(true);
   };
 
   const handleUpdateName = async () => {
@@ -299,6 +311,38 @@ export default function AnswerKeysView() {
     }
   };
 
+  const handleEditClick = async (assessment: any) => {
+    setIsLoading(true);
+    try {
+      const { data: questions, error } = await supabase
+        .from('questions')
+        .select('*')
+        .eq('assessment_id', assessment.id)
+        .order('question_number');
+      
+      if (error) throw error;
+
+      setEditingAssessment(assessment);
+      setFormData({
+        title: assessment.title,
+        unit_id: assessment.unit_id,
+        type: assessment.type,
+        questions: questions || []
+      });
+      setShowAddModal(true);
+    } catch (error) {
+      console.error('Error fetching questions for edit:', error);
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao carregar dados para edição.',
+        type: 'error'
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!formData.title || !formData.unit_id) {
       setModal({
@@ -310,70 +354,131 @@ export default function AnswerKeysView() {
       return;
     }
 
+    setIsLoading(true);
     const { data: { user } } = await supabase.auth.getUser();
 
-    const { data: assessment, error: assessmentError } = await supabase
-      .from('assessments')
-      .insert([{
-        title: formData.title,
-        unit_id: formData.unit_id,
-        type: formData.type,
-        total_questions: formData.questions.length,
-        user_id: user?.id
-      }])
-      .select()
-      .single();
+    try {
+      let assessmentId = editingAssessment?.id;
 
-    if (assessmentError) {
-      console.error(assessmentError);
+      if (editingAssessment) {
+        // Update existing assessment
+        const { error: assessmentError } = await supabase
+          .from('assessments')
+          .update({
+            title: formData.title,
+            unit_id: formData.unit_id,
+            type: formData.type,
+            total_questions: formData.questions.length
+          })
+          .eq('id', editingAssessment.id);
+
+        if (assessmentError) throw assessmentError;
+
+        // For questions, we delete and re-insert to ensure sync, 
+        // BUT the user wants to KEEP corrections. 
+        // If we delete questions, student_answers (which point to question_id) might break if there's a cascade.
+        // Let's check existing questions and only update/insert/delete as needed to preserve IDs.
+        
+        const { data: existingQuestions } = await supabase
+          .from('questions')
+          .select('id, question_number')
+          .eq('assessment_id', editingAssessment.id);
+
+        const existingMap = new Map((existingQuestions || []).map(q => [q.question_number, q.id]));
+
+        for (const q of formData.questions) {
+          const questionId = existingMap.get(q.question_number);
+          if (questionId) {
+            // Update
+            await supabase.from('questions').update({
+              question_type: q.question_type,
+              expected_answer: q.expected_answer,
+              max_score: q.max_score,
+              criteria: q.criteria,
+              bncc_skills: q.bncc_skills
+            }).eq('id', questionId);
+            existingMap.delete(q.question_number);
+          } else {
+            // Insert
+            await supabase.from('questions').insert({
+              assessment_id: editingAssessment.id,
+              question_number: q.question_number,
+              question_type: q.question_type,
+              expected_answer: q.expected_answer,
+              max_score: q.max_score,
+              criteria: q.criteria,
+              bncc_skills: q.bncc_skills
+            });
+          }
+        }
+
+        // Delete removed questions
+        if (existingMap.size > 0) {
+          const idsToDelete = Array.from(existingMap.values());
+          await supabase.from('questions').delete().in('id', idsToDelete);
+        }
+
+      } else {
+        // Create new
+        const { data: assessment, error: assessmentError } = await supabase
+          .from('assessments')
+          .insert([{
+            title: formData.title,
+            unit_id: formData.unit_id,
+            type: formData.type,
+            total_questions: formData.questions.length,
+            user_id: user?.id
+          }])
+          .select()
+          .single();
+
+        if (assessmentError) throw assessmentError;
+        assessmentId = assessment.id;
+
+        const questionsToInsert = formData.questions.map(q => ({
+          assessment_id: assessmentId,
+          question_number: q.question_number,
+          question_type: q.question_type,
+          expected_answer: q.expected_answer,
+          max_score: q.max_score,
+          criteria: q.criteria,
+          bncc_skills: q.bncc_skills
+        }));
+
+        const { error: questionsError } = await supabase
+          .from('questions')
+          .insert(questionsToInsert);
+
+        if (questionsError) throw questionsError;
+      }
+
+      setShowAddModal(false);
+      setEditingAssessment(null);
+      fetchData();
+      setFormData({
+        title: '',
+        unit_id: '',
+        type: 'prova',
+        questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }]
+      });
+
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: editingAssessment ? 'Gabarito atualizado com sucesso!' : 'Gabarito criado com sucesso!',
+        type: 'success'
+      });
+    } catch (error: any) {
+      console.error('Error saving assessment:', error);
       setModal({
         isOpen: true,
         title: 'Erro',
-        message: 'Erro ao salvar atividade.',
+        message: 'Erro ao salvar atividade: ' + error.message,
         type: 'error'
       });
-      return;
+    } finally {
+      setIsLoading(false);
     }
-
-    const questionsToInsert = formData.questions.map(q => ({
-      assessment_id: assessment.id,
-      question_number: q.question_number,
-      question_type: q.question_type,
-      expected_answer: q.expected_answer,
-      max_score: q.max_score,
-      criteria: q.criteria,
-      bncc_skills: q.bncc_skills
-    }));
-
-    const { error: questionsError } = await supabase
-      .from('questions')
-      .insert(questionsToInsert);
-
-    if (questionsError) {
-      console.error(questionsError);
-      setModal({
-        isOpen: true,
-        title: 'Erro',
-        message: 'Erro ao salvar questões.',
-        type: 'error'
-      });
-      return;
-    }
-
-    setShowAddModal(false);
-    fetchData();
-    setFormData({
-      title: '',
-      unit_id: '',
-      type: 'prova',
-      questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }]
-    });
-    setModal({
-      isOpen: true,
-      title: 'Sucesso',
-      message: 'Gabarito salvo com sucesso!',
-      type: 'success'
-    });
   };
 
   return (
@@ -435,20 +540,29 @@ export default function AnswerKeysView() {
                 </td>
                 <td className="px-6 py-4 text-sm text-slate-600">{assessment.total_questions}</td>
                 <td className="px-6 py-4">
-                  <div className="flex gap-2">
-                    <button 
-                      onClick={() => handleEdit(assessment)}
-                      className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue"
-                    >
-                      <Edit2 size={16} />
-                    </button>
-                    <button 
-                      onClick={() => handleDeleteAssessment(assessment.id, assessment.title)}
-                      className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={() => handleEditClick(assessment)}
+                        className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue"
+                        title="Editar Gabarito"
+                      >
+                        <Edit2 size={16} />
+                      </button>
+                      <button 
+                        onClick={() => handleEditName(assessment)}
+                        className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-gold"
+                        title="Mudar Nome"
+                      >
+                        <FileText size={16} />
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteAssessment(assessment.id, assessment.title)}
+                        className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"
+                        title="Excluir"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                 </td>
               </tr>
             ))}
@@ -465,8 +579,19 @@ export default function AnswerKeysView() {
             className="bg-white rounded-3xl p-8 max-w-5xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
           >
             <div className="flex justify-between items-center mb-8">
-              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Novo Gabarito</h3>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-brand-black">
+              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">
+                {editingAssessment ? 'Editar Gabarito' : 'Novo Gabarito'}
+              </h3>
+              <button onClick={() => {
+                setShowAddModal(false);
+                setEditingAssessment(null);
+                setFormData({
+                  title: '',
+                  unit_id: '',
+                  type: 'prova',
+                  questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }]
+                });
+              }} className="text-slate-400 hover:text-brand-black">
                 <X size={24} />
               </button>
             </div>
@@ -638,7 +763,7 @@ export default function AnswerKeysView() {
         </div>
       )}
       {/* Edit Name Modal */}
-      {showEditModal && (
+      {showEditNameModal && (
         <div className="fixed inset-0 bg-brand-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
@@ -659,7 +784,7 @@ export default function AnswerKeysView() {
               </div>
               <div className="flex gap-4 pt-4">
                 <button 
-                  onClick={() => setShowEditModal(false)}
+                  onClick={() => setShowEditNameModal(false)}
                   className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
                 >
                   Cancelar
