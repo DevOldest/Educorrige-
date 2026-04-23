@@ -237,35 +237,34 @@ export default function GradingView() {
           const aiCorr = correctionData.corrections.find((c: any) => c.questionNumber === q.question_number);
           
           // Helper to normalize answers (removes noise like quotes, dots, extra spaces)
-          const normalize = (val: string, isObjective: boolean = false, isSingleCharExpected: boolean = false) => {
+          const normalize = (val: string, isObjective: boolean = false) => {
             if (!val) return '';
-            let v = val.trim().toUpperCase();
+            let v = val.trim().toUpperCase()
+              .replace(/['"().]/g, '') // Remove punctuation/quotes
+              .replace(/^(ALTERNATIVA|OPCAO|RESPOSTA|LETRA|QUESTAO|OPCÃO)\s*/i, '') // Remove common prefixes
+              .trim();
             
             if (isObjective) {
-              // Priority 1: If we expect a single letter/digit (like A, B, C, 1, 2)
-              // and the student wrote something like "(A)", "A.", "'a'", take just that character.
-              if (isSingleCharExpected) {
-                const match = v.match(/[A-Z0-9]/);
-                if (match) return match[0];
+              // If it's a multiple choice/objective type, often we just care about the identifies (A, B, C, D, E)
+              // If the result starts with a clear letter identifier (A-E) as the first character, use just that.
+              const firstChar = v.charAt(0);
+              if (v.length > 0 && /^[A-E0-9]$/.test(firstChar)) {
+                // Special case: if student wrote "B" and gabarito is "B4E4" or "B - ALGUMA COISA", they match on "B"
+                return firstChar;
               }
               
-              // Priority 2: Clear all punctuation/quotes but keep the alphanumeric content (for "SIM", "VERDADEIRO", etc)
-              return v.replace(/[^A-Z0-9]/g, '');
+              return v.replace(/[^A-Z0-9]/g, ''); // Fallback: clear everything but alphanumeric
             }
             
-            return v.replace(/['"().]/g, '').trim();
+            return v;
           };
 
           const aiRaw = aiCorr?.studentAnswer || '';
           
-          // Check if the expected answer is just a single character
-          const cleanExpectedRaw = (q.expected_answer || '').trim().toUpperCase();
-          const isSingleCharExpected = cleanExpectedRaw.length === 1 && /[A-Z0-9]/.test(cleanExpectedRaw);
+          const studentAnswer = normalize(aiRaw, true);
+          const expectedAnswer = normalize(q.expected_answer || '', true);
           
-          const studentAnswer = normalize(aiRaw, true, isSingleCharExpected);
-          const expectedAnswer = normalize(q.expected_answer || '', true, isSingleCharExpected);
-          
-          console.log(`Questão ${q.question_number} - Bruto IA: "${aiRaw}" | Normalizado Aluno: "${studentAnswer}" | Normalizado Gabarito: "${expectedAnswer}"`);
+          console.log(`Questão ${q.question_number} - Bruto Aluno: "${aiRaw}" | Bruto Gabarito: "${q.expected_answer}" | Normalizado Aluno: "${studentAnswer}" | Normalizado Gabarito: "${expectedAnswer}"`);
 
           if (q.question_type === 'objetiva' || q.question_type === 'objective' || q.question_type === 'multiple_choice') {
             const isCorrect = studentAnswer === expectedAnswer && studentAnswer !== '';
