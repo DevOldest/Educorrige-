@@ -222,7 +222,7 @@ export default function GradingView() {
 
       // Rule: Only call AI if there's something to process (always true if we need OCR)
       const result = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3-flash-preview",
         contents: [{ parts: [{ text: prompt }, ...imageParts] }]
       });
 
@@ -275,11 +275,11 @@ export default function GradingView() {
         setHasSaved(false);
       }
     } catch (error: any) {
-      console.error('Grading error:', error);
+      console.error('Grading error details:', error);
       // PART 4: SAFETY FALLBACK
-      setError('Falha crítica na correção por IA. Atribuindo nota zero por segurança.');
+      setError(`Falha na correção por IA (${error.message || 'Erro desconhecido'}). Atribuindo nota zero por segurança.`);
       setResult({
-        overallFeedback: "Erro de processamento. A atividade precisa de revisão manual.",
+        overallFeedback: `Erro técnico no processamento da IA: ${error.message || 'Falha de conexão'}. A atividade precisa de revisão manual.`,
         totalScore: 0,
         maxScore: activityType === 'prova' ? 4.0 : 1.0,
         corrections: []
@@ -362,7 +362,7 @@ export default function GradingView() {
           if (answer) {
             const { error: aiError } = await supabase.from('ai_corrections').insert([{
               student_answer_id: answer.id,
-              ai_model: 'gemini-2.5-flash',
+              ai_model: 'gemini-3-flash-preview',
               correction_feedback: corr.feedback,
               score_given: corr.score,
               skills_mastered: corr.skillsMastered || [],
