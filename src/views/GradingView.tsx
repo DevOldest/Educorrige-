@@ -188,9 +188,9 @@ export default function GradingView() {
         VALOR POR QUESTÃO: ${questionWeight.toFixed(4)} pontos
         
         INSTRUÇÕES RESTRITAS:
-        1. EXTRAÇÃO GERAL: No campo "studentAnswer", transcreva exatamente o que o aluno escreveu/marcou para TODAS as ${questions.length} questões.
+        1. EXTRAÇÃO GERAL: No campo "studentAnswer", transcreva o que o aluno escreveu/marcou para TODAS as ${questions.length} questões.
         2. QUESTÕES DISSERTATIVAS: Apenas para as questões listadas abaixo em "DISSERTATIVAS", realize a correção pedagógica baseada no Critério fornecido.
-        3. QUESTÕES OBJETIVAS: Para as questões objetivas, NÃO realize nenhum julgamento. Apenas capture a resposta.
+        3. QUESTÕES OBJETIVAS: Para as questões objetivas, extraia APENAS o símbolo da alternativa correta (ex: A, B, Verdadeiro, Sim). Remova aspas, pontos ou parênteses que não façam parte da resposta em si. Seja direto na extração.
         
         DISSERTATIVAS PARA CORREÇÃO:
         ${discursiveQuestions.map(q => `
@@ -235,17 +235,46 @@ export default function GradingView() {
         // PART 2: STERN OBJECTIVE GRADING BY CODE
         correctionData.corrections = questions.map(q => {
           const aiCorr = correctionData.corrections.find((c: any) => c.questionNumber === q.question_number);
-          const studentAnswer = (aiCorr?.studentAnswer || '').trim().toUpperCase();
-          const expectedAnswer = (q.expected_answer || '').trim().toUpperCase();
           
+          // Helper to normalize answers (removes noise like quotes, dots, extra spaces)
+          const normalize = (val: string, isObjective: boolean = false, isSingleCharExpected: boolean = false) => {
+            if (!val) return '';
+            let v = val.trim().toUpperCase();
+            
+            if (isObjective) {
+              // Priority 1: If we expect a single letter/digit (like A, B, C, 1, 2)
+              // and the student wrote something like "(A)", "A.", "'a'", take just that character.
+              if (isSingleCharExpected) {
+                const match = v.match(/[A-Z0-9]/);
+                if (match) return match[0];
+              }
+              
+              // Priority 2: Clear all punctuation/quotes but keep the alphanumeric content (for "SIM", "VERDADEIRO", etc)
+              return v.replace(/[^A-Z0-9]/g, '');
+            }
+            
+            return v.replace(/['"().]/g, '').trim();
+          };
+
+          const aiRaw = aiCorr?.studentAnswer || '';
+          
+          // Check if the expected answer is just a single character
+          const cleanExpectedRaw = (q.expected_answer || '').trim().toUpperCase();
+          const isSingleCharExpected = cleanExpectedRaw.length === 1 && /[A-Z0-9]/.test(cleanExpectedRaw);
+          
+          const studentAnswer = normalize(aiRaw, true, isSingleCharExpected);
+          const expectedAnswer = normalize(q.expected_answer || '', true, isSingleCharExpected);
+          
+          console.log(`Questão ${q.question_number} - Bruto IA: "${aiRaw}" | Normalizado Aluno: "${studentAnswer}" | Normalizado Gabarito: "${expectedAnswer}"`);
+
           if (q.question_type === 'objetiva' || q.question_type === 'objective' || q.question_type === 'multiple_choice') {
-            // PART 2 - Rule 6 & 7: Direct comparison and 100% match rule
             const isCorrect = studentAnswer === expectedAnswer && studentAnswer !== '';
+            
             return {
               questionNumber: q.question_number,
               score: isCorrect ? questionWeight : 0,
-              feedback: isCorrect ? 'RESPOSTA CORRETA (Gabarito Oficial)' : `RESPOSTA INCORRETA. Gabarito: ${expectedAnswer}`,
-              studentAnswer: aiCorr?.studentAnswer || 'Não identificado',
+              feedback: isCorrect ? 'RESPOSTA CORRETA (Gabarito Oficial)' : `RESPOSTA INCORRETA. Lido: "${studentAnswer}". Esperado: "${expectedAnswer}"`,
+              studentAnswer: aiRaw || 'Não identificado',
               skillsMastered: isCorrect ? (q.bncc_skills || []) : [],
               skillsToImprove: isCorrect ? [] : (q.bncc_skills || [])
             };
