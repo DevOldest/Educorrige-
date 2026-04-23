@@ -306,22 +306,21 @@ export default function ClassesView() {
         `;
 
         try {
-          const result = await ai.models.generateContent({
+          if (!ai) throw new Error("IA não configurada.");
+          const response = await ai.models.generateContent({
             model: "gemini-3.1-pro-preview",
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  { inlineData: { mimeType: "application/pdf", data: base64 } }
-                ]
-              }
-            ],
+            contents: {
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: "application/pdf", data: base64 } }
+              ]
+            },
             config: {
               responseMimeType: "application/json"
             }
           });
 
-          const responseText = result.text || '';
+          const responseText = response.text || '';
           const data = JSON.parse(responseText);
           
           // Add roll numbers based on order

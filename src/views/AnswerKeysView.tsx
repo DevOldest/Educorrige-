@@ -195,34 +195,57 @@ export default function AnswerKeysView() {
         `;
 
         try {
-          const result = await ai.models.generateContent({
+          if (!ai) throw new Error("IA não configurada.");
+          const response = await ai.models.generateContent({
             model: "gemini-3.1-pro-preview",
-            contents: [
-              {
-                parts: [
-                  { text: prompt },
-                  { inlineData: { mimeType: "application/pdf", data: base64 } }
-                ]
-              }
-            ]
+            contents: {
+              parts: [
+                { text: prompt },
+                { inlineData: { mimeType: "application/pdf", data: base64 } }
+              ]
+            }
           });
 
-          const responseText = result.text || '';
+          const responseText = response.text || '';
+          console.log('Raw AI Response for Answer Key:', responseText);
+          
           // Robust JSON extraction
           const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-          if (!jsonMatch) throw new Error("JSON não encontrado na resposta da IA");
+          if (!jsonMatch) {
+            console.error('No JSON match found in:', responseText);
+            throw new Error("A IA não retornou um formato de dados válido. Tente enviar o gabarito novamente.");
+          }
           
-          const data = JSON.parse(jsonMatch[0]);
-          
-          setFormData({
-            ...formData,
-            title: data.title || formData.title,
-            questions: data.questions.map((q: any) => ({
-              ...q,
-              max_score: q.max_score || 1,
-              bncc_skills: q.bncc_skills || []
-            }))
-          });
+          try {
+            const data = JSON.parse(jsonMatch[0]);
+            
+            if (!data.questions || !Array.isArray(data.questions)) {
+              throw new Error("O gabarito extraído está incompleto.");
+            }
+
+            setFormData({
+              ...formData,
+              title: data.title || formData.title,
+              questions: data.questions.map((q: any) => ({
+                question_number: q.question_number || (formData.questions.length + 1),
+                question_type: q.question_type === 'dissertativa' ? 'dissertativa' : 'objetiva',
+                expected_answer: String(q.expected_answer || ''),
+                max_score: q.max_score || 1,
+                criteria: q.criteria || '',
+                bncc_skills: q.bncc_skills || []
+              }))
+            });
+            
+            setModal({
+              isOpen: true,
+              title: 'Sucesso',
+              message: `Gabarito extraído com ${data.questions.length} questões.`,
+              type: 'success'
+            });
+          } catch (parseError: any) {
+            console.error('JSON Parse Error:', parseError);
+            throw new Error(`Erro ao ler os dados do gabarito: ${parseError.message}`);
+          }
         } catch (err) {
           console.error('AI Processing Error:', err);
           setModal({
@@ -290,7 +313,7 @@ export default function AnswerKeysView() {
       setAssessments(assessments.map(a => 
         a.id === editingAssessment.id ? { ...a, title: newAssessmentName.trim() } : a
       ));
-      setShowEditModal(false);
+      setShowEditNameModal(false);
       setEditingAssessment(null);
       setModal({
         isOpen: true,

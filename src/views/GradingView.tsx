@@ -221,12 +221,18 @@ export default function GradingView() {
       let correctionData: any = { overallFeedback: '', corrections: [] };
 
       // Rule: Only call AI if there's something to process (always true if we need OCR)
-      const result = await ai.models.generateContent({
+      if (!ai) throw new Error("IA não configurada.");
+      const response = await ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: [{ parts: [{ text: prompt }, ...imageParts] }]
+        contents: {
+          parts: [
+            { text: prompt },
+            ...imageParts
+          ]
+        }
       });
 
-      const responseText = result.text || '';
+      const responseText = response.text || '';
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       
       if (jsonMatch) {
