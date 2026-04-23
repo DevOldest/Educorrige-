@@ -41,8 +41,8 @@ export default function SystemTestsView() {
 
   const runApiTest = async () => {
     setTests(prev => ({ ...prev, api: { status: 'running', message: 'Verificando chave...' } }));
-    const key = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!key || key === 'undefined') {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key || key === 'undefined' || key === 'null' || key === '') {
       setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Chave API (GEMINI) não encontrada no ambiente.' } }));
       return;
     }
