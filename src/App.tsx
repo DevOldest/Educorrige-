@@ -30,9 +30,10 @@ import GradingView from './views/GradingView';
 import ReportsView from './views/ReportsView';
 import ManagementView from './views/ManagementView';
 import NotebookChecksView from './views/NotebookChecksView';
+import SystemTestsView from './views/SystemTestsView';
 import Login from './components/Login';
 
-type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'reports' | 'management' | 'notebook-checks';
+type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'reports' | 'management' | 'notebook-checks' | 'tests';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('dashboard');
@@ -96,6 +97,7 @@ export default function App() {
     { id: 'notebook-checks', label: 'Vistos', icon: BookOpen },
     { id: 'reports', label: 'Relatórios', icon: BarChart3 },
     { id: 'management', label: 'Gestão', icon: GraduationCap },
+    { id: 'tests', label: 'Testes', icon: AlertTriangle },
   ];
 
   return (
@@ -243,6 +245,7 @@ export default function App() {
               {activeView === 'reports' && <ReportsView />}
               {activeView === 'management' && <ManagementView />}
               {activeView === 'notebook-checks' && <NotebookChecksView />}
+              {activeView === 'tests' && <SystemTestsView />}
             </motion.div>
           </AnimatePresence>
         </div>
