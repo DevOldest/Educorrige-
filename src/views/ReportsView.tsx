@@ -15,6 +15,8 @@ export default function ReportsView() {
   const [isFetchingDetails, setIsFetchingDetails] = useState(false);
   const [isDeleting, setIsDeleting] = useState<string | null>(null);
   const [isBulkDownloading, setIsBulkDownloading] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   
   const [filters, setFilters] = useState({
     search: '',
@@ -227,65 +229,13 @@ export default function ReportsView() {
       onConfirm: async () => {
         setIsDeleting(result.id);
         try {
-          // 1. Delete AI Corrections and student_answers
-          const { data: answers } = await supabase
-            .from('student_answers')
-            .select('id')
-            .eq('assessment_id', result.assessment_id)
-            .eq('student_id', result.student_id);
-          
-          const answerIds = answers?.map(a => a.id) || [];
-          if (answerIds.length > 0) {
-            await supabase.from('ai_corrections').delete().in('student_answer_id', answerIds);
-          }
-
-          await supabase.from('student_answers').delete().eq('assessment_id', result.assessment_id).eq('student_id', result.student_id);
-          
-          // 2. Delete assessment_result
-          await supabase.from('assessment_results').delete().eq('id', result.id);
-
-          // 3. Update grade in Management
-          const { data: assessment } = await supabase.from('assessments').select('type, unit_id').eq('id', result.assessment_id).single();
-          
-          if (assessment) {
-            const { data: grade } = await supabase
-              .from('grades')
-              .select('*')
-              .eq('student_id', result.student_id)
-              .eq('unit_id', assessment.unit_id)
-              .maybeSingle();
-
-            if (grade) {
-              const fieldToUpdate = 
-                assessment.type === 'prova' ? 'exam_score' : 
-                assessment.type === 'lista2' ? 'list2_score' : 
-                assessment.type === 'lista3' ? 'list3_score' : 
-                'list1_score';
-                
-              const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
-              
-              // Recalculate average
-              const sum = (updatedGrade.list1_score || 0) + 
-                          (updatedGrade.list2_score || 0) + 
-                          (updatedGrade.list3_score || 0) + 
-                          (updatedGrade.exam_score || 0) + 
-                          (updatedGrade.notebook_score || 0) + 
-                          (updatedGrade.anki_score || 0);
-              
-              let average = Math.min(10, sum);
-              if (updatedGrade.recovery_score !== null) {
-                if (sum < 5) {
-                  average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
-                } else {
-                  average = Math.min(10, sum + updatedGrade.recovery_score);
-                }
-              }
-
-              await supabase.from('grades').update({ [fieldToUpdate]: 0, unit_average: Number(average.toFixed(1)) }).eq('id', grade.id);
-            }
-          }
-
+          await performDeleteResults([result]);
           setResults(results.filter(r => r.id !== result.id));
+          setSelectedIds(prev => {
+            const next = new Set(prev);
+            next.delete(result.id);
+            return next;
+          });
           setModal({
             isOpen: true,
             title: 'Sucesso',
@@ -304,6 +254,126 @@ export default function ReportsView() {
           setIsDeleting(null);
         }
       }
+    });
+  };
+
+  const performDeleteResults = async (resultsToDelete: any[]) => {
+    for (const result of resultsToDelete) {
+      // 1. Delete AI Corrections and student_answers
+      const { data: answers } = await supabase!
+        .from('student_answers')
+        .select('id')
+        .eq('assessment_id', result.assessment_id)
+        .eq('student_id', result.student_id);
+      
+      const answerIds = answers?.map(a => a.id) || [];
+      if (answerIds.length > 0) {
+        await supabase!.from('ai_corrections').delete().in('student_answer_id', answerIds);
+      }
+
+      await supabase!.from('student_answers').delete().eq('assessment_id', result.assessment_id).eq('student_id', result.student_id);
+      
+      // 2. Delete assessment_result
+      await supabase!.from('assessment_results').delete().eq('id', result.id);
+
+      // 3. Update grade in Management
+      const { data: assessment } = await supabase!.from('assessments').select('type, unit_id').eq('id', result.assessment_id).single();
+      
+      if (assessment) {
+        const { data: grade } = await supabase!
+          .from('grades')
+          .select('*')
+          .eq('student_id', result.student_id)
+          .eq('unit_id', assessment.unit_id)
+          .maybeSingle();
+
+        if (grade) {
+          const fieldToUpdate = 
+            assessment.type === 'prova' ? 'exam_score' : 
+            assessment.type === 'lista2' ? 'list2_score' : 
+            assessment.type === 'lista3' ? 'list3_score' : 
+            'list1_score';
+            
+          const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
+          
+          // Recalculate average
+          const sum = (updatedGrade.list1_score || 0) + 
+                      (updatedGrade.list2_score || 0) + 
+                      (updatedGrade.list3_score || 0) + 
+                      (updatedGrade.exam_score || 0) + 
+                      (updatedGrade.notebook_score || 0) + 
+                      (updatedGrade.anki_score || 0);
+          
+          let average = Math.min(10, sum);
+          if (updatedGrade.recovery_score !== null) {
+            if (sum < 5) {
+              average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
+            } else {
+              average = Math.min(10, sum + updatedGrade.recovery_score);
+            }
+          }
+
+          await supabase!.from('grades').update({ [fieldToUpdate]: 0, unit_average: Number(average.toFixed(1)) }).eq('id', grade.id);
+        }
+      }
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+
+    setModal({
+      isOpen: true,
+      title: 'Confirmar Exclusão em Massa',
+      message: `Deseja realmente excluir ${selectedIds.size} correções selecionadas? Esta ação não pode ser desfeita e todas as notas serão zeradas.`,
+      type: 'confirm',
+      onConfirm: async () => {
+        setIsBulkDeleting(true);
+        try {
+          const resultsToDelete = results.filter(r => selectedIds.has(r.id));
+          await performDeleteResults(resultsToDelete);
+          
+          setResults(results.filter(r => !selectedIds.has(r.id)));
+          setSelectedIds(new Set());
+          
+          setModal({
+            isOpen: true,
+            title: 'Sucesso',
+            message: `${resultsToDelete.length} correções foram excluídas e as notas foram resetadas.`,
+            type: 'success'
+          });
+        } catch (error) {
+          console.error('Bulk delete error:', error);
+          setModal({
+            isOpen: true,
+            title: 'Erro',
+            message: 'Ocorreu um erro durante a exclusão em massa.',
+            type: 'error'
+          });
+        } finally {
+          setIsBulkDeleting(false);
+        }
+      }
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === results.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(results.map(r => r.id)));
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
     });
   };
 
@@ -362,20 +432,47 @@ export default function ReportsView() {
         </div>
         
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-50">
-          <p className="text-xs text-slate-400">
-            {results.length > 0 ? `${results.length} resultados encontrados.` : 'Use os filtros para buscar relatórios.'}
-          </p>
-          {results.length > 0 && (filters.classId || filters.activityType) && (
-            <button
-              onClick={handleBulkDownload}
-              disabled={isBulkDownloading}
-              className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md disabled:opacity-50"
-            >
-              {isBulkDownloading ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
-              {filters.classId && filters.activityType ? 'Baixar Turma + Atividade' : 
-               filters.classId ? 'Baixar Todos da Turma' : 'Baixar Todos da Atividade'}
-            </button>
-          )}
+          <div className="flex items-center gap-4">
+            <p className="text-xs text-slate-400">
+              {results.length > 0 ? `${results.length} resultados encontrados.` : 'Use os filtros para buscar relatórios.'}
+            </p>
+            {results.length > 0 && (
+              <label className="flex items-center gap-2 cursor-pointer group">
+                <input 
+                  type="checkbox" 
+                  checked={selectedIds.size === results.length && results.length > 0}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4 rounded border-slate-300 text-brand-blue focus:ring-brand-yellow"
+                />
+                <span className="text-xs font-bold text-slate-500 group-hover:text-brand-blue transition-colors">Selecionar Tudo</span>
+              </label>
+            )}
+          </div>
+          
+          <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
+            {selectedIds.size > 0 && (
+              <button
+                onClick={handleBulkDelete}
+                disabled={isBulkDeleting}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-all shadow-md disabled:opacity-50"
+              >
+                {isBulkDeleting ? <Loader2 className="animate-spin" size={18} /> : <Trash2 size={18} />}
+                Excluir Selecionados ({selectedIds.size})
+              </button>
+            )}
+
+            {results.length > 0 && (filters.classId || filters.activityType) && (
+              <button
+                onClick={handleBulkDownload}
+                disabled={isBulkDownloading}
+                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md disabled:opacity-50"
+              >
+                {isBulkDownloading ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+                {filters.classId && filters.activityType ? 'Baixar Turma + Atividade' : 
+                 filters.classId ? 'Baixar Todos da Turma' : 'Baixar Todos da Atividade'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -391,9 +488,18 @@ export default function ReportsView() {
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
-            className="bg-white p-4 sm:p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 group hover:border-brand-yellow transition-all"
+            className={cn(
+              "bg-white p-4 sm:p-6 rounded-2xl shadow-sm border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 group transition-all",
+              selectedIds.has(result.id) ? "border-brand-blue bg-brand-blue/5" : "border-slate-100 hover:border-brand-yellow"
+            )}
           >
             <div className="flex items-center gap-4 sm:gap-6 w-full sm:w-auto">
+              <input 
+                type="checkbox"
+                checked={selectedIds.has(result.id)}
+                onChange={() => toggleSelect(result.id)}
+                className="w-5 h-5 rounded border-slate-300 text-brand-blue focus:ring-brand-yellow"
+              />
               <div className={cn(
                 "w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-white font-bold shrink-0",
                 result.percentage >= 50 ? "bg-emerald-500" : "bg-red-500"
