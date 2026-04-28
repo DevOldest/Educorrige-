@@ -309,12 +309,13 @@ export default function ClassesView() {
           if (!ai) throw new Error("IA não configurada.");
           const response = await ai.models.generateContent({
             model: GEMINI_MODEL,
-            contents: {
+            contents: [{
+              role: 'user',
               parts: [
                 { text: prompt },
                 { inlineData: { mimeType: "application/pdf", data: base64 } }
               ]
-            },
+            }],
             config: {
               responseMimeType: "application/json"
             }

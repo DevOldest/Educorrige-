@@ -64,7 +64,10 @@ export default function SystemTestsView() {
       if (!ai) throw new Error("IA não disponível. Verifique a chave API.");
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: "Diga 'OK' se você estiver funcionando."
+        contents: [{
+          role: 'user',
+          parts: [{ text: "Diga 'OK' se você estiver funcionando." }]
+        }]
       });
       const text = response.text || '';
       if (text.includes('OK')) {

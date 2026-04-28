@@ -262,12 +262,13 @@ export default function GradingView() {
       if (!ai) throw new Error("IA não configurada.");
       const response = await ai.models.generateContent({
         model: GEMINI_MODEL,
-        contents: {
+        contents: [{
+          role: 'user',
           parts: [
             { text: prompt },
             ...imageParts
           ]
-        }
+        }]
       });
 
       const responseText = response.text || '';
