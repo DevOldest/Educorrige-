@@ -18,6 +18,9 @@ const getApiKey = () => {
 
 const apiKey = getApiKey();
 
-export const GEMINI_MODEL = "gemini-1.5-flash";
+// Use a supported model for the environment
+export const GEMINI_MODEL = "gemini-3-flash-preview";
 
-export const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
+export const ai = apiKey ? new GoogleGenAI({ 
+  apiKey
+}) : null;
