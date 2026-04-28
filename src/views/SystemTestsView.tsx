@@ -52,9 +52,9 @@ export default function SystemTestsView() {
   const runAiTest = async () => {
     setTests(prev => ({ ...prev, ai: { status: 'running', message: 'Processando prompt...' } }));
     try {
-      if (!ai) throw new Error("IA não disponível. Verifique a chave API.");
+      if (!ai) throw new Error("IA não configurada no lib/gemini.ts");
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: "gemini-3-flash-preview",
         contents: "Diga 'OK' se você estiver funcionando."
       });
       const text = response.text || '';
@@ -111,7 +111,7 @@ export default function SystemTestsView() {
 
         {/* AI Integration Card */}
         <TestCard 
-          title="Integração IA (Gemini 1.5 Flash)"
+          title="Integração IA (Gemini 3 Flash)"
           icon={<Cpu size={24} />}
           status={tests.ai.status}
           message={tests.ai.message}
