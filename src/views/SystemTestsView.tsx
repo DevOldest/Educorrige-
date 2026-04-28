@@ -45,14 +45,17 @@ export default function SystemTestsView() {
     const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
     const processKey = process.env.GEMINI_API_KEY;
     
-    const key = (viteKey && viteKey !== 'undefined' && viteKey !== 'null' && viteKey !== '') ? viteKey : 
-                (processKey && processKey !== 'undefined' && processKey !== 'null' && processKey !== '') ? processKey : null;
+    // Check which one is populated
+    const hasVite = viteKey && viteKey.trim() !== '' && viteKey !== 'undefined' && viteKey !== 'null';
+    const hasProcess = processKey && processKey.trim() !== '' && processKey !== 'undefined' && processKey !== 'null';
 
-    if (!key) {
-      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Chave API não encontrada. No Vercel, use VITE_GEMINI_API_KEY.' } }));
+    if (!hasVite && !hasProcess) {
+      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Nenhuma chave API encontrada. No Vercel, use VITE_GEMINI_API_KEY.' } }));
       return;
     }
-    setTests(prev => ({ ...prev, api: { status: 'pass', message: `Chave detectada (${viteKey ? 'VITE_' : 'Global'}).` } }));
+    
+    const source = hasVite ? 'VITE_GEMINI_API_KEY (Vercel)' : 'GEMINI_API_KEY (Global)';
+    setTests(prev => ({ ...prev, api: { status: 'pass', message: `Chave detectada via: ${source}` } }));
   };
 
   const runAiTest = async () => {
