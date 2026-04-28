@@ -3,7 +3,7 @@ import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X } from 'lucide-r
 import { motion } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
-import { ai } from '../lib/gemini';
+import { ai, GEMINI_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -308,7 +308,7 @@ export default function ClassesView() {
         try {
           if (!ai) throw new Error("IA não configurada.");
           const response = await ai.models.generateContent({
-            model: "gemini-1.5-flash",
+            model: GEMINI_MODEL,
             contents: {
               parts: [
                 { text: prompt },

@@ -3,7 +3,7 @@ import { Plus, FileText, Search, Trash2, Edit2, CheckCircle2, AlertCircle, FileU
 import { motion } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
-import { ai } from '../lib/gemini';
+import { ai, GEMINI_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -199,7 +199,7 @@ export default function AnswerKeysView() {
         try {
           if (!ai) throw new Error("IA não configurada.");
           const response = await ai.models.generateContent({
-            model: "gemini-1.5-flash",
+            model: GEMINI_MODEL,
             contents: {
               parts: [
                 { text: prompt },
@@ -312,7 +312,7 @@ export default function AnswerKeysView() {
       `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: GEMINI_MODEL,
         contents: {
           parts: [
             { text: prompt }

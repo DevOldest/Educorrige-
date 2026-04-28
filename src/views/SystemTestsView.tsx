@@ -12,7 +12,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { ai } from '../lib/gemini';
+import { ai, GEMINI_MODEL } from '../lib/gemini';
 import { Type } from '@google/genai';
 
 export default function SystemTestsView() {
@@ -41,20 +41,26 @@ export default function SystemTestsView() {
 
   const runApiTest = async () => {
     setTests(prev => ({ ...prev, api: { status: 'running', message: 'Verificando chave...' } }));
-    const key = process.env.GEMINI_API_KEY;
-    if (!key || key === 'undefined' || key === 'null' || key === '') {
-      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Chave API (GEMINI) não encontrada no ambiente.' } }));
+    
+    const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
+    const processKey = process.env.GEMINI_API_KEY;
+    
+    const key = (viteKey && viteKey !== 'undefined' && viteKey !== 'null' && viteKey !== '') ? viteKey : 
+                (processKey && processKey !== 'undefined' && processKey !== 'null' && processKey !== '') ? processKey : null;
+
+    if (!key) {
+      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Chave API não encontrada. No Vercel, use VITE_GEMINI_API_KEY.' } }));
       return;
     }
-    setTests(prev => ({ ...prev, api: { status: 'pass', message: 'Chave API detectada.' } }));
+    setTests(prev => ({ ...prev, api: { status: 'pass', message: `Chave detectada (${viteKey ? 'VITE_' : 'Global'}).` } }));
   };
 
   const runAiTest = async () => {
     setTests(prev => ({ ...prev, ai: { status: 'running', message: 'Processando prompt...' } }));
     try {
-      if (!ai) throw new Error("IA não configurada no lib/gemini.ts");
+      if (!ai) throw new Error("IA não disponível. Verifique a chave API.");
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: GEMINI_MODEL,
         contents: "Diga 'OK' se você estiver funcionando."
       });
       const text = response.text || '';
@@ -111,7 +117,7 @@ export default function SystemTestsView() {
 
         {/* AI Integration Card */}
         <TestCard 
-          title="Integração IA (Gemini 3 Flash)"
+          title={`Integração IA (${GEMINI_MODEL})`}
           icon={<Cpu size={24} />}
           status={tests.ai.status}
           message={tests.ai.message}

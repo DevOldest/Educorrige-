@@ -20,7 +20,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
-import { ai } from '../lib/gemini';
+import { ai, GEMINI_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -157,14 +157,18 @@ export default function GradingView() {
 
     setIsProcessing(true);
     setError(null);
+    
+    let questions: any[] = [];
+    
     try {
       // 1. Fetch Question Data (Answer Key)
-      const { data: questions } = await supabase
+      const { data, error: fetchError } = await supabase
         .from('questions')
         .select('*')
         .eq('assessment_id', selectedAssessmentId);
 
-      if (!questions) throw new Error('Gabarito não encontrado');
+      if (fetchError || !data) throw new Error('Gabarito não encontrado');
+      questions = data;
 
       // 2. Prepare images for Gemini
       const imageParts = await Promise.all(files.map(async (file) => {
@@ -257,7 +261,7 @@ export default function GradingView() {
 
       if (!ai) throw new Error("IA não configurada.");
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-flash",
+        model: GEMINI_MODEL,
         contents: {
           parts: [
             { text: prompt },
@@ -390,7 +394,7 @@ export default function GradingView() {
           if (answer) {
             const { error: aiError } = await supabase.from('ai_corrections').insert([{
               student_answer_id: answer.id,
-              ai_model: 'gemini-1.5-flash',
+              ai_model: GEMINI_MODEL,
               correction_feedback: corr.feedback + (corr.justification ? ` | Justificativa: ${corr.justification}` : ''),
               score_given: corr.ai_score,
               skills_mastered: [],
