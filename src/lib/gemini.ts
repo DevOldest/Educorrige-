@@ -18,4 +18,6 @@ const getApiKey = () => {
 
 const apiKey = getApiKey();
 
+export const GEMINI_MODEL = "gemini-1.5-flash";
+
 export const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
