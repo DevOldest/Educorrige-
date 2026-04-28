@@ -1,13 +1,13 @@
 import { GoogleGenAI } from "@google/genai";
 
 const getApiKey = () => {
-  // Try Vite's preferred way first for production/Vercel
+  // 1. Try Vite's preferred way (Strictly for Browser/Frontend)
   const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
   if (viteKey && viteKey !== 'undefined' && viteKey !== 'null' && viteKey.trim() !== '') {
     return viteKey;
   }
   
-  // Handled specifically for AI Studio environment
+  // 2. Fallback for AI Studio or local dev environment
   const envKey = process.env.GEMINI_API_KEY;
   if (envKey && envKey !== 'undefined' && envKey !== 'null' && envKey.trim() !== '') {
     return envKey;
