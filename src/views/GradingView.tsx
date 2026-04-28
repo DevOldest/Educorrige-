@@ -257,7 +257,7 @@ export default function GradingView() {
 
       if (!ai) throw new Error("IA não configurada.");
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-pro",
+        model: "gemini-1.5-flash",
         contents: {
           parts: [
             { text: prompt },
@@ -390,7 +390,7 @@ export default function GradingView() {
           if (answer) {
             const { error: aiError } = await supabase.from('ai_corrections').insert([{
               student_answer_id: answer.id,
-              ai_model: 'gemini-1.5-pro',
+              ai_model: 'gemini-1.5-flash',
               correction_feedback: corr.feedback + (corr.justification ? ` | Justificativa: ${corr.justification}` : ''),
               score_given: corr.ai_score,
               skills_mastered: [],
@@ -410,7 +410,7 @@ export default function GradingView() {
       console.log('Salvando resultado geral...');
       
       const rawScore = result?.summary?.final_total_score || 0;
-      const maxRaw = result?.summary?.max_total_score || 1;
+      const maxRaw = result?.summary?.max_total_score || (result?.corrections?.length || 1);
       const convertedScore = (rawScore / maxRaw) * targetScale;
       
       const finalScoreToSave = useConvertedScore ? convertedScore : rawScore;

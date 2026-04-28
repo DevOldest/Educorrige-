@@ -54,7 +54,7 @@ export default function SystemTestsView() {
     try {
       if (!ai) throw new Error("IA não disponível. Verifique a chave API.");
       const response = await ai.models.generateContent({
-        model: "gemini-1.5-pro",
+        model: "gemini-1.5-flash",
         contents: "Diga 'OK' se você estiver funcionando."
       });
       const text = response.text || '';
@@ -111,7 +111,7 @@ export default function SystemTestsView() {
 
         {/* AI Integration Card */}
         <TestCard 
-          title="Integração IA (Gemini 1.5 Pro)"
+          title="Integração IA (Gemini 1.5 Flash)"
           icon={<Cpu size={24} />}
           status={tests.ai.status}
           message={tests.ai.message}

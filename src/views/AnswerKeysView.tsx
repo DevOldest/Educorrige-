@@ -199,7 +199,7 @@ export default function AnswerKeysView() {
         try {
           if (!ai) throw new Error("IA não configurada.");
           const response = await ai.models.generateContent({
-            model: "gemini-3.1-pro-preview",
+            model: "gemini-1.5-flash",
             contents: {
               parts: [
                 { text: prompt },
@@ -312,7 +312,7 @@ export default function AnswerKeysView() {
       `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-1.5-flash",
         contents: {
           parts: [
             { text: prompt }
