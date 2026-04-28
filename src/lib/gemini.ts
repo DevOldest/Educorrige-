@@ -1,11 +1,19 @@
 import { GoogleGenAI } from "@google/genai";
 
 const getApiKey = () => {
-  const key = process.env.GEMINI_API_KEY;
-  if (!key || key === 'undefined' || key === 'null' || key.trim() === '') {
-    return null;
+  // Try Vite's preferred way first for production/Vercel
+  const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
+  if (viteKey && viteKey !== 'undefined' && viteKey !== 'null' && viteKey.trim() !== '') {
+    return viteKey;
   }
-  return key;
+  
+  // Handled specifically for AI Studio environment
+  const envKey = process.env.GEMINI_API_KEY;
+  if (envKey && envKey !== 'undefined' && envKey !== 'null' && envKey.trim() !== '') {
+    return envKey;
+  }
+  
+  return null;
 };
 
 const apiKey = getApiKey();
