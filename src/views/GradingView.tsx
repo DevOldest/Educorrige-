@@ -45,6 +45,8 @@ export default function GradingView() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<any>(null);
   const [gradingContext, setGradingContext] = useState<any>(null);
+  const [targetScale, setTargetScale] = useState(10);
+  const [useConvertedScore, setUseConvertedScore] = useState(true);
 
   const [modal, setModal] = useState<{
     isOpen: boolean;
@@ -175,55 +177,87 @@ export default function GradingView() {
         };
       }));
 
-      // 3. AI Correction Prompt - STRICT HYBRID LOGIC
-      const discursiveQuestions = questions.filter(q => q.question_type === 'dissertativa' || q.question_type === 'discursive' || q.question_type === 'dissertativa');
-      const objectiveQuestions = questions.filter(q => q.question_type === 'objetiva' || q.question_type === 'objective' || q.question_type === 'multiple_choice');
-
-      const targetScore = activityType === 'prova' ? 4.0 : 1.0;
-      const questionWeight = targetScore / (questions?.length || 1);
-
+      // 3. AI Correction Prompt - STRICT USER REQUESTED LOGIC
       const prompt = `
-        Você é um assistente de extração e correção escolar. Sua tarefa é analisar as imagens e extrair as respostas do aluno.
-        
-        VALOR POR QUESTÃO: ${questionWeight.toFixed(4)} pontos
-        
-        INSTRUÇÕES RESTRITAS:
-        1. EXTRAÇÃO GERAL: No campo "studentAnswer", transcreva o que o aluno escreveu/marcou para TODAS as ${questions.length} questões.
-        2. QUESTÕES DISSERTATIVAS: Apenas para as questões listadas abaixo em "DISSERTATIVAS", realize a correção pedagógica baseada no Critério fornecido.
-        3. QUESTÕES OBJETIVAS: Para as questões objetivas, extraia APENAS o símbolo da alternativa correta (ex: A, B, Verdadeiro, Sim). Remova aspas, pontos ou parênteses que não façam parte da resposta em si. Seja direto na extração.
-        
-        DISSERTATIVAS PARA CORREÇÃO:
-        ${discursiveQuestions.map(q => `
+        Você é um sistema de correção automatizada de avaliações escolares integrado a um banco de dados estruturado. Sua função é analisar imagens de provas respondidas por alunos e gerar uma correção completa, precisa e editável.
+
+        A partir das imagens fornecidas e do gabarito, execute obrigatoriamente as seguintes etapas:
+
+        1. Identifique todas as questões presentes na prova.
+        2. Classifique cada questão como:
+           * "objetiva" (múltipla escolha com alternativas A–E)
+           * "dissertativa" (resposta aberta)
+        3. Extraia a resposta do aluno:
+           * Para objetivas: identificar a alternativa marcada
+           * Para dissertativas: transcrever o texto com a maior fidelidade possível
+        4. Compare com o gabarito fornecido abaixo.
+        5. Corrija cada questão de forma conservadora (em caso de dúvida, não atribua nota máxima).
+        6. Gere feedback pedagógico claro e objetivo.
+
+        GABARITO OFICIAL:
+        ${questions.map(q => `
           Questão ${q.question_number}:
-          - Critério: ${q.criteria}
-          - Skills: ${q.bncc_skills?.join(', ')}
+          - Tipo: ${q.question_type}
+          - Resposta Esperada: ${q.expected_answer}
+          - Pontuação Máxima: ${q.max_score}
+          - Critério/Skills: ${q.criteria} (${q.bncc_skills?.join(', ')})
         `).join('\n')}
 
-        OBJETIVAS PARA TRANSCRIÇÃO:
-        ${objectiveQuestions.map(q => `Questão ${q.question_number}`).join(', ')}
-        
-        RETORNE UM JSON NO FORMATO:
+        REGRAS CRÍTICAS (OBRIGATÓRIO):
+        * Nunca omita nenhuma questão visível
+        * Nunca invente respostas do aluno
+        * Se não conseguir identificar a resposta: "student_answer": null
+        * Nunca retorne nada fora do JSON
+        * Nunca preencha o campo "teacher_score" (mantenha como null)
+
+        ESTRUTURA OBRIGATÓRIA POR QUESTÃO:
         {
-          "overallFeedback": "Resumo geral da correção",
-          "corrections": [
-            {
-              "questionNumber": 1,
-              "studentAnswer": "Transcrição da resposta",
-              "score": 0.0, (apenas para dissertativas)
-              "feedback": "Justificativa (apenas para dissertativas)",
-              "skillsMastered": [],
-              "skillsToImprove": []
-            }
-          ]
+          "question_number": 1,
+          "question_type": "objetiva",
+          "expected_answer": "A",
+          "student_answer": "B",
+          "is_correct": false,
+          "ai_score": 0.0,
+          "max_score": 1.0,
+          "teacher_score": null,
+          "final_score": 0.0,
+          "needs_review": true,
+          "confidence": 0.75,
+          "feedback": "Resposta incorreta.",
+          "justification": "O aluno marcou B, mas a alternativa correta é A."
         }
+
+        REGRA OBRIGATÓRIA DE RECÁLCULO:
+        O campo "final_score" deve sempre seguir esta lógica:
+        Se "teacher_score" for diferente de null → final_score = teacher_score
+        Se "teacher_score" for null → final_score = ai_score
+
+        ESTRUTURA FINAL DO JSON:
+        {
+          "student_id": "${selectedStudentId}",
+          "assessment_id": "${selectedAssessmentId}",
+          "corrections": [],
+          "summary": {
+            "total_questions": ${questions.length},
+            "ai_total_score": 0.0,
+            "final_total_score": 0.0,
+            "max_total_score": 0.0,
+            "review_required": true
+          }
+        }
+
+        REGRA DE CÁLCULO FINAL:
+        * ai_total_score = soma de todos os ai_score
+        * final_total_score = soma de todos os final_score
+
+        Marque "needs_review": true sempre que houver baixa confiança, ambiguidade, resposta ilegível ou questão dissertativa.
+
+        Retorne exclusivamente o JSON final, válido e completo.
       `;
 
-      let correctionData: any = { overallFeedback: '', corrections: [] };
-
-      // Rule: Only call AI if there's something to process (always true if we need OCR)
       if (!ai) throw new Error("IA não configurada.");
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: "gemini-1.5-pro",
         contents: {
           parts: [
             { text: prompt },
@@ -236,68 +270,23 @@ export default function GradingView() {
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       
       if (jsonMatch) {
-        correctionData = JSON.parse(jsonMatch[0]);
+        const correctionData = JSON.parse(jsonMatch[0]);
         
-        // PART 2: STERN OBJECTIVE GRADING BY CODE
-        correctionData.corrections = questions.map(q => {
-          const aiCorr = correctionData.corrections.find((c: any) => c.questionNumber === q.question_number);
-          
-          // Helper to normalize answers (removes noise like quotes, dots, extra spaces)
-          const normalize = (val: string, isObjective: boolean = false) => {
-            if (!val) return '';
-            let v = val.trim().toUpperCase()
-              .replace(/['"().]/g, '') // Remove punctuation/quotes
-              .replace(/^(ALTERNATIVA|OPCAO|RESPOSTA|LETRA|QUESTAO|OPCÃO)\s*/i, '') // Remove common prefixes
-              .trim();
-            
-            if (isObjective) {
-              // If it's a multiple choice/objective type, often we just care about the identifies (A, B, C, D, E)
-              // If the result starts with a clear letter identifier (A-E) as the first character, use just that.
-              const firstChar = v.charAt(0);
-              if (v.length > 0 && /^[A-E0-9]$/.test(firstChar)) {
-                // Special case: if student wrote "B" and gabarito is "B4E4" or "B - ALGUMA COISA", they match on "B"
-                return firstChar;
-              }
-              
-              return v.replace(/[^A-Z0-9]/g, ''); // Fallback: clear everything but alphanumeric
-            }
-            
-            return v;
+        // Ensure summary object exists
+        if (!correctionData.summary) {
+          correctionData.summary = {
+            total_questions: correctionData.corrections?.length || 0,
+            ai_total_score: 0,
+            final_total_score: 0,
+            max_total_score: 0,
+            review_required: true
           };
-
-          const aiRaw = aiCorr?.studentAnswer || '';
-          
-          const studentAnswer = normalize(aiRaw, true);
-          const expectedAnswer = normalize(q.expected_answer || '', true);
-          
-          console.log(`Questão ${q.question_number} - Bruto Aluno: "${aiRaw}" | Bruto Gabarito: "${q.expected_answer}" | Normalizado Aluno: "${studentAnswer}" | Normalizado Gabarito: "${expectedAnswer}"`);
-
-          if (q.question_type === 'objetiva' || q.question_type === 'objective' || q.question_type === 'multiple_choice') {
-            const isCorrect = studentAnswer === expectedAnswer && studentAnswer !== '';
-            
-            return {
-              questionNumber: q.question_number,
-              score: isCorrect ? questionWeight : 0,
-              feedback: isCorrect ? 'RESPOSTA CORRETA (Gabarito Oficial)' : `RESPOSTA INCORRETA. Lido: "${studentAnswer}". Esperado: "${expectedAnswer}"`,
-              studentAnswer: aiRaw || 'Não identificado',
-              skillsMastered: isCorrect ? (q.bncc_skills || []) : [],
-              skillsToImprove: isCorrect ? [] : (q.bncc_skills || [])
-            };
-          } else {
-            // PART 3: Keep AI grading for discursive
-            return {
-              ...aiCorr,
-              questionNumber: q.question_number,
-              score: aiCorr?.score || 0,
-              feedback: aiCorr?.feedback || 'Sem feedback disponível.',
-              studentAnswer: aiCorr?.studentAnswer || 'Não identificado'
-            };
-          }
-        });
-
-        // Recalculate total
-        correctionData.totalScore = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.score || 0), 0);
-        correctionData.maxScore = targetScore;
+        }
+        
+        // Ensure summary calculations are consistent in case AI missed something
+        correctionData.summary.ai_total_score = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.ai_score || 0), 0);
+        correctionData.summary.final_total_score = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.final_score || 0), 0);
+        correctionData.summary.max_total_score = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.max_score || 0), 0);
         
         setResult(correctionData);
         setGradingContext({
@@ -314,8 +303,13 @@ export default function GradingView() {
       setError(`Falha na correção por IA (${error.message || 'Erro desconhecido'}). Atribuindo nota zero por segurança.`);
       setResult({
         overallFeedback: `Erro técnico no processamento da IA: ${error.message || 'Falha de conexão'}. A atividade precisa de revisão manual.`,
-        totalScore: 0,
-        maxScore: activityType === 'prova' ? 4.0 : 1.0,
+        summary: {
+          total_questions: questions.length,
+          ai_total_score: 0,
+          final_total_score: 0,
+          max_total_score: questions.length, // Fallback to question count
+          review_required: true
+        },
         corrections: []
       });
     } finally {
@@ -366,11 +360,11 @@ export default function GradingView() {
           .from('questions')
           .select('id')
           .eq('assessment_id', assessmentId)
-          .eq('question_number', corr.questionNumber)
+          .eq('question_number', corr.question_number)
           .single();
 
         if (questionError) {
-          console.warn(`Questão ${corr.questionNumber} não encontrada no gabarito. Pulando...`, questionError);
+          console.warn(`Questão ${corr.question_number} não encontrada no gabarito. Pulando...`, questionError);
           continue;
         }
 
@@ -381,8 +375,8 @@ export default function GradingView() {
               student_id: studentId,
               assessment_id: assessmentId,
               question_id: question.id,
-              answer_text: corr.studentAnswer || '',
-              score: corr.score,
+              answer_text: corr.student_answer || '',
+              score: corr.final_score,
               user_id: user.id
             }])
             .select()
@@ -390,23 +384,23 @@ export default function GradingView() {
 
           if (answerError) {
             console.error('Erro ao salvar student_answer:', answerError);
-            throw new Error(`Erro ao salvar resposta da questão ${corr.questionNumber}: ${answerError.message} (${answerError.details || ''})`);
+            throw new Error(`Erro ao salvar resposta da questão ${corr.question_number}: ${answerError.message} (${answerError.details || ''})`);
           }
 
           if (answer) {
             const { error: aiError } = await supabase.from('ai_corrections').insert([{
               student_answer_id: answer.id,
-              ai_model: 'gemini-3-flash-preview',
-              correction_feedback: corr.feedback,
-              score_given: corr.score,
-              skills_mastered: corr.skillsMastered || [],
-              skills_to_improve: corr.skillsToImprove || [],
+              ai_model: 'gemini-1.5-pro',
+              correction_feedback: corr.feedback + (corr.justification ? ` | Justificativa: ${corr.justification}` : ''),
+              score_given: corr.ai_score,
+              skills_mastered: [],
+              skills_to_improve: [],
               user_id: user.id
             }]);
             
             if (aiError) {
               console.error('Erro ao salvar ai_correction:', aiError);
-              throw new Error(`Erro ao salvar correção da questão ${corr.questionNumber}: ${aiError.message} (${aiError.details || ''})`);
+              throw new Error(`Erro ao salvar correção da questão ${corr.question_number}: ${aiError.message} (${aiError.details || ''})`);
             }
           }
         }
@@ -415,18 +409,23 @@ export default function GradingView() {
       // 3. Save overall result
       console.log('Salvando resultado geral...');
       
-      // Calculate totalScore locally to ensure precision before rounding
-      const preciseTotal = result.corrections.reduce((sum: number, c: any) => sum + (c.score || 0), 0);
-      const roundedTotalScore = Math.round(preciseTotal * 10) / 10;
+      const rawScore = result?.summary?.final_total_score || 0;
+      const maxRaw = result?.summary?.max_total_score || 1;
+      const convertedScore = (rawScore / maxRaw) * targetScale;
+      
+      const finalScoreToSave = useConvertedScore ? convertedScore : rawScore;
+      const finalMaxToSave = useConvertedScore ? targetScale : maxRaw;
+
+      const roundedTotalScore = Math.round(finalScoreToSave * 10) / 10;
       
       const { error: resultError } = await supabase.from('assessment_results').insert([{
         student_id: studentId,
         assessment_id: assessmentId,
         total_score: roundedTotalScore,
-        max_score: result.maxScore,
-        percentage: (roundedTotalScore / result.maxScore) * 100,
+        max_score: finalMaxToSave,
+        percentage: (rawScore / maxRaw) * 100,
         ai_corrected: true,
-        overall_feedback: result.overallFeedback,
+        overall_feedback: result?.summary?.review_required ? "Necessita revisão manual." : "Corrigido automaticamente pela IA.",
         user_id: user.id
       }]);
 
@@ -557,26 +556,25 @@ export default function GradingView() {
     // Score
     doc.setFontSize(16);
     doc.setTextColor(10, 37, 64);
-    doc.text(`Nota: ${result.totalScore.toFixed(1)} / ${result.maxScore} (${Math.round((result.totalScore / result.maxScore) * 100)}%)`, pageWidth - 20, 45, { align: 'right' });
+    const finalScore = result?.summary?.final_total_score || 0;
+    const maxScore = result?.summary?.max_total_score || 0;
+    doc.text(`Nota: ${finalScore.toFixed(1)} / ${maxScore} (${maxScore > 0 ? Math.round((finalScore / maxScore) * 100) : 0}%)`, pageWidth - 20, 45, { align: 'right' });
 
     // Overall Feedback
-    if (result.overallFeedback) {
-      doc.setFontSize(12);
-      doc.setTextColor(10, 37, 64);
-      doc.text('Feedback Geral:', 20, 70);
-      doc.setFontSize(10);
-      doc.setTextColor(80);
-      const splitFeedback = doc.splitTextToSize(result.overallFeedback, pageWidth - 40);
-      doc.text(splitFeedback, 20, 77);
-    }
+    doc.setFontSize(12);
+    doc.setTextColor(10, 37, 64);
+    doc.text('Status:', 20, 70);
+    doc.setFontSize(10);
+    doc.setTextColor(result?.summary?.review_required ? 220 : 80);
+    doc.text(result?.summary?.review_required ? 'NECESSITA REVISÃO' : 'CORREÇÃO AUTOMÁTICA', 20, 77);
 
     // Table of corrections
     const tableData = result.corrections.map((corr: any) => [
-      corr.questionNumber,
-      'Questão', // Type could be added if available
-      corr.studentAnswer || 'Sem resposta',
+      corr.question_number,
+      corr.question_type === 'objetiva' ? 'Objetiva' : 'Dissertativa',
+      corr.student_answer || 'Sem resposta',
       corr.feedback || '',
-      `${corr.score.toFixed(3)} pts`
+      `${corr.final_score.toFixed(2)} pts`
     ]);
 
     autoTable(doc, {
@@ -785,41 +783,154 @@ export default function GradingView() {
               <div className="flex justify-between items-start mb-8">
                 <div>
                   <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Resultado da Correção</h3>
-                  <p className="text-slate-500">Processado por IA • {new Date().toLocaleDateString()}</p>
+                  <p className="text-slate-500">Processado por AI Studio • {new Date().toLocaleDateString()}</p>
                 </div>
-                <div className="text-right">
-                  <div className="text-4xl font-bold text-brand-blue">{result.totalScore.toFixed(1)}</div>
-                  <div className="text-sm text-slate-400">de {result.maxScore} pontos</div>
+                <div className="flex items-center gap-6">
+                  <div className="text-right">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Conversão (0-{targetScale})</label>
+                    <div className="flex items-center gap-3 justify-end">
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="checkbox"
+                          id="useConverted"
+                          checked={useConvertedScore}
+                          onChange={(e) => setUseConvertedScore(e.target.checked)}
+                          className="w-4 h-4 text-brand-blue rounded border-slate-300 focus:ring-brand-blue"
+                        />
+                        <label htmlFor="useConverted" className="text-[10px] font-bold text-slate-500 uppercase cursor-pointer">Usar no Relatório</label>
+                      </div>
+                      <input 
+                        type="number" 
+                        value={targetScale} 
+                        onChange={(e) => setTargetScale(parseFloat(e.target.value) || 0)}
+                        className="w-12 p-1 text-xs border border-slate-200 rounded text-center text-brand-blue font-bold focus:ring-1 focus:ring-brand-blue"
+                      />
+                      <div className="text-2xl font-black text-brand-gold">
+                        {((result?.summary?.final_total_score || 0) / (result?.summary?.max_total_score || 1) * targetScale).toFixed(1)}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="w-px h-12 bg-slate-100 mx-2" />
+                  <div className="text-right">
+                    <div className="text-4xl font-bold text-brand-blue">{(result?.summary?.final_total_score || 0).toFixed(1)}</div>
+                    <div className="text-sm text-slate-400">de {result?.summary?.max_total_score || 0} pontos</div>
+                  </div>
                 </div>
               </div>
 
-              <div className="p-6 bg-slate-50 rounded-2xl mb-8">
-                <h4 className="text-sm font-bold text-brand-blue-dark uppercase mb-2 flex items-center gap-2">
-                  <MessageSquare size={16} className="text-brand-gold" />
-                  Feedback Geral
-                </h4>
-                <p className="text-slate-700 leading-relaxed">{result.overallFeedback}</p>
-              </div>
+              {result?.summary?.review_required && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-700 flex items-center gap-3 mb-8">
+                  <AlertCircle size={20} />
+                  <p className="text-sm font-bold">Esta prova contém questões dissertativas ou de baixa confiança. Verifique as notas do professor.</p>
+                </div>
+              )}
 
               <div className="space-y-4">
-                <h4 className="text-sm font-bold text-brand-blue-dark uppercase">Correção por Questão</h4>
+                <div className="flex justify-between items-center">
+                  <h4 className="text-sm font-bold text-brand-blue-dark uppercase">Correção Detalhada</h4>
+                  <p className="text-[10px] text-slate-400">Clique na nota do professor para editar</p>
+                </div>
+                
                 {result.corrections.map((corr: any, i: number) => (
-                  <div key={i} className="p-4 border border-slate-100 rounded-2xl flex gap-4">
-                    <div className="w-10 h-10 rounded-full bg-brand-blue-dark text-white flex items-center justify-center font-bold shrink-0">
-                      {corr.questionNumber}
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex justify-between items-center mb-1">
-                        <span className="font-bold text-brand-blue-dark">Questão {corr.questionNumber}</span>
-                        <span className={cn(
-                          "text-sm font-bold",
-                          corr.score > 0 ? "text-emerald-600" : "text-red-500"
-                        )}>
-                          {corr.score.toFixed(3)} pts
-                        </span>
+                  <div key={i} className={cn(
+                    "p-6 rounded-3xl border transition-all space-y-4",
+                    corr.needs_review ? "border-amber-200 bg-amber-50/30" : "border-slate-100 bg-white"
+                  )}>
+                    <div className="flex justify-between items-start">
+                      <div className="flex gap-4">
+                         <div className="w-10 h-10 rounded-xl bg-brand-blue-dark text-white flex items-center justify-center font-bold shrink-0">
+                          {corr.question_number}
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-bold text-brand-blue-dark">Questão {corr.question_number}</span>
+                            <span className={cn(
+                              "text-[10px] px-2 py-0.5 rounded uppercase font-bold",
+                              corr.question_type === 'objetiva' ? "bg-blue-50 text-blue-600" : "bg-purple-50 text-purple-600"
+                            )}>
+                              {corr.question_type}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-400 mb-2">Gabarito: <span className="text-slate-600 font-bold">{corr.expected_answer}</span></p>
+                        </div>
                       </div>
-                      <p className="text-sm text-slate-600 mb-2 italic">"{corr.studentAnswer}"</p>
-                      <p className="text-sm text-slate-800 font-medium">{corr.feedback}</p>
+                      
+                      <div className="flex gap-3 items-center">
+                        <div className="text-right">
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Nota AI</label>
+                          <span className="text-sm font-bold text-slate-500">{corr.ai_score.toFixed(2)}</span>
+                        </div>
+                        <div className="h-8 w-px bg-slate-200" />
+                        <div className="text-right">
+                          <label className="text-[10px] font-bold text-brand-blue uppercase block mb-1">Nota Professor</label>
+                          <input 
+                            type="number"
+                            step="0.1"
+                            max={corr.max_score}
+                            min={0}
+                            value={corr.teacher_score === null ? '' : corr.teacher_score}
+                            placeholder={corr.ai_score.toFixed(2)}
+                            onChange={(e) => {
+                              const val = e.target.value === '' ? null : parseFloat(e.target.value);
+                              const newCorrections = [...result.corrections];
+                              newCorrections[i] = { 
+                                ...corr, 
+                                teacher_score: val,
+                                final_score: val !== null ? val : corr.ai_score 
+                              };
+                              const newSummary = {
+                                ...(result?.summary || {}),
+                                final_total_score: newCorrections.reduce((sum: number, c: any) => sum + (c.final_score || 0), 0)
+                              };
+                              setResult({ ...result, corrections: newCorrections, summary: newSummary });
+                            }}
+                            className="w-16 p-1 bg-brand-blue/5 border border-brand-blue/20 rounded text-center text-sm font-bold text-brand-blue focus:ring-1 focus:ring-brand-blue"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="p-4 bg-white/50 rounded-2xl border border-white space-y-3">
+                      <div>
+                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Resposta do Aluno</label>
+                        <textarea
+                          value={corr.student_answer || ''}
+                          onChange={(e) => {
+                            const newCorrections = [...result.corrections];
+                            newCorrections[i] = { ...corr, student_answer: e.target.value };
+                            setResult({ ...result, corrections: newCorrections });
+                          }}
+                          placeholder="Texto identificado pela IA..."
+                          className="w-full text-sm font-medium text-slate-700 bg-white/30 border border-slate-100 rounded-lg p-2 focus:ring-1 focus:ring-brand-blue resize-none min-h-[60px]"
+                        />
+                      </div>
+                      
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-100/50">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1 font-serif">Feedback</label>
+                          <textarea
+                            value={corr.feedback || ''}
+                            onChange={(e) => {
+                              const newCorrections = [...result.corrections];
+                              newCorrections[i] = { ...corr, feedback: e.target.value };
+                              setResult({ ...result, corrections: newCorrections });
+                            }}
+                            className="w-full text-xs text-slate-600 bg-white/50 border border-slate-100 rounded-lg p-2 focus:ring-1 focus:ring-brand-blue resize-none h-16"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1 font-serif">Justificativa IA</label>
+                          <textarea
+                            value={corr.justification || ''}
+                            onChange={(e) => {
+                              const newCorrections = [...result.corrections];
+                              newCorrections[i] = { ...corr, justification: e.target.value };
+                              setResult({ ...result, corrections: newCorrections });
+                            }}
+                            className="w-full text-xs text-slate-500 italic bg-white/50 border border-slate-100 rounded-lg p-2 focus:ring-1 focus:ring-brand-blue resize-none h-16"
+                          />
+                        </div>
+                      </div>
                     </div>
                   </div>
                 ))}
