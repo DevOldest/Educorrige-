@@ -31,22 +31,23 @@ export default function GradingView() {
   const [units, setUnits] = useState<any[]>([]);
   
   const [selectedClassId, setSelectedClassId] = useState('');
-  const [selectedStudentId, setSelectedStudentId] = useState('');
   const [selectedAssessmentId, setSelectedAssessmentId] = useState('');
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [activityType, setActivityType] = useState<'prova' | 'lista1' | 'lista2' | 'lista3'>('prova');
   
-  const [files, setFiles] = useState<File[]>([]);
-  const [previews, setPreviews] = useState<string[]>([]);
+  // Estado para Lote de 3 Atividades
+  const [batchSlots, setBatchSlots] = useState<any[]>([
+    { id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '2', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '3', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
+  ]);
+  
   const [isLoadingData, setIsLoadingData] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-  const [hasSaved, setHasSaved] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<any>(null);
-  const [gradingContext, setGradingContext] = useState<any>(null);
+  const [isProcessingBatch, setIsProcessingBatch] = useState(false);
+  const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [targetScale, setTargetScale] = useState(10);
   const [useConvertedScore, setUseConvertedScore] = useState(true);
+  const [expandedSlotId, setExpandedSlotId] = useState<string | null>(null);
 
   const [modal, setModal] = useState<{
     isOpen: boolean;
@@ -130,399 +131,274 @@ export default function GradingView() {
     }
   }
 
-  const onDrop = (acceptedFiles: File[]) => {
-    setFiles([...files, ...acceptedFiles]);
-    const newPreviews = acceptedFiles.map(file => URL.createObjectURL(file));
-    setPreviews([...previews, ...newPreviews]);
+  const updateSlot = (id: string, updates: any) => {
+    setBatchSlots(prev => prev.map(slot => slot.id === id ? { ...slot, ...updates } : slot));
   };
 
-  const dropzoneOptions: any = {
-    onDrop,
-    accept: { 'image/*': ['.jpeg', '.jpg', '.png'] }
+  const updateCorrectionInSlot = (slotId: string, correctionIndex: number, field: string, value: any) => {
+    setBatchSlots(prev => prev.map(slot => {
+      if (slot.id !== slotId || !slot.result) return slot;
+
+      const newCorrections = [...slot.result.corrections];
+      const oldCorr = newCorrections[correctionIndex];
+      
+      // Update the specific field
+      newCorrections[correctionIndex] = { ...oldCorr, [field]: value };
+
+      // If updating score, it should be reflected in the final_score used for summary
+      if (field === 'teacher_score') {
+        newCorrections[correctionIndex].final_score = value !== null ? value : oldCorr.ai_score;
+      } else if (!('final_score' in newCorrections[correctionIndex])) {
+        newCorrections[correctionIndex].final_score = oldCorr.teacher_score !== null ? oldCorr.teacher_score : oldCorr.ai_score;
+      }
+
+      // Re-calculate summary total
+      const newTotal = newCorrections.reduce((sum: number, c: any) => sum + (parseFloat(c.final_score || c.ai_score) || 0), 0);
+      
+      return {
+        ...slot,
+        result: {
+          ...slot.result,
+          corrections: newCorrections,
+          summary: {
+            ...slot.result.summary,
+            ai_total_score: newTotal // Keep as primary score for conversion
+          }
+        }
+      };
+    }));
   };
 
-  // @ts-ignore
-  const { getRootProps, getInputProps, isDragActive } = useDropzone(dropzoneOptions);
+  const handleFilesAdded = (id: string, acceptedFiles: File[]) => {
+    const slot = batchSlots.find(s => s.id === id);
+    if (!slot) return;
+    
+    // Create new objects to avoid reference issues
+    const newFiles = [...slot.files, ...acceptedFiles];
+    const newPreviews = [...slot.previews, ...acceptedFiles.map(file => URL.createObjectURL(file))];
+    
+    updateSlot(id, { files: newFiles, previews: newPreviews });
+  };
 
-  const handleGrade = async () => {
-    if (!selectedAssessmentId || !selectedStudentId || files.length === 0 || !ai) {
+  const removeFileFromSlot = (slotId: string, fileIndex: number) => {
+    const slot = batchSlots.find(s => s.id === slotId);
+    if (!slot) return;
+    
+    const newFiles = [...slot.files];
+    newFiles.splice(fileIndex, 1);
+    const newPreviews = [...slot.previews];
+    newPreviews.splice(fileIndex, 1);
+    
+    updateSlot(slotId, { files: newFiles, previews: newPreviews });
+  };
+
+  const handleGradeBatch = async () => {
+    const activeSlots = batchSlots.filter(s => s.studentId && s.files.length > 0);
+    
+    if (activeSlots.length === 0 || !selectedAssessmentId || !ai) {
       setModal({
         isOpen: true,
-        title: 'Campos Incompletos',
-        message: 'Selecione o aluno, a atividade e envie as fotos antes de iniciar a correção.',
+        title: 'Dados Incompletos',
+        message: 'Preencha pelo menos um aluno com suas fotos e selecione o gabarito.',
         type: 'warning'
       });
       return;
     }
 
-    setIsProcessing(true);
-    setError(null);
-    
-    let questions: any[] = [];
+    setIsProcessingBatch(true);
     
     try {
-      // 1. Fetch Question Data (Answer Key)
-      const { data, error: fetchError } = await supabase
+      // 1. Fetch Gabarito unificado
+      const { data: questions, error: fetchError } = await supabase
         .from('questions')
         .select('*')
         .eq('assessment_id', selectedAssessmentId);
 
-      if (fetchError || !data) throw new Error('Gabarito não encontrado');
-      questions = data;
+      if (fetchError || !questions) throw new Error('Gabarito não encontrado');
 
-      // 2. Prepare images for Gemini
-      const imageParts = await Promise.all(files.map(async (file) => {
-        const base64 = await fileToBase64(file);
-        return {
-          inlineData: {
-            mimeType: file.type,
-            data: base64
+      // 2. Processar slots ativos sequencialmente para evitar 429/503 (ou paralelo moderado)
+      for (const slot of activeSlots) {
+        updateSlot(slot.id, { status: 'processing', error: null });
+        
+        try {
+          const imageParts = await Promise.all(slot.files.map(async (file: File) => {
+            const base64 = await fileToBase64(file);
+            return {
+              inlineData: {
+                mimeType: file.type,
+                data: base64
+              }
+            };
+          }));
+
+          const student = students.find(s => s.id === slot.studentId);
+
+          const prompt = `
+            Você é um sistema de correção automatizada. Analise as imagens desta prova e compare com o gabarito.
+            
+            GABARITO OFICIAL:
+            ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): ${q.expected_answer} (${q.max_score} pts)`).join('\n')}
+
+            ALUNO: ${student?.name}
+            ATIVIDADE_ID: ${selectedAssessmentId}
+
+            REGRAS:
+            1. Identifique a resposta do aluno para cada questão.
+            2. Atribua nota de acordo com o gabarito.
+            3. Gere um breve feedback por questão.
+            4. Se a resposta for ilegível, "student_answer": null e "needs_review": true.
+
+            ESTRUTURA DO JSON:
+            {
+              "corrections": [
+                {
+                  "question_number": 1,
+                  "expected_answer": "Resposta do gabarito",
+                  "student_answer": "Resposta extraída",
+                  "ai_score": 1.0,
+                  "max_score": 1.0,
+                  "feedback": "Correto.",
+                  "needs_review": false
+                }
+              ],
+              "summary": {
+                "ai_total_score": 10.0,
+                "max_total_score": 10.0,
+                "review_required": false
+              }
+            }
+          `;
+
+          const response = await ai.models.generateContent({
+            model: GEMINI_MODEL,
+            contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }]
+          });
+
+          const responseText = response.text || '';
+          
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          
+          if (jsonMatch) {
+            updateSlot(slot.id, { result: JSON.parse(jsonMatch[0]), status: 'done' });
+          } else {
+            throw new Error('Retorno inválido da IA');
           }
-        };
-      }));
-
-      // 3. AI Correction Prompt - STRICT USER REQUESTED LOGIC
-      const prompt = `
-        Você é um sistema de correção automatizada de avaliações escolares integrado a um banco de dados estruturado. Sua função é analisar imagens de provas respondidas por alunos e gerar uma correção completa, precisa e editável.
-
-        A partir das imagens fornecidas e do gabarito, execute obrigatoriamente as seguintes etapas:
-
-        1. Identifique todas as questões presentes na prova.
-        2. Classifique cada questão como:
-           * "objetiva" (múltipla escolha com alternativas A–E)
-           * "dissertativa" (resposta aberta)
-        3. Extraia a resposta do aluno:
-           * Para objetivas: identificar a alternativa marcada
-           * Para dissertativas: transcrever o texto com a maior fidelidade possível
-        4. Compare com o gabarito fornecido abaixo.
-        5. Corrija cada questão de forma conservadora (em caso de dúvida, não atribua nota máxima).
-        6. Gere feedback pedagógico claro e objetivo.
-
-        GABARITO OFICIAL:
-        ${questions.map(q => `
-          Questão ${q.question_number}:
-          - Tipo: ${q.question_type}
-          - Resposta Esperada: ${q.expected_answer}
-          - Pontuação Máxima: ${q.max_score}
-          - Critério/Skills: ${q.criteria} (${q.bncc_skills?.join(', ')})
-        `).join('\n')}
-
-        REGRAS CRÍTICAS (OBRIGATÓRIO):
-        * Nunca omita nenhuma questão visível
-        * Nunca invente respostas do aluno
-        * Se não conseguir identificar a resposta: "student_answer": null
-        * Nunca retorne nada fora do JSON
-        * Nunca preencha o campo "teacher_score" (mantenha como null)
-
-        ESTRUTURA OBRIGATÓRIA POR QUESTÃO:
-        {
-          "question_number": 1,
-          "question_type": "objetiva",
-          "expected_answer": "A",
-          "student_answer": "B",
-          "is_correct": false,
-          "ai_score": 0.0,
-          "max_score": 1.0,
-          "teacher_score": null,
-          "final_score": 0.0,
-          "needs_review": true,
-          "confidence": 0.75,
-          "feedback": "Resposta incorreta.",
-          "justification": "O aluno marcou B, mas a alternativa correta é A."
+        } catch (err: any) {
+          updateSlot(slot.id, { status: 'error', error: err.message });
         }
-
-        REGRA OBRIGATÓRIA DE RECÁLCULO:
-        O campo "final_score" deve sempre seguir esta lógica:
-        Se "teacher_score" for diferente de null → final_score = teacher_score
-        Se "teacher_score" for null → final_score = ai_score
-
-        ESTRUTURA FINAL DO JSON:
-        {
-          "student_id": "${selectedStudentId}",
-          "assessment_id": "${selectedAssessmentId}",
-          "corrections": [],
-          "summary": {
-            "total_questions": ${questions.length},
-            "ai_total_score": 0.0,
-            "final_total_score": 0.0,
-            "max_total_score": 0.0,
-            "review_required": true
-          }
-        }
-
-        REGRA DE CÁLCULO FINAL:
-        * ai_total_score = soma de todos os ai_score
-        * final_total_score = soma de todos os final_score
-
-        Marque "needs_review": true sempre que houver baixa confiança, ambiguidade, resposta ilegível ou questão dissertativa.
-
-        Retorne exclusivamente o JSON final, válido e completo.
-      `;
-
-      if (!ai) throw new Error("IA não configurada.");
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [{
-          role: 'user',
-          parts: [
-            { text: prompt },
-            ...imageParts
-          ]
-        }]
-      });
-
-      const responseText = response.text || '';
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      
-      if (jsonMatch) {
-        const correctionData = JSON.parse(jsonMatch[0]);
-        
-        // Ensure summary object exists
-        if (!correctionData.summary) {
-          correctionData.summary = {
-            total_questions: correctionData.corrections?.length || 0,
-            ai_total_score: 0,
-            final_total_score: 0,
-            max_total_score: 0,
-            review_required: true
-          };
-        }
-        
-        // Ensure summary calculations are consistent in case AI missed something
-        correctionData.summary.ai_total_score = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.ai_score || 0), 0);
-        correctionData.summary.final_total_score = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.final_score || 0), 0);
-        correctionData.summary.max_total_score = correctionData.corrections.reduce((sum: number, c: any) => sum + (c.max_score || 0), 0);
-        
-        setResult(correctionData);
-        setGradingContext({
-          studentId: selectedStudentId,
-          assessmentId: selectedAssessmentId,
-          unitId: selectedUnitId,
-          classId: selectedClassId
-        });
-        setHasSaved(false);
       }
-    } catch (error: any) {
-      console.error('Grading error details:', error);
-      // PART 4: SAFETY FALLBACK
-      setError(`Falha na correção por IA (${error.message || 'Erro desconhecido'}). Atribuindo nota zero por segurança.`);
-      setResult({
-        overallFeedback: `Erro técnico no processamento da IA: ${error.message || 'Falha de conexão'}. A atividade precisa de revisão manual.`,
-        summary: {
-          total_questions: questions.length,
-          ai_total_score: 0,
-          final_total_score: 0,
-          max_total_score: questions.length, // Fallback to question count
-          review_required: true
-        },
-        corrections: []
-      });
+    } catch (err: any) {
+      console.error('Batch grading failed:', err);
     } finally {
-      setIsProcessing(false);
+      setIsProcessingBatch(false);
     }
   };
 
-  async function saveResults() {
-    console.log('Iniciando saveResults...', { result, gradingContext, hasSaved });
-    if (!supabase || !result || !gradingContext || hasSaved) {
-      console.warn('saveResults abortado:', { 
-        hasSupabase: !!supabase, 
-        hasResult: !!result, 
-        hasContext: !!gradingContext, 
-        hasSaved 
-      });
-      return;
-    }
+  const saveBatchResults = async () => {
+    const readySlots = batchSlots.filter(s => s.status === 'done' && s.result);
+    if (!readySlots.length) return;
 
-    setIsSaving(true);
+    setIsSavingBatch(true);
     try {
-      const { data: { user }, error: authError } = await supabase.auth.getUser();
-      if (authError) throw authError;
-      if (!user) throw new Error('Usuário não autenticado');
-
-      const { studentId, assessmentId } = gradingContext;
-      console.log('Contexto de salvamento:', { studentId, assessmentId, userId: user.id });
-
-      // 1. Get assessment details
-      const { data: assessment, error: assessmentError } = await supabase
-        .from('assessments')
-        .select('type, unit_id')
-        .eq('id', assessmentId)
-        .single();
-
-      if (assessmentError) {
-        console.error('Erro ao buscar atividade:', assessmentError);
-        throw new Error('Erro ao buscar atividade: ' + assessmentError.message);
+      for (const slot of readySlots) {
+        await saveSingleSlot(slot);
       }
-      if (!assessment) throw new Error('Atividade não encontrada no banco de dados.');
-
-      console.log('Atividade encontrada:', assessment);
-
-      // 2. Save individual answers and corrections
-      console.log('Salvando respostas individuais...');
-      for (const corr of result.corrections) {
-        const { data: question, error: questionError } = await supabase
-          .from('questions')
-          .select('id')
-          .eq('assessment_id', assessmentId)
-          .eq('question_number', corr.question_number)
-          .single();
-
-        if (questionError) {
-          console.warn(`Questão ${corr.question_number} não encontrada no gabarito. Pulando...`, questionError);
-          continue;
-        }
-
-        if (question) {
-          const { data: answer, error: answerError } = await supabase
-            .from('student_answers')
-            .insert([{
-              student_id: studentId,
-              assessment_id: assessmentId,
-              question_id: question.id,
-              answer_text: corr.student_answer || '',
-              score: corr.final_score,
-              user_id: user.id
-            }])
-            .select()
-            .single();
-
-          if (answerError) {
-            console.error('Erro ao salvar student_answer:', answerError);
-            throw new Error(`Erro ao salvar resposta da questão ${corr.question_number}: ${answerError.message} (${answerError.details || ''})`);
-          }
-
-          if (answer) {
-            const { error: aiError } = await supabase.from('ai_corrections').insert([{
-              student_answer_id: answer.id,
-              ai_model: GEMINI_MODEL,
-              correction_feedback: corr.feedback + (corr.justification ? ` | Justificativa: ${corr.justification}` : ''),
-              score_given: corr.ai_score,
-              skills_mastered: [],
-              skills_to_improve: [],
-              user_id: user.id
-            }]);
-            
-            if (aiError) {
-              console.error('Erro ao salvar ai_correction:', aiError);
-              throw new Error(`Erro ao salvar correção da questão ${corr.question_number}: ${aiError.message} (${aiError.details || ''})`);
-            }
-          }
-        }
-      }
-
-      // 3. Save overall result
-      console.log('Salvando resultado geral...');
-      
-      const rawScore = result?.summary?.final_total_score || 0;
-      const maxRaw = result?.summary?.max_total_score || (result?.corrections?.length || 1);
-      const convertedScore = (rawScore / maxRaw) * targetScale;
-      
-      const finalScoreToSave = useConvertedScore ? convertedScore : rawScore;
-      const finalMaxToSave = useConvertedScore ? targetScale : maxRaw;
-
-      const roundedTotalScore = Math.round(finalScoreToSave * 10) / 10;
-      
-      const { error: resultError } = await supabase.from('assessment_results').insert([{
-        student_id: studentId,
-        assessment_id: assessmentId,
-        total_score: roundedTotalScore,
-        max_score: finalMaxToSave,
-        percentage: (rawScore / maxRaw) * 100,
-        ai_corrected: true,
-        overall_feedback: result?.summary?.review_required ? "Necessita revisão manual." : "Corrigido automaticamente pela IA.",
-        user_id: user.id
-      }]);
-
-      if (resultError) {
-        console.error('Erro ao salvar assessment_results:', resultError);
-        throw new Error('Erro ao salvar resultado geral: ' + resultError.message + ' (' + (resultError.details || '') + ')');
-      }
-
-      // 4. Update grade in Management
-      console.log('Atualizando notas na gestão...');
-      const { data: existingGrade, error: gradeFetchError } = await supabase
-        .from('grades')
-        .select('*')
-        .eq('student_id', studentId)
-        .eq('unit_id', assessment.unit_id)
-        .maybeSingle();
-
-      if (gradeFetchError) {
-        console.error('Erro ao buscar nota existente:', gradeFetchError);
-        throw new Error('Erro ao buscar nota na gestão: ' + gradeFetchError.message);
-      }
-
-      const fieldToUpdate = 
-        assessment.type === 'prova' ? 'exam_score' : 
-        assessment.type === 'lista2' ? 'list2_score' : 
-        assessment.type === 'lista3' ? 'list3_score' : 
-        'list1_score';
-      
-      if (existingGrade) {
-        const updatedGrade = { ...existingGrade, [fieldToUpdate]: roundedTotalScore };
-        const sum = (updatedGrade.list1_score || 0) + 
-                    (updatedGrade.list2_score || 0) + 
-                    (updatedGrade.list3_score || 0) + 
-                    (updatedGrade.exam_score || 0) + 
-                    (updatedGrade.notebook_score || 0) + 
-                    (updatedGrade.anki_score || 0);
-        
-        let average = Math.min(10, sum);
-        if (updatedGrade.recovery_score !== null) {
-          if (sum < 5) {
-            average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
-          } else {
-            average = Math.min(10, sum + updatedGrade.recovery_score);
-          }
-        }
-        
-        const roundedAverage = Math.round(average * 10) / 10;
-        
-        const { error: updateError } = await supabase
-          .from('grades')
-          .update({ [fieldToUpdate]: roundedTotalScore, unit_average: roundedAverage })
-          .eq('id', existingGrade.id);
-          
-        if (updateError) {
-          console.error('Erro ao atualizar nota:', updateError);
-          throw new Error('Erro ao atualizar nota na gestão: ' + updateError.message);
-        }
-      } else {
-        const { error: insertError } = await supabase
-          .from('grades')
-          .insert([{ 
-            student_id: studentId,
-            unit_id: assessment.unit_id,
-            [fieldToUpdate]: roundedTotalScore,
-            unit_average: roundedTotalScore,
-            user_id: user.id
-          }]);
-          
-        if (insertError) {
-          console.error('Erro ao inserir nova nota:', insertError);
-          throw new Error('Erro ao criar nota na gestão: ' + insertError.message);
-        }
-      }
-
-      console.log('Salvamento concluído com sucesso!');
-      setHasSaved(true);
       setModal({
         isOpen: true,
         title: 'Sucesso',
-        message: 'Resultados salvos com sucesso no banco de dados!',
+        message: 'Todas as notas foram integradas ao sistema de gestão!',
         type: 'success'
       });
-    } catch (error: any) {
-      console.error('Erro fatal no saveResults:', error);
+    } catch (err: any) {
       setModal({
         isOpen: true,
-        title: 'Erro ao Salvar',
-        message: 'Erro ao salvar resultados: ' + (error.message || JSON.stringify(error)),
+        title: 'Erro no Salvamento',
+        message: err.message,
         type: 'error'
       });
     } finally {
-      setIsSaving(false);
+      setIsSavingBatch(false);
+    }
+  };
+
+  async function saveSingleSlot(slot: any) {
+    if (!supabase || !slot.result) return;
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) throw new Error('Auth error');
+
+    const result = slot.result;
+    const studentId = slot.studentId;
+    const assessmentId = selectedAssessmentId;
+
+    // 1. Atividade Detalhes
+    const { data: assessment } = await supabase
+      .from('assessments')
+      .select('type, unit_id')
+      .eq('id', assessmentId)
+      .single();
+
+    if (!assessment) return;
+
+    // 2. Salvar Respostas Individuais
+    for (const corr of result.corrections) {
+      const { data: q } = await supabase.from('questions')
+        .select('id').eq('assessment_id', assessmentId).eq('question_number', corr.question_number).single();
+
+      if (q) {
+        const finalItemScore = corr.final_score !== undefined ? corr.final_score : corr.ai_score;
+        
+        const { data: ans } = await supabase.from('student_answers').insert([{
+          student_id: studentId,
+          assessment_id: assessmentId,
+          question_id: q.id,
+          answer_text: corr.student_answer || '',
+          score: finalItemScore,
+          user_id: user.id
+        }]).select().single();
+
+        if (ans) {
+          await supabase.from('ai_corrections').insert([{
+            student_answer_id: ans.id,
+            ai_model: GEMINI_MODEL,
+            correction_feedback: corr.feedback,
+            score_given: finalItemScore,
+            justification: corr.justification,
+            user_id: user.id
+          }]);
+        }
+      }
+    }
+
+    // 3. Resultado Geral e Gestão
+    const rawScore = result.summary.ai_total_score || 0;
+    const maxRaw = result.summary.max_total_score || 1;
+    const convertedScore = useConvertedScore ? (rawScore / maxRaw) * targetScale : rawScore;
+    const finalScore = Math.round(convertedScore * 10) / 10;
+
+    await supabase.from('assessment_results').insert([{
+      student_id: studentId,
+      assessment_id: assessmentId,
+      total_score: finalScore,
+      max_score: useConvertedScore ? targetScale : maxRaw,
+      percentage: (rawScore / maxRaw) * 100,
+      ai_corrected: true,
+      user_id: user.id
+    }]);
+
+    // Atualizar tabela GRADES
+    const field = assessment.type === 'prova' ? 'exam_score' : 
+                 assessment.type === 'lista2' ? 'list2_score' : 
+                 assessment.type === 'lista3' ? 'list3_score' : 'list1_score';
+
+    const { data: existing } = await supabase.from('grades')
+      .select('*').eq('student_id', studentId).eq('unit_id', assessment.unit_id).maybeSingle();
+
+    if (existing) {
+      const updated = { ...existing, [field]: finalScore };
+      const sum = (updated.list1_score || 0) + (updated.list2_score || 0) + (updated.list3_score || 0) + (updated.exam_score || 0) + (updated.notebook_score || 0) + (updated.anki_score || 0);
+      await supabase.from('grades').update({ [field]: finalScore, unit_average: Math.min(10, sum) }).eq('id', existing.id);
+    } else {
+      await supabase.from('grades').insert([{ student_id: studentId, unit_id: assessment.unit_id, [field]: finalScore, unit_average: finalScore, user_id: user.id }]);
     }
   }
 
@@ -535,71 +411,47 @@ export default function GradingView() {
     });
   }
 
-  const exportToPDF = () => {
-    if (!result || !selectedStudentId || !selectedAssessmentId) return;
+  const exportToPDF = (slot: any) => {
+    if (!slot.result || !slot.studentId || !selectedAssessmentId) return;
     
-    const student = students.find(s => s.id === selectedStudentId);
+    const student = students.find(s => s.id === slot.studentId);
     const assessment = assessments.find(a => a.id === selectedAssessmentId);
     const className = classes.find(c => c.id === selectedClassId)?.name || '';
 
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
 
-    // Header
     doc.setFontSize(20);
-    doc.setTextColor(10, 37, 64); // brand-blue-dark
-    doc.text('Relatório de Correção', pageWidth / 2, 20, { align: 'center' });
+    doc.setTextColor(10, 37, 64);
+    doc.text('Relatório de Correção (Lote)', pageWidth / 2, 20, { align: 'center' });
 
-    // Student Info
     doc.setFontSize(12);
     doc.setTextColor(100);
     doc.text(`Aluno: ${student?.name || 'N/A'}`, 20, 35);
     doc.text(`Turma: ${className}`, 20, 42);
     doc.text(`Atividade: ${assessment?.title || 'N/A'}`, 20, 49);
-    doc.text(`Data: ${new Date().toLocaleDateString()}`, 20, 56);
 
-    // Score
-    doc.setFontSize(16);
-    doc.setTextColor(10, 37, 64);
-    const finalScore = result?.summary?.final_total_score || 0;
-    const maxScore = result?.summary?.max_total_score || 0;
-    doc.text(`Nota: ${finalScore.toFixed(1)} / ${maxScore} (${maxScore > 0 ? Math.round((finalScore / maxScore) * 100) : 0}%)`, pageWidth - 20, 45, { align: 'right' });
-
-    // Overall Feedback
-    doc.setFontSize(12);
-    doc.setTextColor(10, 37, 64);
-    doc.text('Status:', 20, 70);
-    doc.setFontSize(10);
-    doc.setTextColor(result?.summary?.review_required ? 220 : 80);
-    doc.text(result?.summary?.review_required ? 'NECESSITA REVISÃO' : 'CORREÇÃO AUTOMÁTICA', 20, 77);
-
-    // Table of corrections
+    const result = slot.result;
     const tableData = result.corrections.map((corr: any) => [
       corr.question_number,
-      corr.question_type === 'objetiva' ? 'Objetiva' : 'Dissertativa',
       corr.student_answer || 'Sem resposta',
       corr.feedback || '',
-      `${corr.final_score.toFixed(2)} pts`
+      `${corr.ai_score.toFixed(2)} pts`
     ]);
 
     autoTable(doc, {
-      startY: result.overallFeedback ? 100 : 70,
-      head: [['Nº', 'Tipo', 'Resposta do Aluno', 'Feedback da IA', 'Pontos']],
+      startY: 60,
+      head: [['Nº', 'Resposta', 'Feedback IA', 'Pontos']],
       body: tableData,
       headStyles: { fillColor: [10, 37, 64] },
-      styles: { fontSize: 8 },
-      columnStyles: {
-        2: { cellWidth: 40 },
-        3: { cellWidth: 60 }
-      }
+      styles: { fontSize: 8 }
     });
 
-    doc.save(`Relatorio_${student?.name || 'Aluno'}_${assessment?.title || 'Atividade'}.pdf`);
+    doc.save(`Relatorio_${student?.name || 'Aluno'}.pdf`);
   };
 
   return (
-    <div className="space-y-6">
-      {/* Custom Modal */}
+    <div className="space-y-6 pb-20">
       <CustomModal
         isOpen={modal.isOpen}
         onClose={() => setModal({ ...modal, isOpen: false })}
@@ -609,379 +461,335 @@ export default function GradingView() {
         onConfirm={modal.onConfirm}
       />
 
-      {!ai && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex items-center gap-3 mb-6">
-          <AlertCircle size={24} />
-          <div>
-            <p className="font-bold">IA não configurada</p>
-            <p className="text-sm text-red-600">A chave da API do Gemini não foi encontrada. A correção automática não funcionará.</p>
+      {/* Configuração Global */}
+      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
+        <div className="flex-1 min-w-[200px] space-y-2">
+          <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
+          <select 
+            value={selectedClassId}
+            onChange={(e) => setSelectedClassId(e.target.value)}
+            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+          >
+            <option value="">Selecionar Turma</option>
+            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
+        </div>
+
+        <div className="flex-1 min-w-[150px] space-y-2">
+          <label className="text-xs font-bold uppercase text-slate-400">Tipo</label>
+          <select 
+            value={activityType}
+            onChange={(e) => setActivityType(e.target.value as any)}
+            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+          >
+            <option value="prova">Prova</option>
+            <option value="lista1">Lista 1</option>
+            <option value="lista2">Lista 2</option>
+            <option value="lista3">Lista 3</option>
+          </select>
+        </div>
+
+        <div className="flex-1 min-w-[150px] space-y-2">
+          <label className="text-xs font-bold uppercase text-slate-400">Unidade</label>
+          <select 
+            value={selectedUnitId}
+            onChange={(e) => setSelectedUnitId(e.target.value)}
+            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+          >
+            <option value="">Todas Unidades</option>
+            {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+          </select>
+        </div>
+
+        <div className="flex-1 min-w-[200px] space-y-2">
+          <label className="text-xs font-bold uppercase text-slate-400">Gabarito Mestre</label>
+          <select 
+            value={selectedAssessmentId}
+            onChange={(e) => setSelectedAssessmentId(e.target.value)}
+            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold text-brand-blue-dark"
+          >
+            <option value="">Selecionar Gabarito</option>
+            {assessments
+              .filter(a => a.type === activityType && (selectedUnitId ? a.unit_id === selectedUnitId : true))
+              .map(a => <option key={a.id} value={a.id}>{a.title}</option>)}
+          </select>
+        </div>
+
+        <div className="flex flex-col gap-2 min-w-[180px]">
+          <label className="text-[10px] font-bold text-slate-400 uppercase">Configuração de Nota</label>
+          <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-xl">
+            <div className="flex items-center gap-1">
+              <input 
+                type="checkbox"
+                id="convert"
+                checked={useConvertedScore}
+                onChange={(e) => setUseConvertedScore(e.target.checked)}
+                className="w-4 h-4 text-brand-blue rounded border-slate-300"
+              />
+              <label htmlFor="convert" className="text-[10px] font-bold text-slate-500 uppercase cursor-pointer">Converter p/</label>
+            </div>
+            <input 
+              type="number"
+              value={targetScale}
+              onChange={(e) => setTargetScale(parseFloat(e.target.value) || 0)}
+              className="w-12 p-1 text-xs border border-slate-200 rounded text-center font-bold text-brand-blue"
+            />
           </div>
         </div>
-      )}
+      </div>
 
-      {error && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-2xl text-red-700 flex items-center justify-between gap-3 mb-6">
-          <div className="flex items-center gap-3">
-            <AlertCircle size={24} />
-            <p className="text-sm font-medium">{error}</p>
-          </div>
-          <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">
-            <X size={20} />
-          </button>
-        </div>
-      )}
-      
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-      {/* Selection Panel */}
-      <div className="lg:col-span-1 space-y-6">
-        <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-6">
-          <h3 className="text-xl font-bold text-brand-blue-dark flex items-center gap-2">
-            <Settings size={20} className="text-brand-gold" />
-            Configuração
-          </h3>
+      {/* Slots de Lote */}
+      <div className="space-y-6">
+        {batchSlots.map((slot) => {
+          const isExpanded = expandedSlotId === slot.id;
+          const currentTotal = slot.result?.summary?.ai_total_score || 0;
+          const maxTotal = slot.result?.summary?.max_total_score || 1;
+          const convertedVal = useConvertedScore ? (currentTotal / maxTotal * targetScale).toFixed(1) : currentTotal.toFixed(1);
 
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
-              <select 
-                value={selectedClassId}
-                onChange={(e) => setSelectedClassId(e.target.value)}
-                className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
-              >
-                <option value="">Selecionar Turma</option>
-                {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-              </select>
-            </div>
+          return (
+            <div key={slot.id} className={cn(
+              "bg-white rounded-3xl shadow-sm border transition-all overflow-hidden",
+              slot.status === 'processing' ? "border-brand-yellow ring-2 ring-brand-yellow/10" : 
+              slot.status === 'done' ? "border-slate-100" : "border-slate-100"
+            )}>
+              {/* Header do Slot */}
+              <div className="p-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-50">
+                <div className="flex items-center gap-4">
+                  <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-400">
+                    {slot.id}
+                  </div>
+                  <div className="min-w-[200px]">
+                    <select 
+                      value={slot.studentId}
+                      onChange={(e) => updateSlot(slot.id, { studentId: e.target.value })}
+                      className="w-full p-2 bg-transparent border-none font-bold text-brand-blue-dark focus:ring-0"
+                      disabled={!selectedClassId || slot.status === 'processing'}
+                    >
+                      <option value="">Selecionar Aluno</option>
+                      {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
+                    </select>
+                  </div>
+                </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-400">Aluno</label>
-              <select 
-                value={selectedStudentId}
-                onChange={(e) => setSelectedStudentId(e.target.value)}
-                className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
-                disabled={isLoadingData || !selectedClassId}
-              >
-                <option value="">{isLoadingData ? 'Carregando...' : 'Selecionar Aluno'}</option>
-                {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
-              </select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase text-slate-400">Tipo</label>
-                <select 
-                  value={activityType}
-                  onChange={(e) => setActivityType(e.target.value as any)}
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
-                >
-                  <option value="prova">Prova</option>
-                  <option value="lista1">Lista 1</option>
-                  <option value="lista2">Lista 2</option>
-                  <option value="lista3">Lista 3</option>
-                </select>
+                <div className="flex items-center gap-4">
+                  {slot.result && (
+                    <div className="text-right">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase">Nota Final</p>
+                      <div className="flex items-center gap-2">
+                        <span className="text-2xl font-black text-brand-blue">{convertedVal}</span>
+                        <span className="text-xs text-slate-400">/ {useConvertedScore ? targetScale : maxTotal}</span>
+                      </div>
+                    </div>
+                  )}
+                  
+                  <div className="flex items-center gap-2">
+                    {slot.status === 'processing' && <Loader2 className="animate-spin text-brand-yellow" size={20} />}
+                    {slot.status === 'done' && (
+                      <button 
+                        onClick={() => setExpandedSlotId(isExpanded ? null : slot.id)}
+                        className={cn(
+                          "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2",
+                          isExpanded ? "bg-brand-blue text-white" : "bg-slate-100 text-brand-blue hover:bg-slate-200"
+                        )}
+                      >
+                        {isExpanded ? 'Fechar Revisão' : 'Revisar & Editar'}
+                        <ChevronRight className={cn("transition-transform", isExpanded && "rotate-90")} size={14} />
+                      </button>
+                    )}
+                    
+                    <div className="flex items-center gap-1 ml-2">
+                      {slot.previews.length === 0 ? (
+                        <div className="flex gap-1">
+                          <SlotDropzone onFiles={(f) => handleFilesAdded(slot.id, f)} disabled={slot.status === 'processing'} miniature />
+                        </div>
+                      ) : (
+                        <div className="flex -space-x-2">
+                          {slot.previews.slice(0, 3).map((src: string, i: number) => (
+                            <div key={i} className="w-8 h-8 rounded-lg border-2 border-white overflow-hidden shadow-sm">
+                              <img src={src} className="w-full h-full object-cover" />
+                            </div>
+                          ))}
+                          {slot.files.length > 3 && (
+                            <div className="w-8 h-8 rounded-lg border-2 border-white bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-500">
+                              +{slot.files.length - 3}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold uppercase text-slate-400">Unidade</label>
-                <select 
-                  value={selectedUnitId}
-                  onChange={(e) => setSelectedUnitId(e.target.value)}
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
-                >
-                  <option value="">Unidade</option>
-                  {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
-                </select>
-              </div>
-            </div>
 
-            <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-400">Gabarito</label>
-              <select 
-                value={selectedAssessmentId}
-                onChange={(e) => setSelectedAssessmentId(e.target.value)}
-                className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
-              >
-                <option value="">Selecionar Gabarito</option>
-                {assessments
-                  .filter(a => {
-                    const typeMatch = a.type === activityType;
-                    const unitMatch = selectedUnitId ? a.unit_id === selectedUnitId : true;
-                    return typeMatch && unitMatch;
-                  })
-                  .map(a => <option key={a.id} value={a.id}>{a.title}</option>)}
-              </select>
-              {assessments.length === 0 && (
-                <p className="text-[10px] text-red-500 font-medium">Nenhum gabarito encontrado.</p>
-              )}
+              {/* Área de Revisão Detalhada */}
+              <AnimatePresence>
+                {isExpanded && slot.result && (
+                  <motion.div 
+                    initial={{ height: 0, opacity: 0 }}
+                    animate={{ height: 'auto', opacity: 1 }}
+                    exit={{ height: 0, opacity: 0 }}
+                    className="bg-slate-50/50 border-t border-slate-100"
+                  >
+                    <div className="p-6 space-y-6">
+                      <div className="grid grid-cols-1 gap-4">
+                        {slot.result.corrections.map((corr: any, idx: number) => (
+                          <div key={idx} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+                            <div className="flex justify-between items-start">
+                              <div className="flex gap-3">
+                                <div className="w-8 h-8 rounded-lg bg-brand-blue-dark text-white flex items-center justify-center font-bold text-xs">
+                                  {corr.question_number}
+                                </div>
+                                <div>
+                                  <h5 className="text-sm font-bold text-slate-700">Questão {corr.question_number}</h5>
+                                  <p className="text-[10px] text-slate-400 font-bold uppercase italic">Peso: {corr.max_score} pts</p>
+                                </div>
+                              </div>
+
+                              <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-xl border border-slate-100">
+                                <div className="text-center px-2">
+                                  <p className="text-[9px] font-bold text-slate-400 uppercase">IA Sugeriu</p>
+                                  <p className="text-xs font-bold text-slate-500">{corr.ai_score.toFixed(1)}</p>
+                                </div>
+                                <div className="w-px h-8 bg-slate-200" />
+                                <div className="text-center px-2">
+                                  <p className="text-[9px] font-bold text-brand-blue uppercase">Professor</p>
+                                  <input 
+                                    type="number"
+                                    step="0.1"
+                                    min={0}
+                                    max={corr.max_score}
+                                    value={corr.teacher_score === undefined ? '' : corr.teacher_score}
+                                    placeholder={corr.ai_score.toFixed(1)}
+                                    onChange={(e) => {
+                                      const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
+                                      updateCorrectionInSlot(slot.id, idx, 'teacher_score', val);
+                                    }}
+                                    className="w-12 bg-transparent text-center text-xs font-black text-brand-blue-dark border-b border-brand-blue focus:ring-0 p-0"
+                                  />
+                                </div>
+                              </div>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-slate-400 uppercase">Resposta do Aluno</label>
+                                <textarea 
+                                  value={corr.student_answer || ''}
+                                  onChange={(e) => updateCorrectionInSlot(slot.id, idx, 'student_answer', e.target.value)}
+                                  className="w-full text-xs p-2 bg-slate-50 border-none rounded-lg focus:ring-1 focus:ring-brand-blue resize-none h-16 scrollbar-hide"
+                                />
+                              </div>
+                              <div className="space-y-2">
+                                <label className="text-[10px] font-bold text-brand-blue uppercase">Feedback para Aluno</label>
+                                <textarea 
+                                  value={corr.feedback || ''}
+                                  onChange={(e) => updateCorrectionInSlot(slot.id, idx, 'feedback', e.target.value)}
+                                  className="w-full text-xs p-2 bg-brand-blue/5 border-none rounded-lg focus:ring-1 focus:ring-brand-blue resize-none h-16 scrollbar-hide"
+                                />
+                              </div>
+                            </div>
+
+                            <div className="pt-2 border-t border-slate-50">
+                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Resposta Esperada (Gabarito)</label>
+                              <div className="w-full text-[10px] p-2 bg-slate-50 border border-slate-100 rounded-lg font-bold text-slate-600">
+                                {corr.expected_answer || 'N/A'}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
+                         <button 
+                            onClick={() => exportToPDF(slot)}
+                            className="px-4 py-2 bg-white border border-slate-200 text-brand-blue text-xs font-bold rounded-xl hover:bg-slate-50 flex items-center gap-2"
+                          >
+                            <Printer size={14} />
+                            Imprimir PDF Aluno
+                          </button>
+                         <button 
+                            onClick={() => setExpandedSlotId(null)}
+                            className="px-4 py-2 bg-brand-blue text-white text-xs font-bold rounded-xl hover:bg-brand-blue-dark"
+                          >
+                            Concluir Revisão
+                          </button>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
+
+              {slot.error && <p className="text-[10px] text-red-500 bg-red-50 p-4 m-6 rounded-2xl border border-red-100 flex items-center gap-2">
+                <AlertCircle size={14} />
+                Erro no slot: {slot.error}
+              </p>}
             </div>
-          </div>
-        </div>
+          );
+        })}
+      </div>
+
+      {/* Botões de Ação do Lote */}
+      <div className="flex flex-col sm:flex-row gap-4 pt-4">
+        <button 
+          onClick={handleGradeBatch}
+          disabled={isProcessingBatch || batchSlots.every(s => s.files.length === 0)}
+          className="flex-1 py-4 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-xl flex items-center justify-center gap-2 disabled:opacity-50"
+        >
+          {isProcessingBatch ? <Loader2 className="animate-spin" size={20} /> : <CheckSquare size={20} />}
+          {isProcessingBatch ? 'Corrigindo Lote...' : 'Iniciar Correção em Lote (3 Alunos)'}
+        </button>
 
         <button 
-          onClick={handleGrade}
-          disabled={isProcessing || files.length === 0}
-          className="w-full py-4 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+          onClick={saveBatchResults}
+          disabled={isSavingBatch || !batchSlots.some(s => s.status === 'done')}
+          className="flex-1 py-4 bg-brand-gold text-brand-blue-dark rounded-2xl font-bold hover:bg-brand-yellow shadow-xl flex items-center justify-center gap-2 disabled:opacity-50"
         >
-          {isProcessing ? <Loader2 className="animate-spin" size={20} /> : <CheckSquare size={20} />}
-          {isProcessing ? 'Corrigindo...' : 'Iniciar Correção'}
+          {isSavingBatch ? <Loader2 className="animate-spin" size={20} /> : <CheckCircle2 size={20} />}
+          {isSavingBatch ? 'Gravando Tudo...' : 'Salvar e Atualizar Gestão'}
         </button>
       </div>
-
-      {/* Upload & Results Panel */}
-      <div className="lg:col-span-2 space-y-6">
-        {!result ? (
-          <div className="space-y-6">
-            <div 
-              {...getRootProps()} 
-              className={cn(
-                "border-2 border-dashed rounded-3xl p-12 flex flex-col items-center justify-center gap-4 transition-all cursor-pointer bg-white",
-                isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
-              )}
-            >
-              <input {...getInputProps()} />
-              <div className="p-4 bg-brand-gold/10 rounded-full text-brand-gold">
-                <Upload size={48} />
-              </div>
-              <div className="text-center">
-                <p className="text-xl font-bold text-brand-blue-dark">Upload das Fotos da Atividade</p>
-                <p className="text-slate-500">Arraste as imagens ou clique para selecionar</p>
-              </div>
-            </div>
-
-            {previews.length > 0 && (
-              <div className="grid grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
-                {previews.map((src, i) => (
-                  <motion.div 
-                    key={i}
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className="aspect-square rounded-xl overflow-hidden border border-slate-200 relative group"
-                  >
-                    <img src={src} alt={`Preview ${i}`} className="w-full h-full object-cover" />
-                    <div className="absolute inset-0 bg-black/20 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
-                      <ImageIcon className="text-white" size={24} />
-                    </div>
-                    <button 
-                      onClick={() => {
-                        const newFiles = [...files];
-                        newFiles.splice(i, 1);
-                        setFiles(newFiles);
-                        const newPreviews = [...previews];
-                        newPreviews.splice(i, 1);
-                        setPreviews(newPreviews);
-                      }}
-                      className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                    >
-                      <X size={12} />
-                    </button>
-                  </motion.div>
-                ))}
-              </div>
-            )}
-          </div>
-        ) : (
-          <motion.div 
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            className="space-y-6"
-          >
-            <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100">
-              <div className="flex justify-between items-start mb-8">
-                <div>
-                  <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Resultado da Correção</h3>
-                  <p className="text-slate-500">Processado por AI Studio • {new Date().toLocaleDateString()}</p>
-                </div>
-                <div className="flex items-center gap-6">
-                  <div className="text-right">
-                    <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Conversão (0-{targetScale})</label>
-                    <div className="flex items-center gap-3 justify-end">
-                      <div className="flex items-center gap-2">
-                        <input 
-                          type="checkbox"
-                          id="useConverted"
-                          checked={useConvertedScore}
-                          onChange={(e) => setUseConvertedScore(e.target.checked)}
-                          className="w-4 h-4 text-brand-blue rounded border-slate-300 focus:ring-brand-blue"
-                        />
-                        <label htmlFor="useConverted" className="text-[10px] font-bold text-slate-500 uppercase cursor-pointer">Usar no Relatório</label>
-                      </div>
-                      <input 
-                        type="number" 
-                        value={targetScale} 
-                        onChange={(e) => setTargetScale(parseFloat(e.target.value) || 0)}
-                        className="w-12 p-1 text-xs border border-slate-200 rounded text-center text-brand-blue font-bold focus:ring-1 focus:ring-brand-blue"
-                      />
-                      <div className="text-2xl font-black text-brand-gold">
-                        {((result?.summary?.final_total_score || 0) / (result?.summary?.max_total_score || 1) * targetScale).toFixed(1)}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="w-px h-12 bg-slate-100 mx-2" />
-                  <div className="text-right">
-                    <div className="text-4xl font-bold text-brand-blue">{(result?.summary?.final_total_score || 0).toFixed(1)}</div>
-                    <div className="text-sm text-slate-400">de {result?.summary?.max_total_score || 0} pontos</div>
-                  </div>
-                </div>
-              </div>
-
-              {result?.summary?.review_required && (
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl text-amber-700 flex items-center gap-3 mb-8">
-                  <AlertCircle size={20} />
-                  <p className="text-sm font-bold">Esta prova contém questões dissertativas ou de baixa confiança. Verifique as notas do professor.</p>
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <h4 className="text-sm font-bold text-brand-blue-dark uppercase">Correção Detalhada</h4>
-                  <p className="text-[10px] text-slate-400">Clique na nota do professor para editar</p>
-                </div>
-                
-                {result.corrections.map((corr: any, i: number) => (
-                  <div key={i} className={cn(
-                    "p-6 rounded-3xl border transition-all space-y-4",
-                    corr.needs_review ? "border-amber-200 bg-amber-50/30" : "border-slate-100 bg-white"
-                  )}>
-                    <div className="flex justify-between items-start">
-                      <div className="flex gap-4">
-                         <div className="w-10 h-10 rounded-xl bg-brand-blue-dark text-white flex items-center justify-center font-bold shrink-0">
-                          {corr.question_number}
-                        </div>
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-bold text-brand-blue-dark">Questão {corr.question_number}</span>
-                            <span className={cn(
-                              "text-[10px] px-2 py-0.5 rounded uppercase font-bold",
-                              corr.question_type === 'objetiva' ? "bg-blue-50 text-blue-600" : "bg-purple-50 text-purple-600"
-                            )}>
-                              {corr.question_type}
-                            </span>
-                          </div>
-                          <p className="text-xs text-slate-400 mb-2">Gabarito: <span className="text-slate-600 font-bold">{corr.expected_answer}</span></p>
-                        </div>
-                      </div>
-                      
-                      <div className="flex gap-3 items-center">
-                        <div className="text-right">
-                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Nota AI</label>
-                          <span className="text-sm font-bold text-slate-500">{corr.ai_score.toFixed(2)}</span>
-                        </div>
-                        <div className="h-8 w-px bg-slate-200" />
-                        <div className="text-right">
-                          <label className="text-[10px] font-bold text-brand-blue uppercase block mb-1">Nota Professor</label>
-                          <input 
-                            type="number"
-                            step="0.1"
-                            max={corr.max_score}
-                            min={0}
-                            value={corr.teacher_score === null ? '' : corr.teacher_score}
-                            placeholder={corr.ai_score.toFixed(2)}
-                            onChange={(e) => {
-                              const val = e.target.value === '' ? null : parseFloat(e.target.value);
-                              const newCorrections = [...result.corrections];
-                              newCorrections[i] = { 
-                                ...corr, 
-                                teacher_score: val,
-                                final_score: val !== null ? val : corr.ai_score 
-                              };
-                              const newSummary = {
-                                ...(result?.summary || {}),
-                                final_total_score: newCorrections.reduce((sum: number, c: any) => sum + (c.final_score || 0), 0)
-                              };
-                              setResult({ ...result, corrections: newCorrections, summary: newSummary });
-                            }}
-                            className="w-16 p-1 bg-brand-blue/5 border border-brand-blue/20 rounded text-center text-sm font-bold text-brand-blue focus:ring-1 focus:ring-brand-blue"
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="p-4 bg-white/50 rounded-2xl border border-white space-y-3">
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Resposta do Aluno</label>
-                        <textarea
-                          value={corr.student_answer || ''}
-                          onChange={(e) => {
-                            const newCorrections = [...result.corrections];
-                            newCorrections[i] = { ...corr, student_answer: e.target.value };
-                            setResult({ ...result, corrections: newCorrections });
-                          }}
-                          placeholder="Texto identificado pela IA..."
-                          className="w-full text-sm font-medium text-slate-700 bg-white/30 border border-slate-100 rounded-lg p-2 focus:ring-1 focus:ring-brand-blue resize-none min-h-[60px]"
-                        />
-                      </div>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-slate-100/50">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1 font-serif">Feedback</label>
-                          <textarea
-                            value={corr.feedback || ''}
-                            onChange={(e) => {
-                              const newCorrections = [...result.corrections];
-                              newCorrections[i] = { ...corr, feedback: e.target.value };
-                              setResult({ ...result, corrections: newCorrections });
-                            }}
-                            className="w-full text-xs text-slate-600 bg-white/50 border border-slate-100 rounded-lg p-2 focus:ring-1 focus:ring-brand-blue resize-none h-16"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1 font-serif">Justificativa IA</label>
-                          <textarea
-                            value={corr.justification || ''}
-                            onChange={(e) => {
-                              const newCorrections = [...result.corrections];
-                              newCorrections[i] = { ...corr, justification: e.target.value };
-                              setResult({ ...result, corrections: newCorrections });
-                            }}
-                            className="w-full text-xs text-slate-500 italic bg-white/50 border border-slate-100 rounded-lg p-2 focus:ring-1 focus:ring-brand-blue resize-none h-16"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex flex-col sm:flex-row gap-4 mt-8">
-                {!hasSaved ? (
-                  <button 
-                    onClick={saveResults}
-                    disabled={isSaving}
-                    className="flex-1 py-3 bg-brand-blue text-white font-bold rounded-xl hover:bg-brand-blue-dark transition-all flex items-center justify-center gap-2 shadow-md"
-                  >
-                    {isSaving ? <Loader2 className="animate-spin" size={20} /> : <CheckCircle2 size={20} />}
-                    {isSaving ? 'Salvando...' : 'Salvar'}
-                  </button>
-                ) : (
-                  <div className="flex-1 py-3 bg-emerald-50 text-emerald-600 font-bold rounded-xl flex items-center justify-center gap-2 border border-emerald-100">
-                    <CheckCircle2 size={20} />
-                    Salvo com Sucesso
-                  </div>
-                )}
-                <button 
-                  onClick={exportToPDF}
-                  className="flex-1 py-3 bg-brand-gold text-white font-bold rounded-xl hover:bg-brand-gold/90 transition-all flex items-center justify-center gap-2 shadow-md"
-                >
-                  <Printer size={20} />
-                  Baixar PDF
-                </button>
-                <button 
-                  onClick={() => {
-                    setResult(null);
-                    setFiles([]);
-                    setPreviews([]);
-                    setHasSaved(false);
-                  }}
-                  className="flex-1 py-3 bg-slate-100 text-brand-blue-dark font-bold rounded-xl hover:bg-slate-200 transition-colors"
-                >
-                  Nova Correção
-                </button>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </div>
     </div>
-  </div>
-);
+  );
+}
+
+function SlotDropzone({ onFiles, disabled, miniature }: { onFiles: (f: File[]) => void, disabled?: boolean, miniature?: boolean }) {
+  const dropOptions: any = {
+    onDrop: onFiles,
+    accept: { 'image/*': ['.jpeg', '.jpg', '.png'] },
+    disabled
+  };
+  const { getRootProps, getInputProps, isDragActive } = useDropzone(dropOptions);
+
+  if (miniature) {
+    return (
+      <div 
+        {...getRootProps()} 
+        className={cn(
+          "w-8 h-8 rounded-lg border border-dashed border-brand-yellow flex items-center justify-center cursor-pointer hover:bg-brand-yellow/5 transition-colors",
+          disabled && "opacity-50 cursor-not-allowed"
+        )}
+      >
+        <input {...getInputProps()} />
+        <Upload size={14} className="text-brand-yellow" />
+      </div>
+    );
+  }
+
+  return (
+    <div 
+      {...getRootProps()} 
+      className={cn(
+        "border border-dashed rounded-xl p-6 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer",
+        isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:bg-slate-50",
+        disabled && "opacity-50 cursor-not-allowed"
+      )}
+    >
+      <input {...getInputProps()} />
+      <div className="p-2 bg-white rounded-full text-slate-400 shadow-sm">
+        <Upload size={20} />
+      </div>
+      <p className="text-[10px] text-slate-500 font-bold uppercase text-center">Fotos da Atividade</p>
+    </div>
+  );
 }
 

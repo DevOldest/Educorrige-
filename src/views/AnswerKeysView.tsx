@@ -323,6 +323,7 @@ export default function AnswerKeysView() {
       });
 
       const responseText = response.text || '';
+
       const jsonMatch = responseText.match(/\{[\s\S]*\}/);
       
       if (!jsonMatch) {

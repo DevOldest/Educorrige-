@@ -35,27 +35,39 @@ export default function SystemTestsView() {
       if (error) throw error;
       setTests(prev => ({ ...prev, db: { status: 'pass', message: 'Conexão estabelecida com sucesso!' } }));
     } catch (err: any) {
-      setTests(prev => ({ ...prev, db: { status: 'fail', message: `Erro: ${err.message}` } }));
+      console.error('DB Test detailed error:', err);
+      if (err.message === 'Failed to fetch') {
+        setTests(prev => ({ ...prev, db: { status: 'fail', message: `Erro: Failed to fetch (Verifique VITE_SUPABASE_URL e sua internet)` } }));
+      } else {
+        setTests(prev => ({ ...prev, db: { status: 'fail', message: `Erro: ${err.message}` } }));
+      }
     }
   };
 
   const runApiTest = async () => {
-    setTests(prev => ({ ...prev, api: { status: 'running', message: 'Verificando chave...' } }));
+    setTests(prev => ({ ...prev, api: { status: 'running', message: 'Verificando chaves...' } }));
     
     const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
     const processKey = process.env.GEMINI_API_KEY;
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
     
     // Check which one is populated
     const hasVite = viteKey && viteKey.trim() !== '' && viteKey !== 'undefined' && viteKey !== 'null';
     const hasProcess = processKey && processKey.trim() !== '' && processKey !== 'undefined' && processKey !== 'null';
+    const hasSupabase = supabaseUrl && supabaseKey;
 
     if (!hasVite && !hasProcess) {
-      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Nenhuma chave API encontrada. No Vercel, use VITE_GEMINI_API_KEY.' } }));
+      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Falta: GEMINI_API_KEY' } }));
       return;
     }
     
-    const source = hasVite ? 'VITE_GEMINI_API_KEY (Vercel)' : 'GEMINI_API_KEY (Global)';
-    setTests(prev => ({ ...prev, api: { status: 'pass', message: `Chave detectada via: ${source}` } }));
+    if (!hasSupabase) {
+       setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Falta: VITE_SUPABASE_URL ou KEY (Obrigatório para o DB)' } }));
+       return;
+    }
+    
+    setTests(prev => ({ ...prev, api: { status: 'pass', message: 'Chaves detectadas com sucesso.' } }));
   };
 
   const runAiTest = async () => {
@@ -76,7 +88,13 @@ export default function SystemTestsView() {
         setTests(prev => ({ ...prev, ai: { status: 'pass', message: `IA respondeu, mas não o esperado: ${text}` } }));
       }
     } catch (err: any) {
-      setTests(prev => ({ ...prev, ai: { status: 'fail', message: `Erro: ${err.message}` } }));
+      console.error('AI Test detailed error:', err);
+      // Log more details if it's a fetch error
+      if (err.message === 'Failed to fetch') {
+        setTests(prev => ({ ...prev, ai: { status: 'fail', message: 'Erro: Failed to fetch (Possível problema de rede ou CORS)' } }));
+      } else {
+        setTests(prev => ({ ...prev, ai: { status: 'fail', message: `Erro: ${err.message}` } }));
+      }
     }
   };
 
