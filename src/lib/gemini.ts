@@ -1,15 +1,15 @@
 import { GoogleGenAI } from "@google/genai";
 
 const getApiKey = () => {
-  // 1. Try Vite's preferred way (Strictly for Browser/Frontend)
+  // Try Vite's preferred way (VITE_ prefix for client-side)
   const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
-  if (viteKey && viteKey !== 'undefined' && viteKey !== 'null' && viteKey.trim() !== '') {
+  if (viteKey && viteKey.trim() !== '' && viteKey !== 'undefined') {
     return viteKey;
   }
   
-  // 2. Fallback for AI Studio or local dev environment
+  // Fallback for AI Studio or dev
   const envKey = process.env.GEMINI_API_KEY;
-  if (envKey && envKey !== 'undefined' && envKey !== 'null' && envKey.trim() !== '') {
+  if (envKey && envKey.trim() !== '' && envKey !== 'undefined') {
     return envKey;
   }
   
@@ -18,9 +18,7 @@ const getApiKey = () => {
 
 const apiKey = getApiKey();
 
-// Use a supported model for the environment
+// Use standard stable model with explicit prefix
 export const GEMINI_MODEL = "gemini-3-flash-preview";
 
-export const ai = apiKey ? new GoogleGenAI({ 
-  apiKey
-}) : null;
+export const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
