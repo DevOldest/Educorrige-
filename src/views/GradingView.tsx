@@ -15,7 +15,8 @@ import {
   Settings,
   Search,
   X,
-  Printer
+  Printer,
+  RotateCcw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
@@ -35,11 +36,12 @@ export default function GradingView() {
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [activityType, setActivityType] = useState<'prova' | 'lista1' | 'lista2' | 'lista3'>('prova');
   
-  // Estado para Lote de 3 Atividades
+  // Estado para Lote de 4 Atividades
   const [batchSlots, setBatchSlots] = useState<any[]>([
     { id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
     { id: '2', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '3', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
+    { id: '3', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '4', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
   ]);
   
   const [isLoadingData, setIsLoadingData] = useState(false);
@@ -178,6 +180,18 @@ export default function GradingView() {
     const newPreviews = [...slot.previews, ...acceptedFiles.map(file => URL.createObjectURL(file))];
     
     updateSlot(id, { files: newFiles, previews: newPreviews });
+  };
+
+  const handleResetBatch = () => {
+    setBatchSlots(prev => prev.map(slot => ({
+      ...slot,
+      status: 'idle',
+      files: [],
+      previews: [],
+      result: null,
+      error: null
+    })));
+    setExpandedSlotId(null);
   };
 
   const removeFileFromSlot = (slotId: string, fileIndex: number) => {
@@ -517,7 +531,7 @@ export default function GradingView() {
 
         <div className="flex flex-col gap-2 min-w-[180px]">
           <label className="text-[10px] font-bold text-slate-400 uppercase">Configuração de Nota</label>
-          <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-xl">
+          <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-xl h-[46px]">
             <div className="flex items-center gap-1">
               <input 
                 type="checkbox"
@@ -535,6 +549,18 @@ export default function GradingView() {
               className="w-12 p-1 text-xs border border-slate-200 rounded text-center font-bold text-brand-blue"
             />
           </div>
+        </div>
+
+        <div className="flex flex-col gap-2">
+          <label className="text-[10px] font-bold text-slate-400 uppercase">Ações do Lote</label>
+          <button 
+            onClick={handleResetBatch}
+            className="h-[46px] px-4 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-2 transition-colors"
+            title="Limpar fotos e resultados mantendo filtros"
+          >
+            <RotateCcw size={14} />
+            Nova Correção
+          </button>
         </div>
       </div>
 
@@ -597,25 +623,26 @@ export default function GradingView() {
                       </button>
                     )}
                     
-                    <div className="flex items-center gap-1 ml-2">
-                      {slot.previews.length === 0 ? (
-                        <div className="flex gap-1">
-                          <SlotDropzone onFiles={(f) => handleFilesAdded(slot.id, f)} disabled={slot.status === 'processing'} miniature />
-                        </div>
-                      ) : (
-                        <div className="flex -space-x-2">
-                          {slot.previews.slice(0, 3).map((src: string, i: number) => (
-                            <div key={i} className="w-8 h-8 rounded-lg border-2 border-white overflow-hidden shadow-sm">
-                              <img src={src} className="w-full h-full object-cover" />
+                    <div className="flex items-center gap-2 ml-2">
+                      {slot.previews.length > 0 && (
+                        <div className="flex -space-x-2 items-center">
+                          {slot.previews.map((src: string, i: number) => (
+                            <div key={i} className="relative group/thumb">
+                              <div className="w-8 h-8 rounded-lg border-2 border-white overflow-hidden shadow-sm">
+                                <img src={src} className="w-full h-full object-cover" />
+                              </div>
+                              <button 
+                                onClick={() => removeFileFromSlot(slot.id, i)}
+                                className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover/thumb:opacity-100 transition-opacity z-10"
+                              >
+                                <X size={8} />
+                              </button>
                             </div>
                           ))}
-                          {slot.files.length > 3 && (
-                            <div className="w-8 h-8 rounded-lg border-2 border-white bg-slate-100 flex items-center justify-center text-[10px] font-bold text-slate-500">
-                              +{slot.files.length - 3}
-                            </div>
-                          )}
                         </div>
                       )}
+                      
+                      <SlotDropzone onFiles={(f) => handleFilesAdded(slot.id, f)} disabled={slot.status === 'processing'} miniature />
                     </div>
                   </div>
                 </div>
