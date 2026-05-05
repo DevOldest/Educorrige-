@@ -18,6 +18,8 @@ export default function ReportsView() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [isBulkDeleting, setIsBulkDeleting] = useState(false);
   
+  const [isGeneratingDetailed, setIsGeneratingDetailed] = useState(false);
+  
   const [filters, setFilters] = useState({
     search: '',
     classId: '',
@@ -94,15 +96,15 @@ export default function ReportsView() {
     setResults([]);
   };
 
-  const exportToPDF = (result: any, doc?: jsPDF, isLast?: boolean) => {
+  const exportToPDF = (result: any, doc?: jsPDF, isLast?: boolean, detailed: boolean = false) => {
     if (!result) return;
     const currentDoc = doc || new jsPDF();
     const pageWidth = currentDoc.internal.pageSize.getWidth();
 
     // Header
     currentDoc.setFontSize(20);
-    currentDoc.setTextColor(10, 37, 64); // brand-blue-dark
-    currentDoc.text('Relatório de Correção', pageWidth / 2, 20, { align: 'center' });
+    currentDoc.setTextColor(10, 37, 64);
+    currentDoc.text(detailed ? 'Relatório Pedagógico Detalhado' : 'Comprovante de Correção', pageWidth / 2, 20, { align: 'center' });
 
     // Student Info
     currentDoc.setFontSize(12);
@@ -115,14 +117,14 @@ export default function ReportsView() {
     // Score
     currentDoc.setFontSize(16);
     currentDoc.setTextColor(10, 37, 64);
-    currentDoc.text(`Nota: ${result.total_score.toFixed(1)} / ${result.max_score} (${Math.round(result.percentage)}%)`, pageWidth - 20, 45, { align: 'right' });
+    currentDoc.text(`Nota: ${result.total_score.toFixed(1)} / ${result.max_score}`, pageWidth - 20, 45, { align: 'right' });
 
-    // Overall Feedback
+    // Overall Feedback (Only if detailed)
     let currentY = 70;
-    if (result.overall_feedback) {
+    if (detailed && result.overall_feedback) {
       currentDoc.setFontSize(12);
       currentDoc.setTextColor(10, 37, 64);
-      currentDoc.text('Feedback Geral:', 20, 70);
+      currentDoc.text('Parecer Pedagógico:', 20, 70);
       currentDoc.setFontSize(10);
       currentDoc.setTextColor(80);
       const splitFeedback = currentDoc.splitTextToSize(result.overall_feedback, pageWidth - 40);
@@ -131,28 +133,48 @@ export default function ReportsView() {
     }
 
     // Table of corrections
-    const tableData = result.corrections.map((corr: any) => [
-      corr.questions?.question_number,
-      corr.questions?.question_type,
-      corr.answer_text || 'Sem resposta',
-      corr.ai_corrections?.[0]?.correction_feedback || '',
-      `${corr.score.toFixed(3)} / ${(corr.questions?.max_score || 0).toFixed(3)}`
-    ]);
+    let headers = ['Nº', 'Resposta do Aluno', 'Resultado', 'Nota'];
+    if (detailed) headers = ['Nº', 'Resposta', 'Justificativa Técnica / BNCC', 'Nota'];
+
+    const tableData = result.corrections.map((corr: any) => {
+      const isCorrect = corr.score >= (corr.questions?.max_score || 0);
+      const resultText = isCorrect ? 'ACERTO' : corr.score > 0 ? 'PARCIAL' : 'ERRO';
+      
+      if (detailed) {
+        const skills = corr.questions?.bncc_skills?.join(', ') || 'N/A';
+        const feedback = corr.ai_corrections?.[0]?.justification || corr.ai_corrections?.[0]?.correction_feedback || '-';
+        return [
+          corr.questions?.question_number,
+          corr.answer_text || 'Sem resposta',
+          `[BNCC: ${skills}]\n${feedback}`,
+          `${corr.score.toFixed(2)}`
+        ];
+      }
+
+      return [
+        corr.questions?.question_number,
+        corr.answer_text || 'Sem resposta',
+        resultText,
+        `${corr.score.toFixed(1)}`
+      ];
+    });
 
     autoTable(currentDoc, {
       startY: currentY,
-      head: [['Nº', 'Tipo', 'Resposta do Aluno', 'Feedback da IA', 'Pontos']],
+      head: [headers],
       body: tableData,
       headStyles: { fillColor: [10, 37, 64] },
-      styles: { fontSize: 8 },
-      columnStyles: {
-        2: { cellWidth: 40 },
-        3: { cellWidth: 60 }
+      styles: { fontSize: detailed ? 7 : 9 },
+      columnStyles: detailed ? {
+        1: { cellWidth: 40 },
+        2: { cellWidth: 100 }
+      } : {
+        1: { cellWidth: 80 }
       }
     });
 
     if (!doc) {
-      currentDoc.save(`Relatorio_${result.students?.name}_${result.assessments?.title}.pdf`);
+      currentDoc.save(`Relatorio_${detailed ? 'Detalhado_' : ''}${result.students?.name}.pdf`);
     } else if (!isLast) {
       currentDoc.addPage();
     }
@@ -200,7 +222,86 @@ export default function ReportsView() {
     }
   };
 
-  const fetchResultDetails = async (result: any) => {
+  const generateDetailedAIReport = async (result: any) => {
+    if (!supabase) return;
+    setIsGeneratingDetailed(true);
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      const { ai, GEMINI_MODEL } = await import('../lib/gemini');
+      
+      const prompt = `
+        Como Especialista Pedagógico, justifique detalhadamente a correção desta atividade.
+        Analise o desempenho do aluno com base no gabarito e habilidades BNCC.
+        
+        ALUNO: ${result.students?.name}
+        ATIVIDADE: ${result.assessments?.title}
+        NOTA: ${result.total_score} / ${result.max_score}
+        
+        CORREÇÕES:
+        ${result.corrections.map((c: any) => `
+          Questão ${c.questions?.question_number} (${c.questions?.question_type}):
+          Gabarito: ${c.questions?.expected_answer}
+          Resposta Aluno: ${c.answer_text}
+          Nota dada: ${c.score}
+          Habilidades BNCC: ${c.questions?.bncc_skills?.join(', ')}
+        `).join('\n')}
+        
+        TAREFA:
+        1. Para cada questão, escreva uma "justification" pedagógica curta e técnica.
+        2. Escreva um "overall_feedback" motivador e direcionado.
+        
+        RETORNE APENAS JSON:
+        {
+          "overall_feedback": "string",
+          "justifications": {
+            "[question_number]": "string"
+          }
+        }
+      `;
+
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      });
+
+      const responseText = response.text || '';
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+        const payload = JSON.parse(jsonMatch[0]);
+        
+        // Update database
+        await supabase.from('assessment_results')
+          .update({ overall_feedback: payload.overall_feedback })
+          .eq('id', result.id);
+          
+        for (const [qNum, just] of Object.entries(payload.justifications)) {
+          const corr = result.corrections.find((c: any) => c.questions?.question_number === parseInt(qNum));
+          if (corr && corr.ai_corrections?.[0]) {
+            await supabase.from('ai_corrections')
+              .update({ justification: just })
+              .eq('id', corr.ai_corrections[0].id);
+          }
+        }
+
+        // Refresh UI
+        await fetchResultDetails(result);
+        
+        setModal({
+          isOpen: true,
+          title: 'IA Concluiu a Análise',
+          message: 'Justificativas pedagógicas e BNCC foram geradas e salvas com sucesso.',
+          type: 'success'
+        });
+      }
+    } catch (error: any) {
+      console.error('Error generating detailed report:', error);
+      setModal({ isOpen: true, title: 'Erro', message: error.message, type: 'error' });
+    } finally {
+      setIsGeneratingDetailed(false);
+    }
+  };
+  async function fetchResultDetails(result: any) {
     if (!supabase) return;
     setIsFetchingDetails(true);
     try {
@@ -707,17 +808,34 @@ export default function ReportsView() {
               </div>
             </div>
 
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-between">
-              <button 
-                onClick={() => exportToPDF(selectedResult)}
-                className="flex items-center gap-2 px-6 py-3 bg-brand-gold text-white rounded-xl font-bold hover:bg-brand-gold/90 transition-all"
-              >
-                <Printer size={20} />
-                Exportar PDF
-              </button>
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex flex-wrap gap-3 justify-between">
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => exportToPDF(selectedResult, undefined, false, false)}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-brand-blue rounded-xl font-bold hover:bg-slate-50 transition-all text-xs"
+                >
+                  <Download size={16} />
+                  Baixar Comprovante
+                </button>
+                <button 
+                  onClick={() => exportToPDF(selectedResult, undefined, false, true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-brand-gold rounded-xl font-bold hover:bg-slate-50 transition-all text-xs"
+                >
+                  <FileText size={16} />
+                  Baixar Relatório Detalhado
+                </button>
+                <button 
+                  onClick={() => generateDetailedAIReport(selectedResult)}
+                  disabled={isGeneratingDetailed}
+                  className="flex items-center gap-2 px-4 py-2 bg-brand-blue-dark text-white rounded-xl font-bold hover:opacity-90 transition-all text-xs"
+                >
+                  {isGeneratingDetailed ? <Loader2 className="animate-spin" size={16} /> : <BarChart3 size={16} />}
+                  Gerar Justificativas IA
+                </button>
+              </div>
               <button 
                 onClick={() => setSelectedResult(null)}
-                className="px-8 py-3 bg-brand-blue-dark text-white rounded-xl font-bold hover:bg-brand-black transition-all"
+                className="px-8 py-2 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all"
               >
                 Fechar
               </button>

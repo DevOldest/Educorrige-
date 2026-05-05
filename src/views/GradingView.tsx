@@ -36,12 +36,18 @@ export default function GradingView() {
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [activityType, setActivityType] = useState<'prova' | 'lista1' | 'lista2' | 'lista3'>('prova');
   
-  // Estado para Lote de 4 Atividades
+  // Estado para Lote de 10 Atividades
   const [batchSlots, setBatchSlots] = useState<any[]>([
     { id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
     { id: '2', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
     { id: '3', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '4', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
+    { id: '4', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '5', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '6', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '7', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '8', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '9', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
+    { id: '10', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
   ]);
   
   const [isLoadingData, setIsLoadingData] = useState(false);
@@ -248,7 +254,8 @@ export default function GradingView() {
           const student = students.find(s => s.id === slot.studentId);
 
           const prompt = `
-            Você é um sistema de correção automatizada e precisa. Analise as imagens e compare com o gabarito.
+            Você é um sistema de correção ultra-rápido. Analise as imagens e forneça apenas as notas brutas. 
+            Não gere feedbacks detalhados agora. Focamos apenas na extração da resposta e nota.
             
             GABARITO OFICIAL:
             ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): ${q.expected_answer} (${q.max_score} pts) [BNCC: ${q.bncc_skills?.join(', ') || 'N/A'}]`).join('\n')}
@@ -259,7 +266,7 @@ export default function GradingView() {
             REGRAS:
             1. Identifique a resposta do aluno para cada questão.
             2. Atribua nota de acordo com o gabarito.
-            3. Feedback: Seja curtíssimo e direto (máx. 10 palavras).
+            3. Feedback: Retorne apenas "Correto", "Incorreto" ou "Parcial".
             4. Se a resposta for ilegível, "student_answer": null e "needs_review": true.
 
             ESTRUTURA DO JSON:
@@ -271,7 +278,7 @@ export default function GradingView() {
                   "student_answer": "Resposta extraída",
                   "ai_score": 1.0,
                   "max_score": 1.0,
-                  "feedback": "Feedback curto.",
+                  "feedback": "Correto.",
                   "needs_review": false
                 }
               ],
@@ -289,11 +296,14 @@ export default function GradingView() {
           });
 
           const responseText = response.text || '';
-          
           const jsonMatch = responseText.match(/\{[\s\S]*\}/);
           
           if (jsonMatch) {
-            updateSlot(slot.id, { result: JSON.parse(jsonMatch[0]), status: 'done' });
+            const parsedResult = JSON.parse(jsonMatch[0]);
+            updateSlot(slot.id, { result: parsedResult, status: 'done' });
+            
+            // AUTO-SAVE: Salva instantaneamente no banco de dados
+            await saveSingleSlot({ ...slot, result: parsedResult });
           } else {
             throw new Error('Retorno inválido da IA');
           }
@@ -301,8 +311,13 @@ export default function GradingView() {
           updateSlot(slot.id, { status: 'error', error: err.message });
         }
       }
-    } catch (err: any) {
-      console.error('Batch grading failed:', err);
+
+      setModal({
+        isOpen: true,
+        title: 'Lote Concluído',
+        message: 'Todas as atividades foram processadas e salvas automaticamente.',
+        type: 'success'
+      });
     } finally {
       setIsProcessingBatch(false);
     }
@@ -460,13 +475,13 @@ export default function GradingView() {
     const tableData = uniqueCorrections.map((corr: any) => [
       corr.question_number,
       corr.student_answer || 'Sem resposta',
-      corr.feedback || '',
+      corr.ai_score >= corr.max_score ? 'ACERTO' : corr.ai_score > 0 ? 'PARCIAL' : 'ERRO',
       `${corr.ai_score.toFixed(2)} pts`
     ]);
 
     autoTable(doc, {
       startY: 60,
-      head: [['Nº', 'Resposta', 'Feedback IA', 'Pontos']],
+      head: [['Nº', 'Resposta', 'Resultado', 'Pontos']],
       body: tableData,
       headStyles: { fillColor: [10, 37, 64] },
       styles: { fontSize: 8 }
@@ -774,7 +789,7 @@ export default function GradingView() {
           className="flex-1 py-4 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-xl flex items-center justify-center gap-2 disabled:opacity-50"
         >
           {isProcessingBatch ? <Loader2 className="animate-spin" size={20} /> : <CheckSquare size={20} />}
-          {isProcessingBatch ? 'Corrigindo Lote...' : 'Iniciar Correção em Lote (3 Alunos)'}
+          {isProcessingBatch ? 'Corrigindo Lote...' : 'Fogo na Bomba! Corrigir Lote (10 Alunos)'}
         </button>
 
         <button 
