@@ -248,10 +248,10 @@ export default function GradingView() {
           const student = students.find(s => s.id === slot.studentId);
 
           const prompt = `
-            Você é um sistema de correção automatizada. Analise as imagens desta prova e compare com o gabarito.
+            Você é um sistema de correção automatizada e precisa. Analise as imagens e compare com o gabarito.
             
             GABARITO OFICIAL:
-            ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): ${q.expected_answer} (${q.max_score} pts)`).join('\n')}
+            ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): ${q.expected_answer} (${q.max_score} pts) [BNCC: ${q.bncc_skills?.join(', ') || 'N/A'}]`).join('\n')}
 
             ALUNO: ${student?.name}
             ATIVIDADE_ID: ${selectedAssessmentId}
@@ -259,7 +259,7 @@ export default function GradingView() {
             REGRAS:
             1. Identifique a resposta do aluno para cada questão.
             2. Atribua nota de acordo com o gabarito.
-            3. Gere um breve feedback por questão.
+            3. Feedback: Seja curtíssimo e direto (máx. 10 palavras).
             4. Se a resposta for ilegível, "student_answer": null e "needs_review": true.
 
             ESTRUTURA DO JSON:
@@ -271,7 +271,7 @@ export default function GradingView() {
                   "student_answer": "Resposta extraída",
                   "ai_score": 1.0,
                   "max_score": 1.0,
-                  "feedback": "Correto.",
+                  "feedback": "Feedback curto.",
                   "needs_review": false
                 }
               ],
@@ -446,7 +446,18 @@ export default function GradingView() {
     doc.text(`Atividade: ${assessment?.title || 'N/A'}`, 20, 49);
 
     const result = slot.result;
-    const tableData = result.corrections.map((corr: any) => [
+
+    // Filter duplicates and sort questions numerically
+    const uniqueCorrections = (result.corrections || [])
+      .reduce((acc: any[], curr: any) => {
+        if (!acc.find(item => item.question_number === curr.question_number)) {
+          acc.push(curr);
+        }
+        return acc;
+      }, [])
+      .sort((a: any, b: any) => a.question_number - b.question_number);
+
+    const tableData = uniqueCorrections.map((corr: any) => [
       corr.question_number,
       corr.student_answer || 'Sem resposta',
       corr.feedback || '',

@@ -62,7 +62,7 @@ export default function ManagementView() {
   async function fetchInitialData() {
     if (!supabase) return;
     const [classesRes, unitsRes] = await Promise.all([
-      supabase.from('classes').select('*'),
+      supabase.from('classes').select('*').order('name'),
       supabase.from('units').select('*').order('name')
     ]);
     if (classesRes.data) setClasses(classesRes.data);

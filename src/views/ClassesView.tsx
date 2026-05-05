@@ -54,7 +54,7 @@ export default function ClassesView() {
     const { data, error } = await supabase
       .from('classes')
       .select('*, students(count)')
-      .order('created_at', { ascending: false });
+      .order('name', { ascending: true });
     
     if (data) setClasses(data);
     setIsLoading(false);
