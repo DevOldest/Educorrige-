@@ -38,13 +38,13 @@ export default function GradingView() {
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [activityType, setActivityType] = useState<'prova' | 'lista1' | 'lista2' | 'lista3'>('prova');
   
-  // Estado para Lote Dinâmico (começa com 1, vai até 10)
+  // Estado para Lote Dinâmico (começa com 1, vai até 20)
   const [batchSlots, setBatchSlots] = useState<any[]>([
     { id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
   ]);
   
   const addSlot = () => {
-    if (batchSlots.length >= 10) return;
+    if (batchSlots.length >= 20) return;
     const newId = (batchSlots.length + 1).toString();
     setBatchSlots(prev => [...prev, { 
       id: newId, 
@@ -209,6 +209,17 @@ export default function GradingView() {
       result: null,
       error: null
     })));
+    setExpandedSlotId(null);
+  };
+
+  const clearCompleted = () => {
+    setBatchSlots(prev => {
+      const remaining = prev.filter(s => s.status !== 'done');
+      if (remaining.length === 0) {
+        return [{ id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }];
+      }
+      return remaining;
+    });
     setExpandedSlotId(null);
   };
 
@@ -609,12 +620,12 @@ export default function GradingView() {
         <div className="flex flex-col gap-2">
           <label className="text-[10px] font-bold text-slate-400 uppercase">Ações do Lote</label>
           <button 
-            onClick={handleResetBatch}
+            onClick={clearCompleted}
             className="h-[46px] px-4 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-2 transition-colors"
-            title="Limpar fotos e resultados mantendo filtros"
+            title="Remove apenas os slots que já foram concluídos e salvos"
           >
             <RotateCcw size={14} />
-            Nova Correção
+            Limpar Concluídos
           </button>
         </div>
       </div>
@@ -817,7 +828,7 @@ export default function GradingView() {
             </div>
           );
         })}
-        {batchSlots.length < 10 && !isProcessingBatch && (
+        {batchSlots.length < 20 && !isProcessingBatch && (
           <button 
             onClick={addSlot}
             className="w-full py-4 border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 font-bold hover:border-brand-blue hover:text-brand-blue hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
