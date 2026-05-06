@@ -16,7 +16,9 @@ import {
   Search,
   X,
   Printer,
-  RotateCcw
+  RotateCcw,
+  Plus,
+  Trash2
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
@@ -36,19 +38,29 @@ export default function GradingView() {
   const [selectedUnitId, setSelectedUnitId] = useState('');
   const [activityType, setActivityType] = useState<'prova' | 'lista1' | 'lista2' | 'lista3'>('prova');
   
-  // Estado para Lote de 10 Atividades
+  // Estado para Lote Dinâmico (começa com 1, vai até 10)
   const [batchSlots, setBatchSlots] = useState<any[]>([
-    { id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '2', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '3', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '4', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '5', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '6', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '7', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '8', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '9', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null },
-    { id: '10', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
+    { id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
   ]);
+  
+  const addSlot = () => {
+    if (batchSlots.length >= 10) return;
+    const newId = (batchSlots.length + 1).toString();
+    setBatchSlots(prev => [...prev, { 
+      id: newId, 
+      studentId: '', 
+      files: [], 
+      previews: [], 
+      result: null, 
+      status: 'idle', 
+      error: null 
+    }]);
+  };
+
+  const removeSlot = (id: string) => {
+    if (batchSlots.length <= 1) return;
+    setBatchSlots(prev => prev.filter(s => s.id !== id));
+  };
   
   const [isLoadingData, setIsLoadingData] = useState(false);
   const [isProcessingBatch, setIsProcessingBatch] = useState(false);
@@ -213,13 +225,13 @@ export default function GradingView() {
   };
 
   const handleGradeBatch = async () => {
-    const activeSlots = batchSlots.filter(s => s.studentId && s.files.length > 0);
+    const activeSlots = batchSlots.filter(s => s.studentId && s.files.length > 0 && s.status !== 'done');
     
     if (activeSlots.length === 0 || !selectedAssessmentId || !ai) {
       setModal({
         isOpen: true,
         title: 'Dados Incompletos',
-        message: 'Preencha pelo menos um aluno com suas fotos e selecione o gabarito.',
+        message: 'Preencha pelo menos um aluno (que ainda não foi corrigido) com suas fotos e selecione o gabarito.',
         type: 'warning'
       });
       return;
@@ -236,77 +248,92 @@ export default function GradingView() {
 
       if (fetchError || !questions) throw new Error('Gabarito não encontrado');
 
-      // 2. Processar slots ativos sequencialmente para evitar 429/503 (ou paralelo moderado)
+      const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+      // 2. Processar slots ativos sequencialmente (CASCATA)
       for (const slot of activeSlots) {
         updateSlot(slot.id, { status: 'processing', error: null });
         
-        try {
-          const imageParts = await Promise.all(slot.files.map(async (file: File) => {
-            const base64 = await fileToBase64(file);
-            return {
-              inlineData: {
-                mimeType: file.type,
-                data: base64
-              }
-            };
-          }));
-
-          const student = students.find(s => s.id === slot.studentId);
-
-          const prompt = `
-            Você é um sistema de correção ultra-rápido. Analise as imagens e forneça apenas as notas brutas. 
-            Não gere feedbacks detalhados agora. Focamos apenas na extração da resposta e nota.
-            
-            GABARITO OFICIAL:
-            ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): ${q.expected_answer} (${q.max_score} pts) [BNCC: ${q.bncc_skills?.join(', ') || 'N/A'}]`).join('\n')}
-
-            ALUNO: ${student?.name}
-            ATIVIDADE_ID: ${selectedAssessmentId}
-
-            REGRAS:
-            1. Identifique a resposta do aluno para cada questão.
-            2. Atribua nota de acordo com o gabarito.
-            3. Feedback: Retorne apenas "Correto", "Incorreto" ou "Parcial".
-            4. Se a resposta for ilegível, "student_answer": null e "needs_review": true.
-
-            ESTRUTURA DO JSON:
-            {
-              "corrections": [
-                {
-                  "question_number": 1,
-                  "expected_answer": "Resposta do gabarito",
-                  "student_answer": "Resposta extraída",
-                  "ai_score": 1.0,
-                  "max_score": 1.0,
-                  "feedback": "Correto.",
-                  "needs_review": false
+        const tryProcessing = async (attempt: number = 0): Promise<void> => {
+          try {
+            const imageParts = await Promise.all(slot.files.map(async (file: File) => {
+              const base64 = await fileToBase64(file);
+              return {
+                inlineData: {
+                  mimeType: file.type,
+                  data: base64
                 }
-              ],
-              "summary": {
-                "ai_total_score": 10.0,
-                "max_total_score": 10.0,
-                "review_required": false
+              };
+            }));
+
+            const student = students.find(s => s.id === slot.studentId);
+            const prompt = `
+              Você é um sistema de correção ultra-rápido. Analise as imagens e forneça apenas as notas brutas. 
+              Não gere feedbacks detalhados agora. Focamos apenas na extração da resposta e nota.
+              
+              GABARITO OFICIAL:
+              ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): ${q.expected_answer} (${q.max_score} pts) [BNCC: ${q.bncc_skills?.join(', ') || 'N/A'}]`).join('\n')}
+
+              ALUNO: ${student?.name}
+              ATIVIDADE_ID: ${selectedAssessmentId}
+
+              REGRAS:
+              1. Identifique a resposta do aluno para cada questão.
+              2. Atribua nota de acordo com o gabarito.
+              3. Feedback: Retorne apenas "Correto", "Incorreto" ou "Parcial".
+              4. Se a resposta for ilegível, "student_answer": null e "needs_review": true.
+
+              ESTRUTURA DO JSON:
+              {
+                "corrections": [
+                  {
+                    "question_number": 1,
+                    "expected_answer": "Resposta do gabarito",
+                    "student_answer": "Resposta extraída",
+                    "ai_score": 1.0,
+                    "max_score": 1.0,
+                    "feedback": "Correto.",
+                    "needs_review": false
+                  }
+                ],
+                "summary": {
+                  "ai_total_score": 10.0,
+                  "max_total_score": 10.0,
+                  "review_required": false
+                }
               }
-            }
-          `;
+            `;
 
-          const response = await ai.models.generateContent({
-            model: GEMINI_MODEL,
-            contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }]
-          });
+            const response = await ai.models.generateContent({
+              model: GEMINI_MODEL,
+              contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }]
+            });
 
-          const responseText = response.text || '';
-          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-          
-          if (jsonMatch) {
-            const parsedResult = JSON.parse(jsonMatch[0]);
-            updateSlot(slot.id, { result: parsedResult, status: 'done' });
+            const responseText = response.text || '';
+            const jsonMatch = responseText.match(/\{[\s\S]*\}/);
             
-            // AUTO-SAVE: Salva instantaneamente no banco de dados
-            await saveSingleSlot({ ...slot, result: parsedResult });
-          } else {
-            throw new Error('Retorno inválido da IA');
+            if (jsonMatch) {
+              const parsedResult = JSON.parse(jsonMatch[0]);
+              updateSlot(slot.id, { result: parsedResult, status: 'done' });
+              await saveSingleSlot({ ...slot, result: parsedResult });
+            } else {
+              throw new Error('Retorno inválido da IA');
+            }
+          } catch (err: any) {
+            const isQuotaError = err.message?.includes('503') || err.message?.includes('429');
+            if (isQuotaError && attempt < 3) {
+              const waitTime = Math.pow(2, attempt + 1) * 1000; // 2s, 4s, 8s
+              updateSlot(slot.id, { error: `Limite atingido. Tentando em ${waitTime/1000}s...` });
+              await delay(waitTime);
+              return tryProcessing(attempt + 1);
+            }
+            throw err;
           }
+        };
+
+        try {
+          await tryProcessing();
+          await delay(500); // Intervalo de segurança entre slots
         } catch (err: any) {
           updateSlot(slot.id, { status: 'error', error: err.message });
         }
@@ -314,10 +341,12 @@ export default function GradingView() {
 
       setModal({
         isOpen: true,
-        title: 'Lote Concluído',
-        message: 'Todas as atividades foram processadas e salvas automaticamente.',
+        title: 'Processamento Concluído',
+        message: 'As atividades foram processadas em cascata. Verifique se algum slot apresentou erro persistente.',
         type: 'success'
       });
+    } catch (err: any) {
+      console.error('Batch grading failed:', err);
     } finally {
       setIsProcessingBatch(false);
     }
@@ -592,7 +621,7 @@ export default function GradingView() {
 
       {/* Slots de Lote */}
       <div className="space-y-6">
-        {batchSlots.map((slot) => {
+        {batchSlots.map((slot, index) => {
           const isExpanded = expandedSlotId === slot.id;
           const currentTotal = slot.result?.summary?.ai_total_score || 0;
           const maxTotal = slot.result?.summary?.max_total_score || 1;
@@ -608,7 +637,7 @@ export default function GradingView() {
               <div className="p-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-50">
                 <div className="flex items-center gap-4">
                   <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-400">
-                    {slot.id}
+                    {index + 1}
                   </div>
                   <div className="min-w-[200px]">
                     <select 
@@ -624,6 +653,15 @@ export default function GradingView() {
                 </div>
 
                 <div className="flex items-center gap-4">
+                  {batchSlots.length > 1 && slot.status !== 'processing' && (
+                    <button 
+                      onClick={() => removeSlot(slot.id)}
+                      className="p-2 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      title="Remover Slot"
+                    >
+                      <Trash2 size={18} />
+                    </button>
+                  )}
                   {slot.result && (
                     <div className="text-right">
                       <p className="text-[10px] text-slate-400 font-bold uppercase">Nota Final</p>
@@ -779,17 +817,26 @@ export default function GradingView() {
             </div>
           );
         })}
+        {batchSlots.length < 10 && !isProcessingBatch && (
+          <button 
+            onClick={addSlot}
+            className="w-full py-4 border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 font-bold hover:border-brand-blue hover:text-brand-blue hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+          >
+            <Plus size={20} />
+            Adicionar Outro Aluno ao Lote
+          </button>
+        )}
       </div>
 
       {/* Botões de Ação do Lote */}
-      <div className="flex flex-col sm:flex-row gap-4 pt-4">
+      <div className="flex flex-col sm:flex-row gap-4 pt-4 sticky bottom-8 bg-white/80 backdrop-blur-md p-4 rounded-3xl border border-white shadow-2xl">
         <button 
           onClick={handleGradeBatch}
-          disabled={isProcessingBatch || batchSlots.every(s => s.files.length === 0)}
+          disabled={isProcessingBatch || !selectedAssessmentId || batchSlots.every(s => s.files.length === 0)}
           className="flex-1 py-4 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-xl flex items-center justify-center gap-2 disabled:opacity-50"
         >
           {isProcessingBatch ? <Loader2 className="animate-spin" size={20} /> : <CheckSquare size={20} />}
-          {isProcessingBatch ? 'Corrigindo Lote...' : 'Fogo na Bomba! Corrigir Lote (10 Alunos)'}
+          {isProcessingBatch ? 'Corrigindo em Cascata...' : `Fogo na Bomba! Corrigir Lote (${batchSlots.filter(s => s.studentId && s.files.length > 0 && s.status !== 'done').length} Alunos)`}
         </button>
 
         <button 
