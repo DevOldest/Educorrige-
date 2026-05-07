@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X } from 'lucide-react';
+import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X, Search } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
@@ -28,6 +28,10 @@ export default function ClassesView() {
   const [newStudentName, setNewStudentName] = useState('');
   const [isAddingStudent, setIsAddingStudent] = useState(false);
 
+  const [searchTerm, setSearchTerm] = useState('');
+  const [studentSearchResults, setStudentSearchResults] = useState<any[]>([]);
+  const [isSearchingStudents, setIsSearchingStudents] = useState(false);
+
   const [modal, setModal] = useState<{
     isOpen: boolean;
     title: string;
@@ -44,6 +48,33 @@ export default function ClassesView() {
   useEffect(() => {
     fetchClasses();
   }, []);
+
+  useEffect(() => {
+    if (searchTerm.trim().length > 2) {
+      handleSearchStudents();
+    } else {
+      setStudentSearchResults([]);
+    }
+  }, [searchTerm]);
+
+  const handleSearchStudents = async () => {
+    if (!supabase || searchTerm.trim().length <= 2) return;
+    setIsSearchingStudents(true);
+    try {
+      const { data, error } = await supabase
+        .from('students')
+        .select('*, classes(name)')
+        .ilike('name', `%${searchTerm.trim()}%`)
+        .limit(10);
+      
+      if (error) throw error;
+      setStudentSearchResults(data || []);
+    } catch (err) {
+      console.error('Search error:', err);
+    } finally {
+      setIsSearchingStudents(false);
+    }
+  };
 
   async function fetchClasses() {
     if (!supabase) {
@@ -416,21 +447,89 @@ export default function ClassesView() {
 
   return (
     <div className="space-y-6">
-      <div className="flex justify-between items-center">
+      <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Minhas Turmas</h3>
           <p className="text-slate-500">Gerencie suas turmas e alunos cadastrados.</p>
         </div>
-        <button 
-          onClick={() => setShowUploadModal(true)}
-          className="flex items-center gap-2 bg-brand-blue text-white px-6 py-3 rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-lg"
-        >
-          <Plus size={20} />
-          Nova Turma (PDF)
-        </button>
+        <div className="flex flex-col sm:flex-row items-stretch gap-3 w-full sm:w-auto">
+          <div className="relative group min-w-[250px]">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-brand-blue transition-colors" size={18} />
+            <input 
+              type="text"
+              placeholder="Buscar aluno por nome..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-blue focus:border-transparent outline-none transition-all shadow-sm text-sm"
+            />
+            {searchTerm && (
+              <button 
+                onClick={() => setSearchTerm('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
+              >
+                <X size={16} />
+              </button>
+            )}
+          </div>
+          <button 
+            onClick={() => setShowUploadModal(true)}
+            className="flex items-center justify-center gap-2 bg-brand-blue text-white px-6 py-3 rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-lg whitespace-nowrap"
+          >
+            <Plus size={20} />
+            Nova Turma (PDF)
+          </button>
+        </div>
       </div>
 
-      {isLoading ? (
+      {searchTerm.trim().length > 2 ? (
+        <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+          <div className="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
+            <h4 className="font-bold text-brand-blue-dark flex items-center gap-2">
+              <Search size={18} className="text-brand-gold" />
+              Resultados da Busca
+            </h4>
+            <span className="text-xs text-slate-400 font-bold uppercase">
+              {studentSearchResults.length} Encontrado(s)
+            </span>
+          </div>
+          <div className="divide-y divide-slate-50">
+            {isSearchingStudents ? (
+              <div className="p-8 flex justify-center">
+                <Loader2 className="animate-spin text-brand-gold" size={24} />
+              </div>
+            ) : studentSearchResults.length > 0 ? (
+              studentSearchResults.map((student) => (
+                <div key={student.id} className="p-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
+                  <div>
+                    <p className="font-bold text-brand-blue-dark">{student.name}</p>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
+                      <span className="bg-brand-blue/10 text-brand-blue px-2 py-0.5 rounded-full font-bold">
+                        Chamada: {student.roll_number}
+                      </span>
+                      <span>•</span>
+                      <span className="font-medium">Turma: {student.classes?.name}</span>
+                    </div>
+                  </div>
+                  <button 
+                    onClick={() => {
+                      const cls = classes.find(c => c.id === student.class_id);
+                      if (cls) handleViewStudents(cls);
+                      setSearchTerm('');
+                    }}
+                    className="px-4 py-2 text-xs font-bold text-brand-blue hover:bg-brand-blue/5 rounded-lg transition-colors border border-brand-blue/20"
+                  >
+                    Ver Turma
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="p-10 text-center text-slate-400 italic">
+                Nenhum aluno encontrado com este nome.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : isLoading ? (
         <div className="flex justify-center py-20">
           <Loader2 className="animate-spin text-brand-gold" size={40} />
         </div>
