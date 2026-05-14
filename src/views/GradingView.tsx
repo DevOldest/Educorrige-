@@ -166,7 +166,7 @@ export default function GradingView() {
 
   const addStudentToSlot = (slotId: string) => {
     setBatchSlots(prev => prev.map(slot => {
-      if (slot.id !== slotId || slot.studentIds.length >= 2) return slot;
+      if (slot.id !== slotId || slot.studentIds.length >= 4) return slot;
       return { ...slot, studentIds: [...slot.studentIds, ''] };
     }));
   };
@@ -709,13 +709,13 @@ export default function GradingView() {
                         )}
                       </div>
                     ))}
-                    {slot.studentIds.length < 2 && slot.status !== 'processing' && (
+                    {slot.studentIds.length < 4 && slot.status !== 'processing' && (
                       <button 
                         onClick={() => addStudentToSlot(slot.id)}
                         className="text-[10px] font-bold text-brand-blue flex items-center gap-1 px-2 hover:underline"
                         disabled={!selectedClassId}
                       >
-                        <Plus size={10} /> Em Grupo (Máx 2)
+                        <Plus size={10} /> Em Grupo (Máx 4)
                       </button>
                     )}
                   </div>
