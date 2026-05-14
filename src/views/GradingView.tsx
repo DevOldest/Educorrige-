@@ -40,7 +40,7 @@ export default function GradingView() {
   
   // Estado para Lote Dinâmico (começa com 1, vai até 20)
   const [batchSlots, setBatchSlots] = useState<any[]>([
-    { id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }
+    { id: '1', studentIds: [''], files: [], previews: [], result: null, status: 'idle', error: null }
   ]);
   
   const addSlot = () => {
@@ -48,7 +48,7 @@ export default function GradingView() {
     const newId = (batchSlots.length + 1).toString();
     setBatchSlots(prev => [...prev, { 
       id: newId, 
-      studentId: '', 
+      studentIds: [''], 
       files: [], 
       previews: [], 
       result: null, 
@@ -155,6 +155,31 @@ export default function GradingView() {
     setBatchSlots(prev => prev.map(slot => slot.id === id ? { ...slot, ...updates } : slot));
   };
 
+  const updateStudentInSlot = (slotId: string, studentIndex: number, studentId: string) => {
+    setBatchSlots(prev => prev.map(slot => {
+      if (slot.id !== slotId) return slot;
+      const newIds = [...slot.studentIds];
+      newIds[studentIndex] = studentId;
+      return { ...slot, studentIds: newIds };
+    }));
+  };
+
+  const addStudentToSlot = (slotId: string) => {
+    setBatchSlots(prev => prev.map(slot => {
+      if (slot.id !== slotId || slot.studentIds.length >= 2) return slot;
+      return { ...slot, studentIds: [...slot.studentIds, ''] };
+    }));
+  };
+
+  const removeStudentFromSlot = (slotId: string, studentIndex: number) => {
+    setBatchSlots(prev => prev.map(slot => {
+      if (slot.id !== slotId || slot.studentIds.length <= 1) return slot;
+      const newIds = [...slot.studentIds];
+      newIds.splice(studentIndex, 1);
+      return { ...slot, studentIds: newIds };
+    }));
+  };
+
   const updateCorrectionInSlot = (slotId: string, correctionIndex: number, field: string, value: any) => {
     setBatchSlots(prev => prev.map(slot => {
       if (slot.id !== slotId || !slot.result) return slot;
@@ -236,7 +261,7 @@ export default function GradingView() {
   };
 
   const handleGradeBatch = async () => {
-    const activeSlots = batchSlots.filter(s => s.studentId && s.files.length > 0 && s.status !== 'done');
+    const activeSlots = batchSlots.filter(s => s.studentIds.some((id: string) => id) && s.files.length > 0 && s.status !== 'done');
     
     if (activeSlots.length === 0 || !selectedAssessmentId || !ai) {
       setModal({
@@ -277,7 +302,11 @@ export default function GradingView() {
               };
             }));
 
-            const student = students.find(s => s.id === slot.studentId);
+            const studentNames = slot.studentIds
+              .map((id: string) => students.find(s => s.id === id)?.name)
+              .filter(Boolean)
+              .join(', ');
+
             const prompt = `
               Você é um sistema de correção ultra-rápido. Analise as imagens e forneça apenas as notas brutas. 
               Não gere feedbacks detalhados agora. Focamos apenas na extração da resposta e nota.
@@ -285,7 +314,7 @@ export default function GradingView() {
               GABARITO OFICIAL:
               ${questions.map(q => `Questão ${q.question_number} (${q.question_type}): ${q.expected_answer} (${q.max_score} pts) [BNCC: ${q.bncc_skills?.join(', ') || 'N/A'}]`).join('\n')}
 
-              ALUNO: ${student?.name}
+              ALUNO(S): ${studentNames}
               ATIVIDADE_ID: ${selectedAssessmentId}
 
               REGRAS:
@@ -396,7 +425,6 @@ export default function GradingView() {
     if (!user) throw new Error('Auth error');
 
     const result = slot.result;
-    const studentId = slot.studentId;
     const assessmentId = selectedAssessmentId;
 
     // 1. Atividade Detalhes
@@ -408,66 +436,71 @@ export default function GradingView() {
 
     if (!assessment) return;
 
-    // 2. Salvar Respostas Individuais
-    for (const corr of result.corrections) {
-      const { data: q } = await supabase.from('questions')
-        .select('id').eq('assessment_id', assessmentId).eq('question_number', corr.question_number).single();
+    // Loop individual for each student in the group
+    for (const studentId of slot.studentIds) {
+      if (!studentId) continue;
 
-      if (q) {
-        const finalItemScore = corr.final_score !== undefined ? corr.final_score : corr.ai_score;
-        
-        const { data: ans } = await supabase.from('student_answers').insert([{
-          student_id: studentId,
-          assessment_id: assessmentId,
-          question_id: q.id,
-          answer_text: corr.student_answer || '',
-          score: finalItemScore,
-          user_id: user.id
-        }]).select().single();
+      // 2. Salvar Respostas Individuais
+      for (const corr of result.corrections) {
+        const { data: q } = await supabase.from('questions')
+          .select('id').eq('assessment_id', assessmentId).eq('question_number', corr.question_number).single();
 
-        if (ans) {
-          await supabase.from('ai_corrections').insert([{
-            student_answer_id: ans.id,
-            ai_model: GEMINI_MODEL,
-            correction_feedback: corr.feedback,
-            score_given: finalItemScore,
-            justification: corr.justification,
+        if (q) {
+          const finalItemScore = corr.final_score !== undefined ? corr.final_score : corr.ai_score;
+          
+          const { data: ans } = await supabase.from('student_answers').insert([{
+            student_id: studentId,
+            assessment_id: assessmentId,
+            question_id: q.id,
+            answer_text: corr.student_answer || '',
+            score: finalItemScore,
             user_id: user.id
-          }]);
+          }]).select().single();
+
+          if (ans) {
+            await supabase.from('ai_corrections').insert([{
+              student_answer_id: ans.id,
+              ai_model: GEMINI_MODEL,
+              correction_feedback: corr.feedback,
+              score_given: finalItemScore,
+              justification: corr.justification,
+              user_id: user.id
+            }]);
+          }
         }
       }
-    }
 
-    // 3. Resultado Geral e Gestão
-    const rawScore = result.summary.ai_total_score || 0;
-    const maxRaw = result.summary.max_total_score || 1;
-    const convertedScore = useConvertedScore ? (rawScore / maxRaw) * targetScale : rawScore;
-    const finalScore = Math.round(convertedScore * 10) / 10;
+      // 3. Resultado Geral e Gestão
+      const rawScore = result.summary.ai_total_score || 0;
+      const maxRaw = result.summary.max_total_score || 1;
+      const convertedScore = useConvertedScore ? (rawScore / maxRaw) * targetScale : rawScore;
+      const finalScore = Math.round(convertedScore * 10) / 10;
 
-    await supabase.from('assessment_results').insert([{
-      student_id: studentId,
-      assessment_id: assessmentId,
-      total_score: finalScore,
-      max_score: useConvertedScore ? targetScale : maxRaw,
-      percentage: (rawScore / maxRaw) * 100,
-      ai_corrected: true,
-      user_id: user.id
-    }]);
+      await supabase.from('assessment_results').insert([{
+        student_id: studentId,
+        assessment_id: assessmentId,
+        total_score: finalScore,
+        max_score: useConvertedScore ? targetScale : maxRaw,
+        percentage: (rawScore / maxRaw) * 100,
+        ai_corrected: true,
+        user_id: user.id
+      }]);
 
-    // Atualizar tabela GRADES
-    const field = assessment.type === 'prova' ? 'exam_score' : 
-                 assessment.type === 'lista2' ? 'list2_score' : 
-                 assessment.type === 'lista3' ? 'list3_score' : 'list1_score';
+      // Atualizar tabela GRADES
+      const field = assessment.type === 'prova' ? 'exam_score' : 
+                   assessment.type === 'lista2' ? 'list2_score' : 
+                   assessment.type === 'lista3' ? 'list3_score' : 'list1_score';
 
-    const { data: existing } = await supabase.from('grades')
-      .select('*').eq('student_id', studentId).eq('unit_id', assessment.unit_id).maybeSingle();
+      const { data: existing } = await supabase.from('grades')
+        .select('*').eq('student_id', studentId).eq('unit_id', assessment.unit_id).maybeSingle();
 
-    if (existing) {
-      const updated = { ...existing, [field]: finalScore };
-      const sum = (updated.list1_score || 0) + (updated.list2_score || 0) + (updated.list3_score || 0) + (updated.exam_score || 0) + (updated.notebook_score || 0) + (updated.anki_score || 0);
-      await supabase.from('grades').update({ [field]: finalScore, unit_average: Math.min(10, sum) }).eq('id', existing.id);
-    } else {
-      await supabase.from('grades').insert([{ student_id: studentId, unit_id: assessment.unit_id, [field]: finalScore, unit_average: finalScore, user_id: user.id }]);
+      if (existing) {
+        const updated = { ...existing, [field]: finalScore };
+        const sum = (updated.list1_score || 0) + (updated.list2_score || 0) + (updated.list3_score || 0) + (updated.exam_score || 0) + (updated.notebook_score || 0) + (updated.anki_score || 0);
+        await supabase.from('grades').update({ [field]: finalScore, unit_average: Math.min(10, sum) }).eq('id', existing.id);
+      } else {
+        await supabase.from('grades').insert([{ student_id: studentId, unit_id: assessment.unit_id, [field]: finalScore, unit_average: finalScore, user_id: user.id }]);
+      }
     }
   }
 
@@ -481,9 +514,13 @@ export default function GradingView() {
   }
 
   const exportToPDF = (slot: any) => {
-    if (!slot.result || !slot.studentId || !selectedAssessmentId) return;
+    if (!slot.result || !slot.studentIds.some((id: string) => id) || !selectedAssessmentId) return;
     
-    const student = students.find(s => s.id === slot.studentId);
+    const studentNames = slot.studentIds
+      .map((id: string) => students.find(s => s.id === id)?.name)
+      .filter(Boolean)
+      .join(' & ');
+      
     const assessment = assessments.find(a => a.id === selectedAssessmentId);
     const className = classes.find(c => c.id === selectedClassId)?.name || '';
 
@@ -496,7 +533,7 @@ export default function GradingView() {
 
     doc.setFontSize(12);
     doc.setTextColor(100);
-    doc.text(`Aluno: ${student?.name || 'N/A'}`, 20, 35);
+    doc.text(`Aluno(s): ${studentNames || 'N/A'}`, 20, 35);
     doc.text(`Turma: ${className}`, 20, 42);
     doc.text(`Atividade: ${assessment?.title || 'N/A'}`, 20, 49);
 
@@ -527,7 +564,7 @@ export default function GradingView() {
       styles: { fontSize: 8 }
     });
 
-    doc.save(`Relatorio_${student?.name || 'Aluno'}.pdf`);
+    doc.save(`Relatorio_${studentNames.split(' & ')[0] || 'Aluno'}.pdf`);
   };
 
   return (
@@ -650,16 +687,37 @@ export default function GradingView() {
                   <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-400">
                     {index + 1}
                   </div>
-                  <div className="min-w-[200px]">
-                    <select 
-                      value={slot.studentId}
-                      onChange={(e) => updateSlot(slot.id, { studentId: e.target.value })}
-                      className="w-full p-2 bg-transparent border-none font-bold text-brand-blue-dark focus:ring-0"
-                      disabled={!selectedClassId || slot.status === 'processing'}
-                    >
-                      <option value="">Selecionar Aluno</option>
-                      {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
-                    </select>
+                  <div className="flex flex-col gap-2 min-w-[220px]">
+                    {slot.studentIds.map((sId: string, sIdx: number) => (
+                      <div key={sIdx} className="flex items-center gap-1 group/student">
+                        <select 
+                          value={sId}
+                          onChange={(e) => updateStudentInSlot(slot.id, sIdx, e.target.value)}
+                          className="flex-1 p-2 bg-transparent border-none font-bold text-brand-blue-dark focus:ring-0 text-sm"
+                          disabled={!selectedClassId || slot.status === 'processing'}
+                        >
+                          <option value="">{sIdx === 0 ? 'Selecionar Aluno' : 'Segundo Aluno'}</option>
+                          {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
+                        </select>
+                        {sIdx > 0 && slot.status !== 'processing' && (
+                          <button 
+                            onClick={() => removeStudentFromSlot(slot.id, sIdx)}
+                            className="p-1 text-slate-300 hover:text-red-500 opacity-0 group-hover/student:opacity-100 transition-opacity"
+                          >
+                            <X size={14} />
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {slot.studentIds.length < 2 && slot.status !== 'processing' && (
+                      <button 
+                        onClick={() => addStudentToSlot(slot.id)}
+                        className="text-[10px] font-bold text-brand-blue flex items-center gap-1 px-2 hover:underline"
+                        disabled={!selectedClassId}
+                      >
+                        <Plus size={10} /> Em Grupo (Máx 2)
+                      </button>
+                    )}
                   </div>
                 </div>
 
@@ -847,7 +905,7 @@ export default function GradingView() {
           className="flex-1 py-4 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-xl flex items-center justify-center gap-2 disabled:opacity-50"
         >
           {isProcessingBatch ? <Loader2 className="animate-spin" size={20} /> : <CheckSquare size={20} />}
-          {isProcessingBatch ? 'Corrigindo em Cascata...' : `Fogo na Bomba! Corrigir Lote (${batchSlots.filter(s => s.studentId && s.files.length > 0 && s.status !== 'done').length} Alunos)`}
+          {isProcessingBatch ? 'Corrigindo em Cascata...' : `Fogo na Bomba! Corrigir Lote (${batchSlots.filter(s => s.studentIds.some((id: string) => id) && s.files.length > 0 && s.status !== 'done').length} Alunos/Grupos)`}
         </button>
 
         <button 
