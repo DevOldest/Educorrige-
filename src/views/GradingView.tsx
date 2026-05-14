@@ -241,7 +241,7 @@ export default function GradingView() {
     setBatchSlots(prev => {
       const remaining = prev.filter(s => s.status !== 'done');
       if (remaining.length === 0) {
-        return [{ id: '1', studentId: '', files: [], previews: [], result: null, status: 'idle', error: null }];
+        return [{ id: '1', studentIds: [''], files: [], previews: [], result: null, status: 'idle', error: null }];
       }
       return remaining;
     });
