@@ -95,7 +95,7 @@ export default function SystemTestsView() {
           parts: [{ text: "Diga 'OK' se você estiver funcionando." }]
         }]
       });
-      const text = response.text || '';
+      const text = typeof response.text === 'function' ? response.text() : (response.text || '');
       if (text.includes('OK')) {
         setTests(prev => ({ ...prev, ai: { status: 'pass', message: `IA respondeu: ${text}` } }));
       } else {
