@@ -20,27 +20,13 @@ export default function SystemTestsView() {
     db: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
     api: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
     ai: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
-    pdf: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
-    server: { status: 'idle' | 'running' | 'pass' | 'fail', message: string }
+    pdf: { status: 'idle' | 'running' | 'pass' | 'fail', message: string }
   }>({
     db: { status: 'idle', message: '' },
     api: { status: 'idle', message: '' },
     ai: { status: 'idle', message: '' },
-    pdf: { status: 'idle', message: '' },
-    server: { status: 'idle', message: '' }
+    pdf: { status: 'idle', message: '' }
   });
-
-  const runServerTest = async () => {
-    setTests(prev => ({ ...prev, server: { status: 'running', message: 'Testando backend...' } }));
-    try {
-      const response = await fetch('/api/health');
-      if (!response.ok) throw new Error(`Status: ${response.status}`);
-      const data = await response.json();
-      setTests(prev => ({ ...prev, server: { status: 'pass', message: `Backend operacional! (${data.environment || 'production'})` } }));
-    } catch (err: any) {
-      setTests(prev => ({ ...prev, server: { status: 'fail', message: `Erro: ${err.message}` } }));
-    }
-  };
 
   const runDbTest = async () => {
     setTests(prev => ({ ...prev, db: { status: 'running', message: 'Testando conexão...' } }));
@@ -95,7 +81,7 @@ export default function SystemTestsView() {
           parts: [{ text: "Diga 'OK' se você estiver funcionando." }]
         }]
       });
-      const text = typeof response.text === 'function' ? response.text() : (response.text || '');
+      const text = response.text || '';
       if (text.includes('OK')) {
         setTests(prev => ({ ...prev, ai: { status: 'pass', message: `IA respondeu: ${text}` } }));
       } else {
@@ -113,7 +99,6 @@ export default function SystemTestsView() {
   };
 
   const runAllTests = async () => {
-    await runServerTest();
     await runDbTest();
     await runApiTest();
     await runAiTest();
@@ -136,15 +121,6 @@ export default function SystemTestsView() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-        {/* Server Card */}
-        <TestCard 
-          title="Servidor Backend"
-          icon={<Cpu size={24} />}
-          status={tests.server.status}
-          message={tests.server.message}
-          onRun={runServerTest}
-        />
-
         {/* DB Card */}
         <TestCard 
           title="Banco de Dados (Supabase)"
