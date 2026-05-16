@@ -1,5 +1,8 @@
 {
   "name": "3 em 1 Correções",
   "description": "Plataforma de correção automática de atividades escolares assistida por IA (Prova 4.0, Listas 1.0, Caderno 1.5, Anki 1.5).",
-  "requestFramePermissions": []
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
 }
