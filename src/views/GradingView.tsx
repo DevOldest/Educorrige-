@@ -67,7 +67,6 @@ export default function GradingView() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [targetScale, setTargetScale] = useState(10);
   const [useConvertedScore, setUseConvertedScore] = useState(true);
-  const [expandedSlotId, setExpandedSlotId] = useState<string | null>(null);
 
   const [modal, setModal] = useState<{
     isOpen: boolean;
@@ -234,7 +233,6 @@ export default function GradingView() {
       result: null,
       error: null
     })));
-    setExpandedSlotId(null);
   };
 
   const clearCompleted = () => {
@@ -245,7 +243,6 @@ export default function GradingView() {
       }
       return remaining;
     });
-    setExpandedSlotId(null);
   };
 
   const removeFileFromSlot = (slotId: string, fileIndex: number) => {
@@ -461,9 +458,9 @@ export default function GradingView() {
             await supabase.from('ai_corrections').insert([{
               student_answer_id: ans.id,
               ai_model: GEMINI_MODEL,
-              correction_feedback: corr.feedback,
+              correction_feedback: corr.feedback || '',
               score_given: finalItemScore,
-              justification: corr.justification,
+              justification: corr.feedback || '',
               user_id: user.id
             }]);
           }
@@ -579,13 +576,13 @@ export default function GradingView() {
       />
 
       {/* Configuração Global */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 flex flex-wrap gap-4 items-end">
+      <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 flex flex-wrap gap-4 items-end transition-colors">
         <div className="flex-1 min-w-[200px] space-y-2">
           <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
           <select 
             value={selectedClassId}
             onChange={(e) => setSelectedClassId(e.target.value)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
           >
             <option value="">Selecionar Turma</option>
             {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -597,7 +594,7 @@ export default function GradingView() {
           <select 
             value={activityType}
             onChange={(e) => setActivityType(e.target.value as any)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
           >
             <option value="prova">Prova</option>
             <option value="lista1">Lista 1</option>
@@ -611,7 +608,7 @@ export default function GradingView() {
           <select 
             value={selectedUnitId}
             onChange={(e) => setSelectedUnitId(e.target.value)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
           >
             <option value="">Todas Unidades</option>
             {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
@@ -623,7 +620,7 @@ export default function GradingView() {
           <select 
             value={selectedAssessmentId}
             onChange={(e) => setSelectedAssessmentId(e.target.value)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold text-brand-blue-dark"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold text-brand-blue-dark dark:text-brand-yellow"
           >
             <option value="">Selecionar Gabarito</option>
             {assessments
@@ -633,23 +630,23 @@ export default function GradingView() {
         </div>
 
         <div className="flex flex-col gap-2 min-w-[180px]">
-          <label className="text-[10px] font-bold text-slate-400 uppercase">Configuração de Nota</label>
-          <div className="flex items-center gap-3 bg-slate-50 p-2 rounded-xl h-[46px]">
+          <label className="text-[10px] font-bold text-slate-400 uppercase font-bold">Configuração de Nota</label>
+          <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-800 p-2 rounded-xl h-[46px] transition-colors">
             <div className="flex items-center gap-1">
               <input 
                 type="checkbox"
                 id="convert"
                 checked={useConvertedScore}
                 onChange={(e) => setUseConvertedScore(e.target.checked)}
-                className="w-4 h-4 text-brand-blue rounded border-slate-300"
+                className="w-4 h-4 text-brand-blue rounded border-slate-300 dark:border-slate-700"
               />
-              <label htmlFor="convert" className="text-[10px] font-bold text-slate-500 uppercase cursor-pointer">Converter p/</label>
+              <label htmlFor="convert" className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase cursor-pointer">Converter p/</label>
             </div>
             <input 
               type="number"
               value={targetScale}
               onChange={(e) => setTargetScale(parseFloat(e.target.value) || 0)}
-              className="w-12 p-1 text-xs border border-slate-200 rounded text-center font-bold text-brand-blue"
+              className="w-12 p-1 text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded text-center font-bold text-brand-blue dark:text-brand-yellow transition-colors"
             />
           </div>
         </div>
@@ -658,7 +655,7 @@ export default function GradingView() {
           <label className="text-[10px] font-bold text-slate-400 uppercase">Ações do Lote</label>
           <button 
             onClick={clearCompleted}
-            className="h-[46px] px-4 bg-slate-100 text-slate-500 rounded-xl text-xs font-bold hover:bg-slate-200 flex items-center gap-2 transition-colors"
+            className="h-[46px] px-4 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center gap-2 transition-colors"
             title="Remove apenas os slots que já foram concluídos e salvos"
           >
             <RotateCcw size={14} />
@@ -670,21 +667,20 @@ export default function GradingView() {
       {/* Slots de Lote */}
       <div className="space-y-6">
         {batchSlots.map((slot, index) => {
-          const isExpanded = expandedSlotId === slot.id;
           const currentTotal = slot.result?.summary?.ai_total_score || 0;
           const maxTotal = slot.result?.summary?.max_total_score || 1;
           const convertedVal = useConvertedScore ? (currentTotal / maxTotal * targetScale).toFixed(1) : currentTotal.toFixed(1);
 
           return (
             <div key={slot.id} className={cn(
-              "bg-white rounded-3xl shadow-sm border transition-all overflow-hidden",
+              "bg-white dark:bg-slate-900 rounded-3xl shadow-sm border transition-all overflow-hidden",
               slot.status === 'processing' ? "border-brand-yellow ring-2 ring-brand-yellow/10" : 
-              slot.status === 'done' ? "border-slate-100" : "border-slate-100"
+              slot.status === 'done' ? "border-slate-100 dark:border-slate-800" : "border-slate-100 dark:border-slate-800"
             )}>
               {/* Header do Slot */}
-              <div className="p-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-50">
+              <div className="p-6 flex flex-wrap items-center justify-between gap-4 border-b border-slate-50 dark:border-slate-800 transition-colors">
                 <div className="flex items-center gap-4">
-                  <div className="w-10 h-10 rounded-full bg-slate-100 flex items-center justify-center font-bold text-slate-400">
+                  <div className="w-10 h-10 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center font-bold text-slate-400 dark:text-slate-500 transition-colors">
                     {index + 1}
                   </div>
                   <div className="flex flex-col gap-2 min-w-[220px]">
@@ -693,7 +689,7 @@ export default function GradingView() {
                         <select 
                           value={sId}
                           onChange={(e) => updateStudentInSlot(slot.id, sIdx, e.target.value)}
-                          className="flex-1 p-2 bg-transparent border-none font-bold text-brand-blue-dark focus:ring-0 text-sm"
+                          className="flex-1 p-2 bg-transparent border-none font-bold text-brand-blue-dark dark:text-brand-yellow focus:ring-0 text-sm italic transition-colors"
                           disabled={!selectedClassId || slot.status === 'processing'}
                         >
                           <option value="">{sIdx === 0 ? 'Selecionar Aluno' : 'Segundo Aluno'}</option>
@@ -702,7 +698,7 @@ export default function GradingView() {
                         {sIdx > 0 && slot.status !== 'processing' && (
                           <button 
                             onClick={() => removeStudentFromSlot(slot.id, sIdx)}
-                            className="p-1 text-slate-300 hover:text-red-500 opacity-0 group-hover/student:opacity-100 transition-opacity"
+                            className="p-1 text-slate-300 dark:text-slate-600 hover:text-red-500 dark:hover:text-red-400 opacity-0 group-hover/student:opacity-100 transition-opacity"
                           >
                             <X size={14} />
                           </button>
@@ -712,7 +708,7 @@ export default function GradingView() {
                     {slot.studentIds.length < 4 && slot.status !== 'processing' && (
                       <button 
                         onClick={() => addStudentToSlot(slot.id)}
-                        className="text-[10px] font-bold text-brand-blue flex items-center gap-1 px-2 hover:underline"
+                        className="text-[10px] font-bold text-brand-blue dark:text-brand-yellow flex items-center gap-1 px-2 hover:underline transition-colors"
                         disabled={!selectedClassId}
                       >
                         <Plus size={10} /> Em Grupo (Máx 4)
@@ -725,7 +721,7 @@ export default function GradingView() {
                   {batchSlots.length > 1 && slot.status !== 'processing' && (
                     <button 
                       onClick={() => removeSlot(slot.id)}
-                      className="p-2 text-red-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors"
+                      className="p-2 text-red-300 dark:text-red-900/40 hover:text-red-500 dark:hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg transition-colors"
                       title="Remover Slot"
                     >
                       <Trash2 size={18} />
@@ -733,10 +729,10 @@ export default function GradingView() {
                   )}
                   {slot.result && (
                     <div className="text-right">
-                      <p className="text-[10px] text-slate-400 font-bold uppercase">Nota Final</p>
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase transition-colors">Nota Final</p>
                       <div className="flex items-center gap-2">
-                        <span className="text-2xl font-black text-brand-blue">{convertedVal}</span>
-                        <span className="text-xs text-slate-400">/ {useConvertedScore ? targetScale : maxTotal}</span>
+                        <span className="text-2xl font-black text-brand-blue dark:text-brand-yellow transition-colors">{convertedVal}</span>
+                        <span className="text-xs text-slate-400 dark:text-slate-500 transition-colors">/ {useConvertedScore ? targetScale : maxTotal}</span>
                       </div>
                     </div>
                   )}
@@ -744,16 +740,10 @@ export default function GradingView() {
                   <div className="flex items-center gap-2">
                     {slot.status === 'processing' && <Loader2 className="animate-spin text-brand-yellow" size={20} />}
                     {slot.status === 'done' && (
-                      <button 
-                        onClick={() => setExpandedSlotId(isExpanded ? null : slot.id)}
-                        className={cn(
-                          "px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2",
-                          isExpanded ? "bg-brand-blue text-white" : "bg-slate-100 text-brand-blue hover:bg-slate-200"
-                        )}
-                      >
-                        {isExpanded ? 'Fechar Revisão' : 'Revisar & Editar'}
-                        <ChevronRight className={cn("transition-transform", isExpanded && "rotate-90")} size={14} />
-                      </button>
+                      <div className="flex items-center gap-2 bg-emerald-50 dark:bg-emerald-950/20 text-emerald-600 dark:text-emerald-400 px-4 py-2 rounded-xl text-xs font-bold border border-emerald-100 dark:border-emerald-900/50 transition-colors">
+                        <CheckCircle2 size={16} />
+                        Concluído
+                      </div>
                     )}
                     
                     <div className="flex items-center gap-2 ml-2">
@@ -761,7 +751,7 @@ export default function GradingView() {
                         <div className="flex -space-x-2 items-center">
                           {slot.previews.map((src: string, i: number) => (
                             <div key={i} className="relative group/thumb">
-                              <div className="w-8 h-8 rounded-lg border-2 border-white overflow-hidden shadow-sm">
+                              <div className="w-8 h-8 rounded-lg border-2 border-white dark:border-slate-800 overflow-hidden shadow-sm transition-colors">
                                 <img src={src} className="w-full h-full object-cover" />
                               </div>
                               <button 
@@ -780,106 +770,8 @@ export default function GradingView() {
                   </div>
                 </div>
               </div>
-
-              {/* Área de Revisão Detalhada */}
-              <AnimatePresence>
-                {isExpanded && slot.result && (
-                  <motion.div 
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: 'auto', opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    className="bg-slate-50/50 border-t border-slate-100"
-                  >
-                    <div className="p-6 space-y-6">
-                      <div className="grid grid-cols-1 gap-4">
-                        {slot.result.corrections.map((corr: any, idx: number) => (
-                          <div key={idx} className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-                            <div className="flex justify-between items-start">
-                              <div className="flex gap-3">
-                                <div className="w-8 h-8 rounded-lg bg-brand-blue-dark text-white flex items-center justify-center font-bold text-xs">
-                                  {corr.question_number}
-                                </div>
-                                <div>
-                                  <h5 className="text-sm font-bold text-slate-700">Questão {corr.question_number}</h5>
-                                  <p className="text-[10px] text-slate-400 font-bold uppercase italic">Peso: {corr.max_score} pts</p>
-                                </div>
-                              </div>
-
-                              <div className="flex items-center gap-4 bg-slate-50 p-2 rounded-xl border border-slate-100">
-                                <div className="text-center px-2">
-                                  <p className="text-[9px] font-bold text-slate-400 uppercase">IA Sugeriu</p>
-                                  <p className="text-xs font-bold text-slate-500">{corr.ai_score.toFixed(1)}</p>
-                                </div>
-                                <div className="w-px h-8 bg-slate-200" />
-                                <div className="text-center px-2">
-                                  <p className="text-[9px] font-bold text-brand-blue uppercase">Professor</p>
-                                  <input 
-                                    type="number"
-                                    step="0.1"
-                                    min={0}
-                                    max={corr.max_score}
-                                    value={corr.teacher_score === undefined ? '' : corr.teacher_score}
-                                    placeholder={corr.ai_score.toFixed(1)}
-                                    onChange={(e) => {
-                                      const val = e.target.value === '' ? undefined : parseFloat(e.target.value);
-                                      updateCorrectionInSlot(slot.id, idx, 'teacher_score', val);
-                                    }}
-                                    className="w-12 bg-transparent text-center text-xs font-black text-brand-blue-dark border-b border-brand-blue focus:ring-0 p-0"
-                                  />
-                                </div>
-                              </div>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase">Resposta do Aluno</label>
-                                <textarea 
-                                  value={corr.student_answer || ''}
-                                  onChange={(e) => updateCorrectionInSlot(slot.id, idx, 'student_answer', e.target.value)}
-                                  className="w-full text-xs p-2 bg-slate-50 border-none rounded-lg focus:ring-1 focus:ring-brand-blue resize-none h-16 scrollbar-hide"
-                                />
-                              </div>
-                              <div className="space-y-2">
-                                <label className="text-[10px] font-bold text-brand-blue uppercase">Feedback para Aluno</label>
-                                <textarea 
-                                  value={corr.feedback || ''}
-                                  onChange={(e) => updateCorrectionInSlot(slot.id, idx, 'feedback', e.target.value)}
-                                  className="w-full text-xs p-2 bg-brand-blue/5 border-none rounded-lg focus:ring-1 focus:ring-brand-blue resize-none h-16 scrollbar-hide"
-                                />
-                              </div>
-                            </div>
-
-                            <div className="pt-2 border-t border-slate-50">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase block mb-1">Resposta Esperada (Gabarito)</label>
-                              <div className="w-full text-[10px] p-2 bg-slate-50 border border-slate-100 rounded-lg font-bold text-slate-600">
-                                {corr.expected_answer || 'N/A'}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      <div className="flex justify-end gap-3 pt-4 border-t border-slate-100">
-                         <button 
-                            onClick={() => exportToPDF(slot)}
-                            className="px-4 py-2 bg-white border border-slate-200 text-brand-blue text-xs font-bold rounded-xl hover:bg-slate-50 flex items-center gap-2"
-                          >
-                            <Printer size={14} />
-                            Imprimir PDF Aluno
-                          </button>
-                         <button 
-                            onClick={() => setExpandedSlotId(null)}
-                            className="px-4 py-2 bg-brand-blue text-white text-xs font-bold rounded-xl hover:bg-brand-blue-dark"
-                          >
-                            Concluir Revisão
-                          </button>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-
-              {slot.error && <p className="text-[10px] text-red-500 bg-red-50 p-4 m-6 rounded-2xl border border-red-100 flex items-center gap-2">
+              
+              {slot.error && <p className="text-[10px] text-red-500 bg-red-50 dark:bg-red-950/20 p-4 m-6 rounded-2xl border border-red-100 dark:border-red-900/50 flex items-center gap-2 transition-colors">
                 <AlertCircle size={14} />
                 Erro no slot: {slot.error}
               </p>}
@@ -889,7 +781,7 @@ export default function GradingView() {
         {batchSlots.length < 20 && !isProcessingBatch && (
           <button 
             onClick={addSlot}
-            className="w-full py-4 border-2 border-dashed border-slate-200 rounded-3xl text-slate-400 font-bold hover:border-brand-blue hover:text-brand-blue hover:bg-slate-50 transition-all flex items-center justify-center gap-2"
+            className="w-full py-4 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-3xl text-slate-400 font-bold hover:border-brand-blue dark:hover:border-brand-yellow hover:text-brand-blue dark:hover:text-brand-yellow hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center justify-center gap-2"
           >
             <Plus size={20} />
             Adicionar Outro Aluno ao Lote
@@ -898,7 +790,7 @@ export default function GradingView() {
       </div>
 
       {/* Botões de Ação do Lote */}
-      <div className="flex flex-col sm:flex-row gap-4 pt-4 sticky bottom-8 bg-white/80 backdrop-blur-md p-4 rounded-3xl border border-white shadow-2xl">
+      <div className="flex flex-col sm:flex-row gap-4 pt-4 sticky bottom-8 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md p-4 rounded-3xl border border-white dark:border-slate-800 shadow-2xl transition-colors">
         <button 
           onClick={handleGradeBatch}
           disabled={isProcessingBatch || !selectedAssessmentId || batchSlots.every(s => s.files.length === 0)}
@@ -934,7 +826,7 @@ function SlotDropzone({ onFiles, disabled, miniature }: { onFiles: (f: File[]) =
       <div 
         {...getRootProps()} 
         className={cn(
-          "w-8 h-8 rounded-lg border border-dashed border-brand-yellow flex items-center justify-center cursor-pointer hover:bg-brand-yellow/5 transition-colors",
+          "w-8 h-8 rounded-lg border border-dashed border-brand-yellow flex items-center justify-center cursor-pointer hover:bg-brand-yellow/5 dark:hover:bg-brand-yellow/10 transition-colors",
           disabled && "opacity-50 cursor-not-allowed"
         )}
       >
@@ -949,15 +841,15 @@ function SlotDropzone({ onFiles, disabled, miniature }: { onFiles: (f: File[]) =
       {...getRootProps()} 
       className={cn(
         "border border-dashed rounded-xl p-6 flex flex-col items-center justify-center gap-2 transition-all cursor-pointer",
-        isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:bg-slate-50",
+        isDragActive ? "border-brand-yellow bg-brand-yellow/5 dark:bg-brand-yellow/10" : "border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800/30",
         disabled && "opacity-50 cursor-not-allowed"
       )}
     >
       <input {...getInputProps()} />
-      <div className="p-2 bg-white rounded-full text-slate-400 shadow-sm">
+      <div className="p-2 bg-white dark:bg-slate-800 rounded-full text-slate-400 dark:text-slate-500 shadow-sm transition-colors">
         <Upload size={20} />
       </div>
-      <p className="text-[10px] text-slate-500 font-bold uppercase text-center">Fotos da Atividade</p>
+      <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase text-center transition-colors">Fotos da Atividade</p>
     </div>
   );
 }

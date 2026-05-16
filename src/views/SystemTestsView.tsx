@@ -20,13 +20,27 @@ export default function SystemTestsView() {
     db: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
     api: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
     ai: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
-    pdf: { status: 'idle' | 'running' | 'pass' | 'fail', message: string }
+    pdf: { status: 'idle' | 'running' | 'pass' | 'fail', message: string },
+    server: { status: 'idle' | 'running' | 'pass' | 'fail', message: string }
   }>({
     db: { status: 'idle', message: '' },
     api: { status: 'idle', message: '' },
     ai: { status: 'idle', message: '' },
-    pdf: { status: 'idle', message: '' }
+    pdf: { status: 'idle', message: '' },
+    server: { status: 'idle', message: '' }
   });
+
+  const runServerTest = async () => {
+    setTests(prev => ({ ...prev, server: { status: 'running', message: 'Testando backend...' } }));
+    try {
+      const response = await fetch('/api/health');
+      if (!response.ok) throw new Error(`Status: ${response.status}`);
+      const data = await response.json();
+      setTests(prev => ({ ...prev, server: { status: 'pass', message: `Backend operacional! (${data.environment || 'production'})` } }));
+    } catch (err: any) {
+      setTests(prev => ({ ...prev, server: { status: 'fail', message: `Erro: ${err.message}` } }));
+    }
+  };
 
   const runDbTest = async () => {
     setTests(prev => ({ ...prev, db: { status: 'running', message: 'Testando conexão...' } }));
@@ -99,6 +113,7 @@ export default function SystemTestsView() {
   };
 
   const runAllTests = async () => {
+    await runServerTest();
     await runDbTest();
     await runApiTest();
     await runAiTest();
@@ -108,12 +123,12 @@ export default function SystemTestsView() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Diagnóstico do Sistema</h3>
-          <p className="text-slate-500">Ferramentas de teste para verificar a saúde das conexões e integrações.</p>
+          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">Diagnóstico do Sistema</h3>
+          <p className="text-slate-500 dark:text-slate-400 transition-colors">Ferramentas de teste para verificar a saúde das conexões e integrações.</p>
         </div>
         <button 
           onClick={runAllTests}
-          className="flex items-center gap-2 bg-brand-blue text-white px-6 py-3 rounded-xl font-bold hover:bg-brand-blue-dark transition-all"
+          className="flex items-center gap-2 bg-brand-blue text-white px-6 py-3 rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md"
         >
           <Play size={20} />
           Executar Todos os Testes
@@ -121,6 +136,15 @@ export default function SystemTestsView() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        {/* Server Card */}
+        <TestCard 
+          title="Servidor Backend"
+          icon={<Cpu size={24} />}
+          status={tests.server.status}
+          message={tests.server.message}
+          onRun={runServerTest}
+        />
+
         {/* DB Card */}
         <TestCard 
           title="Banco de Dados (Supabase)"
@@ -148,11 +172,11 @@ export default function SystemTestsView() {
           onRun={runAiTest}
         />
 
-        <div className="bg-amber-50 border border-amber-200 p-6 rounded-2xl flex gap-4">
-          <AlertTriangle className="text-amber-500 shrink-0" size={24} />
+        <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 p-6 rounded-2xl flex gap-4 transition-colors">
+          <AlertTriangle className="text-amber-500 dark:text-amber-400 shrink-0" size={24} />
           <div>
-            <h4 className="font-bold text-amber-900 mb-1">Dica de Debug de PDF</h4>
-            <p className="text-sm text-amber-800">
+            <h4 className="font-bold text-amber-900 dark:text-amber-300 mb-1">Dica de Debug de PDF</h4>
+            <p className="text-sm text-amber-800 dark:text-amber-400/80">
               Se a extração de gabarito falhar, certifique-se de que o PDF não está protegido por senha e que o texto é selecionável (não é uma imagem pura).
             </p>
           </div>
@@ -164,30 +188,31 @@ export default function SystemTestsView() {
 
 function TestCard({ title, icon, status, message, onRun }: any) {
   return (
-    <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm flex flex-col justify-between">
+    <div className="bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-100 dark:border-slate-800 shadow-sm flex flex-col justify-between transition-colors">
       <div className="flex items-start justify-between mb-4">
         <div className="flex items-center gap-3">
-          <div className="p-3 bg-slate-50 rounded-xl text-brand-blue">
+          <div className="p-3 bg-slate-50 dark:bg-slate-800 rounded-xl text-brand-blue dark:text-brand-yellow transition-colors">
             {icon}
           </div>
           <div>
-            <h4 className="font-bold text-brand-blue-dark">{title}</h4>
+            <h4 className="font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">{title}</h4>
             <StatusBadge status={status} />
           </div>
         </div>
         <button 
           onClick={onRun}
           disabled={status === 'running'}
-          className="p-2 hover:bg-slate-50 rounded-lg text-slate-400 hover:text-brand-blue transition-all"
+          className="p-2 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-lg text-slate-400 dark:text-slate-500 hover:text-brand-blue dark:hover:text-brand-yellow transition-all"
         >
           <Play size={18} />
         </button>
       </div>
       
       {message && (
-        <div className={`p-3 rounded-xl text-sm font-medium ${
-          status === 'pass' ? 'bg-emerald-50 text-emerald-700' : 
-          status === 'fail' ? 'bg-red-50 text-red-700' : 'bg-slate-50 text-slate-600'
+        <div className={`p-3 rounded-xl text-sm font-medium transition-colors ${
+          status === 'pass' ? 'bg-emerald-50 dark:bg-emerald-950/20 text-emerald-700 dark:text-emerald-400' : 
+          status === 'fail' ? 'bg-red-50 dark:bg-red-950/20 text-red-700 dark:text-red-400' : 
+          'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400'
         }`}>
           {message}
         </div>
@@ -198,9 +223,9 @@ function TestCard({ title, icon, status, message, onRun }: any) {
 
 function StatusBadge({ status }: { status: string }) {
   switch (status) {
-    case 'pass': return <div className="flex items-center gap-1 text-emerald-500 text-xs font-bold uppercase mt-1"><CheckCircle2 size={14} /> Operacional</div>;
-    case 'fail': return <div className="flex items-center gap-1 text-red-500 text-xs font-bold uppercase mt-1"><XCircle size={14} /> Falha</div>;
-    case 'running': return <div className="flex items-center gap-1 text-brand-blue text-xs font-bold uppercase mt-1"><Loader2 size={14} className="animate-spin" /> Testando...</div>;
-    default: return <div className="text-slate-400 text-xs font-bold uppercase mt-1">Aguardando</div>;
+    case 'pass': return <div className="flex items-center gap-1 text-emerald-500 dark:text-emerald-400 text-xs font-bold uppercase mt-1"><CheckCircle2 size={14} /> Operacional</div>;
+    case 'fail': return <div className="flex items-center gap-1 text-red-500 dark:text-red-400 text-xs font-bold uppercase mt-1 transition-colors"><XCircle size={14} /> Falha</div>;
+    case 'running': return <div className="flex items-center gap-1 text-brand-blue dark:text-brand-yellow text-xs font-bold uppercase mt-1 transition-colors"><Loader2 size={14} className="animate-spin" /> Testando...</div>;
+    default: return <div className="text-slate-400 dark:text-slate-600 text-xs font-bold uppercase mt-1 transition-colors">Aguardando</div>;
   }
 }

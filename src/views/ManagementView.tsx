@@ -12,12 +12,17 @@ import {
   BookOpen,
   Trophy,
   Loader2,
-  CheckSquare
+  CheckSquare,
+  FileSpreadsheet,
+  Download,
+  Printer
 } from 'lucide-react';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 export default function ManagementView() {
   const [classes, setClasses] = useState<any[]>([]);
@@ -29,6 +34,10 @@ export default function ManagementView() {
   const [grades, setGrades] = useState<any[]>([]);
   const [units, setUnits] = useState<any[]>([]);
   const [selectedUnitId, setSelectedUnitId] = useState('');
+  const [unitClosingData, setUnitClosingData] = useState<any[]>([]);
+  const [isGeneratingClosing, setIsGeneratingClosing] = useState(false);
+  const [showClosingModal, setShowClosingModal] = useState(false);
+  const [isGeneratingAllClosing, setIsGeneratingAllClosing] = useState(false);
 
   const [modal, setModal] = useState<{
     isOpen: boolean;
@@ -122,6 +131,189 @@ export default function ManagementView() {
     return Math.round(Math.min(10, sum) * 10) / 10;
   };
 
+  const handleGenerateUnitClosing = async () => {
+    if (!selectedClassId || !selectedUnitId || !supabase) return;
+    
+    setIsGeneratingClosing(true);
+    try {
+      // 1. Fetch all students in class
+      const { data: studentsList } = await supabase
+        .from('students')
+        .select('*')
+        .eq('class_id', selectedClassId)
+        .order('roll_number');
+
+      if (!studentsList) return;
+
+      // 2. Fetch all grades for this unit and class students
+      const studentIds = studentsList.map(s => s.id);
+      const { data: unitGrades } = await supabase
+        .from('grades')
+        .select('*')
+        .eq('unit_id', selectedUnitId)
+        .in('student_id', studentIds);
+
+      // 3. Compile data
+      const report = studentsList.map(student => {
+        const grade = unitGrades?.find(g => g.student_id === student.id);
+        const avg = grade ? (grade.unit_average || calculateUnitAverage(grade)) : 0;
+        return {
+          id: student.id,
+          name: student.name,
+          rollNumber: student.roll_number,
+          average: avg,
+          status: avg >= 5 ? 'Aprovado' : 'Recuperação',
+          details: grade || null
+        };
+      });
+
+      setUnitClosingData(report);
+      setShowClosingModal(true);
+    } catch (error) {
+      console.error('Error generating closing:', error);
+    } finally {
+      setIsGeneratingClosing(false);
+    }
+  };
+
+  const exportClosingToPDF = () => {
+    if (unitClosingData.length === 0) return;
+
+    const doc = new jsPDF();
+    const className = classes.find(c => c.id === selectedClassId)?.name || 'Turma';
+    const unitName = units.find(u => u.id === selectedUnitId)?.name || 'Unidade';
+
+    doc.setFontSize(18);
+    doc.setTextColor(10, 37, 64);
+    doc.text(`Fechamento de Unidade - ${unitName}`, 105, 20, { align: 'center' });
+    
+    doc.setFontSize(12);
+    doc.text(`Turma: ${className}`, 20, 30);
+    doc.text(`Data: ${new Date().toLocaleDateString()}`, 190, 30, { align: 'right' });
+
+    const tableData = unitClosingData.map(item => [
+      item.rollNumber,
+      item.name,
+      item.average.toFixed(1),
+      item.status
+    ]);
+
+    autoTable(doc, {
+      startY: 40,
+      head: [['Nº', 'Aluno', 'Média', 'Situação']],
+      body: tableData,
+      headStyles: { fillColor: [10, 37, 64] },
+      columnStyles: {
+        0: { cellWidth: 15 },
+        1: { cellWidth: 'auto' },
+        2: { cellWidth: 30, halign: 'center' },
+        3: { cellWidth: 40, halign: 'center' }
+      },
+      didParseCell: (data) => {
+        if (data.section === 'body' && data.column.index === 3) {
+          if (data.cell.text[0] === 'Recuperação') {
+            data.cell.styles.textColor = [220, 38, 38];
+          } else {
+            data.cell.styles.textColor = [5, 150, 105];
+          }
+        }
+      }
+    });
+
+    doc.save(`Fechamento_${className}_${unitName}.pdf`);
+  };
+
+  const handleGenerateAllClassesClosing = async () => {
+    if (!selectedUnitId || classes.length === 0 || !supabase) return;
+
+    setIsGeneratingAllClosing(true);
+    try {
+      const doc = new jsPDF();
+      const unitName = units.find(u => u.id === selectedUnitId)?.name || 'Unidade';
+      
+      for (let i = 0; i < classes.length; i++) {
+        const currentClass = classes[i];
+        
+        // 1. Fetch students for this class
+        const { data: studentsList } = await supabase
+          .from('students')
+          .select('*')
+          .eq('class_id', currentClass.id)
+          .order('roll_number');
+
+        if (!studentsList || studentsList.length === 0) continue;
+
+        // 2. Fetch grades for these students
+        const studentIds = studentsList.map(s => s.id);
+        const { data: unitGrades } = await supabase
+          .from('grades')
+          .select('*')
+          .eq('unit_id', selectedUnitId)
+          .in('student_id', studentIds);
+
+        // 3. Compile class data
+        const tableData = studentsList.map(student => {
+          const grade = unitGrades?.find(g => g.student_id === student.id);
+          const avg = grade ? (grade.unit_average || calculateUnitAverage(grade)) : 0;
+          return [
+            student.roll_number,
+            student.name,
+            avg.toFixed(1),
+            avg >= 5 ? 'Aprovado' : 'Recuperação'
+          ];
+        });
+
+        // 4. Add page to PDF
+        if (i > 0) doc.addPage();
+        
+        doc.setFontSize(18);
+        doc.setTextColor(10, 37, 64);
+        doc.text(`Fechamento: ${unitName}`, 105, 20, { align: 'center' });
+        
+        doc.setFontSize(14);
+        doc.text(`Turma: ${currentClass.name}`, 20, 32);
+        doc.setFontSize(10);
+        doc.text(`Data de Emissão: ${new Date().toLocaleDateString()}`, 190, 32, { align: 'right' });
+
+        autoTable(doc, {
+          startY: 40,
+          head: [['Nº', 'Aluno', 'Média', 'Situação']],
+          body: tableData,
+          headStyles: { fillColor: [10, 37, 64] },
+          columnStyles: {
+            0: { cellWidth: 15 },
+            1: { cellWidth: 'auto' },
+            2: { cellWidth: 30, halign: 'center' },
+            3: { cellWidth: 40, halign: 'center' }
+          },
+          didParseCell: (data) => {
+            if (data.section === 'body' && data.column.index === 3) {
+              if (data.cell.text[0] === 'Recuperação') {
+                data.cell.styles.textColor = [220, 38, 38];
+              } else {
+                data.cell.styles.textColor = [5, 150, 105];
+              }
+            }
+          }
+        });
+      }
+
+      doc.save(`Fechamento_Geral_${unitName}_${new Date().toLocaleDateString()}.pdf`);
+      
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'O relatório de fechamento de todas as turmas foi gerado com sucesso.',
+        type: 'success'
+      });
+    } catch (error) {
+      console.error('Error in global closing:', error);
+      setModal({ isOpen: true, title: 'Erro', message: 'Erro ao gerar relatório geral.', type: 'error' });
+    } finally {
+      setIsGeneratingAllClosing(false);
+    }
+  };
+
   const handleSaveGrade = async (unitData: any) => {
     const average = calculateUnitAverage(unitData);
     const dataToSave = {
@@ -199,13 +391,13 @@ export default function ManagementView() {
       />
 
       {/* Selection Header */}
-      <div className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="bg-white dark:bg-slate-900 p-8 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-6 items-end transition-colors">
         <div className="space-y-2">
           <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
           <select 
             value={selectedClassId}
             onChange={(e) => setSelectedClassId(e.target.value)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
           >
             <option value="">Selecionar Turma</option>
             {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -217,13 +409,31 @@ export default function ManagementView() {
           <select 
             value={selectedStudentId}
             onChange={(e) => setSelectedStudentId(e.target.value)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
             disabled={!selectedClassId}
           >
             <option value="">Selecionar Aluno</option>
             {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
           </select>
         </div>
+
+        <button
+          onClick={handleGenerateUnitClosing}
+          disabled={!selectedClassId || !selectedUnitId || isGeneratingClosing}
+          className="flex items-center justify-center gap-2 bg-brand-gold text-white p-3 rounded-xl font-bold hover:opacity-90 transition-all disabled:opacity-50 h-[48px] text-xs"
+        >
+          {isGeneratingClosing ? <Loader2 className="animate-spin" size={18} /> : <FileSpreadsheet size={18} />}
+          Relatório Turma
+        </button>
+
+        <button
+          onClick={handleGenerateAllClassesClosing}
+          disabled={!selectedUnitId || isGeneratingAllClosing || classes.length === 0}
+          className="flex items-center justify-center gap-2 bg-emerald-600 text-white p-3 rounded-xl font-bold hover:bg-emerald-700 transition-all disabled:opacity-50 h-[48px] text-xs"
+        >
+          {isGeneratingAllClosing ? <Loader2 className="animate-spin" size={18} /> : <Printer size={18} />}
+          Relatório de Todas as Turmas
+        </button>
       </div>
 
       {selectedStudentId ? (
@@ -245,8 +455,8 @@ export default function ManagementView() {
               </div>
             </div>
 
-            <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100">
-              <h5 className="font-bold text-brand-blue-dark mb-4 flex items-center gap-2">
+            <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 transition-colors">
+              <h5 className="font-bold text-brand-blue-dark dark:text-brand-yellow mb-4 flex items-center gap-2 transition-colors">
                 <TrendingUp size={18} className="text-brand-gold" />
                 Progresso por Unidade
               </h5>
@@ -257,10 +467,10 @@ export default function ManagementView() {
                   return (
                     <div key={u.id} className="space-y-1">
                       <div className="flex justify-between text-xs font-bold">
-                        <span className="text-slate-500">{u.name}</span>
-                        <span className={avg >= 5 ? "text-emerald-600" : "text-red-500"}>{avg.toFixed(1)}</span>
+                        <span className="text-slate-500 dark:text-slate-400 uppercase">{u.name}</span>
+                        <span className={avg >= 5 ? "text-emerald-600 dark:text-emerald-400" : "text-red-500 dark:text-red-400"}>{avg.toFixed(1)}</span>
                       </div>
-                      <div className="h-2 bg-slate-100 rounded-full overflow-hidden">
+                      <div className="h-2 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden transition-colors">
                         <motion.div 
                           initial={{ width: 0 }}
                           animate={{ width: `${avg * 10}%` }}
@@ -276,14 +486,14 @@ export default function ManagementView() {
 
           {/* Grading Tabs */}
           <div className="lg:col-span-3 space-y-6">
-            <div className="flex gap-2 p-1 bg-slate-100 rounded-2xl w-fit">
+            <div className="flex gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl w-fit transition-colors">
               {units.map(u => (
                 <button
                   key={u.id}
                   onClick={() => setSelectedUnitId(u.id)}
                   className={cn(
                     "px-8 py-3 rounded-xl font-bold transition-all",
-                    selectedUnitId === u.id ? "bg-white text-brand-blue shadow-md" : "text-slate-500 hover:text-brand-blue"
+                    selectedUnitId === u.id ? "bg-white dark:bg-slate-900 text-brand-blue dark:text-brand-yellow shadow-md" : "text-slate-500 dark:text-slate-400 hover:text-brand-blue dark:hover:text-brand-yellow"
                   )}
                 >
                   {u.name}
@@ -299,12 +509,96 @@ export default function ManagementView() {
           </div>
         </div>
       ) : (
-        <div className="text-center py-32 bg-white rounded-3xl border border-dashed border-slate-200">
-          <Users size={64} className="mx-auto text-slate-200 mb-4" />
-          <h4 className="text-xl font-serif font-bold text-brand-blue-dark">Selecione um aluno para gerenciar</h4>
-          <p className="text-slate-400">Escolha uma turma e um aluno acima para visualizar o boletim.</p>
+        <div className="text-center py-32 bg-white dark:bg-slate-900 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800 transition-colors">
+          <Users size={64} className="mx-auto text-slate-200 dark:text-slate-800 mb-4 transition-colors" />
+          <h4 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">Selecione um aluno para gerenciar</h4>
+          <p className="text-slate-400 dark:text-slate-500 transition-colors">Escolha uma turma e um aluno acima para visualizar o boletim.</p>
         </div>
       )}
+
+      {/* Unit Closing Modal */}
+      <AnimatePresence>
+        {showClosingModal && (
+          <div className="fixed inset-0 bg-brand-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white dark:bg-slate-900 w-full max-w-4xl max-h-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-colors border dark:border-slate-800"
+            >
+              <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-brand-blue-dark dark:bg-brand-black text-white transition-colors">
+                <div>
+                  <h3 className="text-xl font-bold">Fechamento de Unidade</h3>
+                  <p className="text-brand-gray dark:text-slate-400 text-sm">
+                    {classes.find(c => c.id === selectedClassId)?.name} - {units.find(u => u.id === selectedUnitId)?.name}
+                  </p>
+                </div>
+                <button 
+                  onClick={() => setShowClosingModal(false)}
+                  className="p-2 hover:bg-white/10 rounded-full transition-all"
+                >
+                  <Users className="rotate-90" />
+                </button>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="border-b border-slate-100 dark:border-slate-800 text-xs uppercase font-bold text-slate-400 dark:text-slate-500 transition-colors">
+                        <th className="py-4 px-2">Nº</th>
+                        <th className="py-4 px-2">Aluno</th>
+                        <th className="py-4 px-2 text-center">Média</th>
+                        <th className="py-4 px-2 text-center">Situação</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {unitClosingData.map((item) => (
+                        <tr key={item.id} className="border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors transition-colors">
+                          <td className="py-4 px-2 font-bold text-slate-400 dark:text-slate-600">{item.rollNumber}</td>
+                          <td className="py-4 px-2 font-bold text-brand-blue-dark dark:text-brand-yellow">{item.name}</td>
+                          <td className="py-4 px-2 text-center font-black">
+                            <span className={cn(
+                              "px-3 py-1 rounded-lg",
+                              item.average >= 5 ? "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/20" : "text-red-500 bg-red-50 dark:bg-red-950/20"
+                            )}>
+                              {item.average.toFixed(1)}
+                            </span>
+                          </td>
+                          <td className="py-4 px-2 text-center">
+                            <span className={cn(
+                              "text-[10px] font-black uppercase px-3 py-1 rounded-full",
+                              item.status === 'Aprovado' ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400" : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
+                            )}>
+                              {item.status}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex gap-4 justify-between transition-colors">
+                <button 
+                  onClick={exportClosingToPDF}
+                  className="flex items-center gap-2 px-6 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-md transition-all"
+                >
+                  <Printer size={18} />
+                  Imprimir PDF
+                </button>
+                <button 
+                  onClick={() => setShowClosingModal(false)}
+                  className="px-8 py-3 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-all transition-colors"
+                >
+                  Fechar
+                </button>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
@@ -326,11 +620,11 @@ function UnitGradeForm({ unitName, grade, onSave }: { unitName: string, grade: a
       key={unitName}
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
-      className="bg-white p-8 rounded-3xl shadow-sm border border-slate-100"
+      className="bg-white dark:bg-slate-900 p-8 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 transition-colors"
     >
       <div className="flex justify-between items-center mb-8">
-        <h4 className="text-2xl font-serif font-bold text-brand-blue-dark">Lançamento de Notas - {unitName}</h4>
-        <div className="px-4 py-2 bg-brand-yellow/10 text-brand-blue-dark rounded-xl font-bold flex items-center gap-2">
+        <h4 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow">Lançamento de Notas - {unitName}</h4>
+        <div className="px-4 py-2 bg-brand-yellow/10 dark:bg-brand-yellow/5 text-brand-blue-dark dark:text-brand-yellow rounded-xl font-bold flex items-center gap-2 transition-colors">
           <Calculator size={18} />
           Média: {grade.unit_average?.toFixed(1) || '0.0'}
         </div>
@@ -339,21 +633,21 @@ function UnitGradeForm({ unitName, grade, onSave }: { unitName: string, grade: a
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-8">
         {/* Listas */}
         <div className="space-y-4">
-          <h5 className="text-sm font-bold text-brand-blue-dark uppercase flex items-center gap-2">
+          <h5 className="text-sm font-bold text-brand-blue-dark dark:text-brand-yellow uppercase flex items-center gap-2 transition-colors">
             <BookOpen size={16} className="text-brand-gold" />
             Listas (1.0 cada)
           </h5>
           <div className="space-y-3">
             {[1, 2, 3].map(i => (
-              <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-                <span className="text-sm font-medium text-slate-600">Lista {i}</span>
+              <div key={i} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl transition-colors">
+                <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Lista {i}</span>
                 <input 
                   type="number" 
                   step="0.1"
                   max="1"
                   value={localGrade[`list${i}_score`]}
                   onChange={(e) => handleChange(`list${i}_score`, e.target.value)}
-                  className="w-16 p-1 bg-white border border-slate-200 rounded text-center font-bold"
+                  className="w-16 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-center font-bold dark:text-white transition-colors"
                 />
               </div>
             ))}
@@ -362,42 +656,42 @@ function UnitGradeForm({ unitName, grade, onSave }: { unitName: string, grade: a
 
         {/* Prova e Outros */}
         <div className="space-y-4">
-          <h5 className="text-sm font-bold text-brand-blue-dark uppercase flex items-center gap-2">
+          <h5 className="text-sm font-bold text-brand-blue-dark dark:text-brand-yellow uppercase flex items-center gap-2 transition-colors">
             <CheckSquare size={16} className="text-brand-gold" />
             Avaliações
           </h5>
           <div className="space-y-3">
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-              <span className="text-sm font-medium text-slate-600">Prova (4.0)</span>
+            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl transition-colors">
+              <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Prova (4.0)</span>
               <input 
                 type="number" 
                 step="0.1"
                 max="4"
                 value={localGrade.exam_score}
                 onChange={(e) => handleChange('exam_score', e.target.value)}
-                className="w-16 p-1 bg-white border border-slate-200 rounded text-center font-bold"
+                className="w-16 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-center font-bold dark:text-white transition-colors"
               />
             </div>
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-              <span className="text-sm font-medium text-slate-600">Caderno (1.5)</span>
+            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl transition-colors transition-colors">
+              <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Caderno (1.5)</span>
               <input 
                 type="number" 
                 step="0.1"
                 max="1.5"
                 value={localGrade.notebook_score}
                 onChange={(e) => handleChange('notebook_score', e.target.value)}
-                className="w-16 p-1 bg-white border border-slate-200 rounded text-center font-bold"
+                className="w-16 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-center font-bold dark:text-white transition-colors"
               />
             </div>
-            <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
-              <span className="text-sm font-medium text-slate-600">Anki (1.5)</span>
+            <div className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl transition-colors">
+              <span className="text-sm font-medium text-slate-600 dark:text-slate-400">Anki (1.5)</span>
               <input 
                 type="number" 
                 step="0.1"
                 max="1.5"
                 value={localGrade.anki_score}
                 onChange={(e) => handleChange('anki_score', e.target.value)}
-                className="w-16 p-1 bg-white border border-slate-200 rounded text-center font-bold"
+                className="w-16 p-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded text-center font-bold dark:text-white transition-colors"
               />
             </div>
           </div>
@@ -405,30 +699,30 @@ function UnitGradeForm({ unitName, grade, onSave }: { unitName: string, grade: a
 
         {/* Recuperação */}
         <div className="space-y-4 md:col-span-3 lg:col-span-1">
-          <h5 className="text-sm font-bold text-brand-blue-dark uppercase flex items-center gap-2 text-amber-600">
+          <h5 className="text-sm font-bold text-brand-blue-dark dark:text-brand-yellow uppercase flex items-center gap-2 text-amber-600 dark:text-amber-500 transition-colors">
             <AlertTriangle size={16} />
             Recuperação
           </h5>
-          <div className="p-4 bg-amber-50 rounded-2xl border border-amber-100 space-y-4">
-            <p className="text-xs text-amber-800">
+          <div className="p-4 bg-amber-50 dark:bg-amber-950/10 rounded-2xl border border-amber-100 dark:border-amber-900/30 space-y-4 transition-colors">
+            <p className="text-xs text-amber-800 dark:text-amber-600">
               A nota de recuperação será somada à média (se aprovado, max 10) ou substituirá a média (se reprovado, max 5).
             </p>
             <div className="flex items-center justify-between">
-              <span className="text-sm font-bold text-amber-900">Nota Final</span>
+              <span className="text-sm font-bold text-amber-900 dark:text-amber-500 transition-colors">Nota Final</span>
               <input 
                 type="number" 
                 step="0.1"
                 value={localGrade.recovery_score || ''}
                 onChange={(e) => handleChange('recovery_score', e.target.value)}
                 placeholder="-"
-                className="w-20 p-2 bg-white border border-amber-200 rounded-lg text-center font-bold text-amber-900"
+                className="w-20 p-2 bg-white dark:bg-slate-900 border border-amber-200 dark:border-amber-900 rounded-lg text-center font-bold text-amber-900 dark:text-brand-yellow transition-colors"
               />
             </div>
           </div>
         </div>
       </div>
 
-      <div className="mt-10 pt-6 border-t border-slate-100 flex justify-end">
+      <div className="mt-10 pt-6 border-t border-slate-100 dark:border-slate-800 flex justify-end transition-colors">
         <button 
           onClick={() => onSave(localGrade)}
           className="flex items-center gap-2 bg-brand-blue text-white px-8 py-3 rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg transition-all"

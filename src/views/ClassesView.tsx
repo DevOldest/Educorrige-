@@ -449,18 +449,18 @@ export default function ClassesView() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Minhas Turmas</h3>
-          <p className="text-slate-500">Gerencie suas turmas e alunos cadastrados.</p>
+          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow">Minhas Turmas</h3>
+          <p className="text-slate-500 dark:text-slate-400">Gerencie suas turmas e alunos cadastrados.</p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch gap-3 w-full sm:w-auto">
           <div className="relative group min-w-[250px]">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-brand-blue transition-colors" size={18} />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500 group-focus-within:text-brand-blue transition-colors" size={18} />
             <input 
               type="text"
               placeholder="Buscar aluno por nome..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-xl focus:ring-2 focus:ring-brand-blue focus:border-transparent outline-none transition-all shadow-sm text-sm"
+              className="w-full pl-10 pr-4 py-3 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl focus:ring-2 focus:ring-brand-blue focus:border-transparent outline-none transition-all shadow-sm text-sm dark:text-slate-200"
             />
             {searchTerm && (
               <button 
@@ -482,28 +482,28 @@ export default function ClassesView() {
       </div>
 
       {searchTerm.trim().length > 2 ? (
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
-          <div className="p-4 bg-slate-50 border-b border-slate-100 flex justify-between items-center">
-            <h4 className="font-bold text-brand-blue-dark flex items-center gap-2">
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-100 dark:border-slate-800 shadow-sm overflow-hidden transition-colors">
+          <div className="p-4 bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 flex justify-between items-center transition-colors">
+            <h4 className="font-bold text-brand-blue-dark dark:text-brand-yellow flex items-center gap-2 transition-colors">
               <Search size={18} className="text-brand-gold" />
               Resultados da Busca
             </h4>
-            <span className="text-xs text-slate-400 font-bold uppercase">
+            <span className="text-xs text-slate-400 dark:text-slate-500 font-bold uppercase transition-colors">
               {studentSearchResults.length} Encontrado(s)
             </span>
           </div>
-          <div className="divide-y divide-slate-50">
+          <div className="divide-y divide-slate-50 dark:divide-slate-800">
             {isSearchingStudents ? (
               <div className="p-8 flex justify-center">
                 <Loader2 className="animate-spin text-brand-gold" size={24} />
               </div>
             ) : studentSearchResults.length > 0 ? (
               studentSearchResults.map((student) => (
-                <div key={student.id} className="p-4 hover:bg-slate-50 transition-colors flex justify-between items-center">
+                <div key={student.id} className="p-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex justify-between items-center transition-colors">
                   <div>
-                    <p className="font-bold text-brand-blue-dark">{student.name}</p>
-                    <div className="flex items-center gap-2 text-xs text-slate-500 mt-1">
-                      <span className="bg-brand-blue/10 text-brand-blue px-2 py-0.5 rounded-full font-bold">
+                    <p className="font-bold text-brand-blue-dark dark:text-slate-200 transition-colors">{student.name}</p>
+                    <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1 transition-colors">
+                      <span className="bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue dark:text-brand-yellow px-2 py-0.5 rounded-full font-bold transition-colors">
                         Chamada: {student.roll_number}
                       </span>
                       <span>•</span>
@@ -516,14 +516,14 @@ export default function ClassesView() {
                       if (cls) handleViewStudents(cls);
                       setSearchTerm('');
                     }}
-                    className="px-4 py-2 text-xs font-bold text-brand-blue hover:bg-brand-blue/5 rounded-lg transition-colors border border-brand-blue/20"
+                    className="px-4 py-2 text-xs font-bold text-brand-blue dark:text-brand-yellow hover:bg-brand-blue/5 dark:hover:bg-brand-yellow/5 rounded-lg transition-colors border border-brand-blue/20 dark:border-brand-yellow/20"
                   >
                     Ver Turma
                   </button>
                 </div>
               ))
             ) : (
-              <div className="p-10 text-center text-slate-400 italic">
+              <div className="p-10 text-center text-slate-400 dark:text-slate-500 italic transition-colors">
                 Nenhum aluno encontrado com este nome.
               </div>
             )}
@@ -539,32 +539,32 @@ export default function ClassesView() {
             <motion.div
               key={cls.id}
               whileHover={{ y: -5 }}
-              className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 group"
+              className="bg-white dark:bg-slate-900 p-6 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 group transition-all"
             >
               <div className="flex justify-between items-start mb-4">
-                <div className="p-3 bg-brand-yellow/20 rounded-xl text-brand-blue">
+                <div className="p-3 bg-brand-yellow/20 dark:bg-brand-yellow/10 rounded-xl text-brand-blue dark:text-brand-yellow">
                   <Users size={24} />
                 </div>
                 <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <button 
                     onClick={() => handleEditClick(cls)}
-                    className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue"
+                    className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-blue transition-colors"
                   >
                     <Edit2 size={16} />
                   </button>
                   <button 
                     onClick={() => handleDeleteClass(cls.id, cls.name)}
-                    className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"
+                    className="p-2 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-slate-400 hover:text-red-500 transition-colors"
                   >
                     <Trash2 size={16} />
                   </button>
                 </div>
               </div>
-              <h4 className="text-xl font-bold text-brand-blue-dark mb-1">{cls.name}</h4>
-              <p className="text-sm text-slate-500 mb-4">{cls.school_year} • {cls.students?.[0]?.count || 0} Alunos</p>
+              <h4 className="text-xl font-bold text-brand-blue-dark dark:text-brand-yellow mb-1">{cls.name}</h4>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{cls.school_year} • {cls.students?.[0]?.count || 0} Alunos</p>
               <button 
                 onClick={() => handleViewStudents(cls)}
-                className="w-full py-2 bg-slate-50 text-brand-blue-dark font-semibold rounded-lg hover:bg-brand-yellow transition-colors"
+                className="w-full py-2 bg-slate-50 dark:bg-slate-800 text-brand-blue-dark dark:text-slate-200 font-semibold rounded-lg hover:bg-brand-yellow dark:hover:bg-brand-gold transition-colors"
               >
                 Ver Alunos
               </button>
@@ -589,43 +589,43 @@ export default function ClassesView() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl p-8 max-w-md w-full shadow-2xl"
+            className="bg-white dark:bg-slate-900 rounded-3xl p-8 max-w-md w-full shadow-2xl transition-colors"
           >
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Editar Turma</h3>
-              <button onClick={() => setShowEditModal(false)} className="text-slate-400 hover:text-brand-black">
+              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow">Editar Turma</h3>
+              <button onClick={() => setShowEditModal(false)} className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors">
                 <X size={24} />
               </button>
             </div>
             <div className="space-y-4">
               <div className="space-y-2">
-                <label className="text-sm font-bold text-brand-blue-dark">Nome da Turma</label>
+                <label className="text-sm font-bold text-brand-blue-dark dark:text-slate-400">Nome da Turma</label>
                 <input 
                   type="text" 
                   value={editClassName}
                   onChange={(e) => setEditClassName(e.target.value)}
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold dark:text-white"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-bold text-brand-blue-dark">Ano Letivo</label>
+                <label className="text-sm font-bold text-brand-blue-dark dark:text-slate-400">Ano Letivo</label>
                 <input 
                   type="number" 
                   value={editClassYear}
                   onChange={(e) => setEditClassYear(parseInt(e.target.value))}
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold dark:text-white"
                 />
               </div>
               <div className="flex gap-4 pt-4">
                 <button 
                   onClick={() => setShowEditModal(false)}
-                  className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                  className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                 >
                   Cancelar
                 </button>
                 <button 
                   onClick={handleUpdateClass}
-                  className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg"
+                  className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg transition-colors"
                 >
                   Salvar Alterações
                 </button>
@@ -641,14 +641,14 @@ export default function ClassesView() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl p-8 max-w-2xl w-full shadow-2xl max-h-[90vh] flex flex-col"
+            className="bg-white dark:bg-slate-900 rounded-3xl p-8 max-w-2xl w-full shadow-2xl max-h-[90vh] flex flex-col transition-colors border dark:border-slate-800"
           >
             <div className="flex justify-between items-center mb-6">
               <div>
-                <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">{selectedClass?.name}</h3>
-                <p className="text-slate-500">Lista de Alunos Cadastrados</p>
+                <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">{selectedClass?.name}</h3>
+                <p className="text-slate-500 dark:text-slate-400">Lista de Alunos Cadastrados</p>
               </div>
-              <button onClick={() => setShowStudentsModal(false)} className="text-slate-400 hover:text-brand-black">
+              <button onClick={() => setShowStudentsModal(false)} className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors">
                 <X size={24} />
               </button>
             </div>
@@ -661,14 +661,14 @@ export default function ClassesView() {
               ) : (
                 <div className="space-y-4">
                   {/* Add Student Input */}
-                  <div className="flex gap-2 p-2 bg-slate-50 rounded-2xl border border-slate-100">
+                  <div className="flex gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors">
                     <input 
                       type="text" 
                       placeholder="Nome do novo aluno..."
                       value={newStudentName}
                       onChange={(e) => setNewStudentName(e.target.value)}
                       onKeyDown={(e) => e.key === 'Enter' && handleAddStudent()}
-                      className="flex-1 p-2 bg-transparent border-none focus:ring-0 text-sm font-medium"
+                      className="flex-1 p-2 bg-transparent border-none focus:ring-0 text-sm font-medium dark:text-white"
                     />
                     <button 
                       onClick={handleAddStudent}
@@ -681,16 +681,16 @@ export default function ClassesView() {
 
                   <div className="grid grid-cols-1 gap-2">
                     {classStudents.map((student) => (
-                      <div key={student.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl group">
+                      <div key={student.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl group transition-colors">
                         <div className="flex items-center gap-4">
-                          <span className="w-8 h-8 flex items-center justify-center bg-brand-blue/10 text-brand-blue rounded-lg font-bold text-sm">
+                          <span className="w-8 h-8 flex items-center justify-center bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue dark:text-brand-yellow rounded-lg font-bold text-sm transition-colors">
                             {student.roll_number}
                           </span>
-                          <span className="font-medium text-brand-blue-dark">{student.name}</span>
+                          <span className="font-medium text-brand-blue-dark dark:text-slate-200 transition-colors">{student.name}</span>
                         </div>
                         <button 
                           onClick={() => handleDeleteStudent(student.id)}
-                          className="p-2 text-slate-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                          className="p-2 text-slate-300 dark:text-slate-600 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg transition-all opacity-0 group-hover:opacity-100"
                           title="Excluir Aluno"
                         >
                           <Trash2 size={16} />
@@ -708,7 +708,7 @@ export default function ClassesView() {
             <div className="mt-6">
               <button 
                 onClick={() => setShowStudentsModal(false)}
-                className="w-full py-3 bg-slate-100 text-brand-blue-dark rounded-xl font-bold hover:bg-slate-200 transition-colors"
+                className="w-full py-3 bg-slate-100 dark:bg-slate-800 text-brand-blue-dark dark:text-slate-200 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
               >
                 Fechar
               </button>
@@ -723,10 +723,10 @@ export default function ClassesView() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl p-8 max-w-lg w-full shadow-2xl"
+            className="bg-white dark:bg-slate-900 rounded-3xl p-8 max-w-lg w-full shadow-2xl transition-colors border dark:border-slate-800"
           >
             <div className="flex justify-between items-center mb-6">
-              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">
+              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">
                 {previewData ? 'Revisar Turma' : 'Importar Turma'}
               </h3>
               <button 
@@ -734,7 +734,7 @@ export default function ClassesView() {
                   setShowUploadModal(false);
                   setPreviewData(null);
                 }} 
-                className="text-slate-400 hover:text-brand-black"
+                className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors"
               >
                 <X size={24} />
               </button>
@@ -744,31 +744,31 @@ export default function ClassesView() {
               <div className="space-y-6">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-brand-blue-dark">Nome da Turma</label>
+                    <label className="text-sm font-bold text-brand-blue-dark dark:text-slate-400">Nome da Turma</label>
                     <input 
                       type="text" 
                       value={previewData.className}
                       onChange={(e) => setPreviewData({ ...previewData, className: e.target.value })}
-                      className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                      className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold dark:text-white"
                     />
                   </div>
                   <div className="space-y-2">
-                    <label className="text-sm font-bold text-brand-blue-dark">Ano Letivo</label>
+                    <label className="text-sm font-bold text-brand-blue-dark dark:text-slate-400">Ano Letivo</label>
                     <input 
                       type="number" 
                       value={previewData.schoolYear}
                       onChange={(e) => setPreviewData({ ...previewData, schoolYear: parseInt(e.target.value) })}
-                      className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold"
+                      className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold dark:text-white"
                     />
                   </div>
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-sm font-bold text-brand-blue-dark">Lista de Alunos ({previewData.students.length})</label>
-                  <div className="max-h-60 overflow-y-auto border border-slate-100 rounded-xl p-2 space-y-1">
+                  <label className="text-sm font-bold text-brand-blue-dark dark:text-slate-400">Lista de Alunos ({previewData.students.length})</label>
+                  <div className="max-h-60 overflow-y-auto border border-slate-100 dark:border-slate-800 rounded-xl p-2 space-y-1">
                     {previewData.students.map((student, idx) => (
-                      <div key={idx} className="flex items-center gap-3 p-2 bg-slate-50 rounded-lg text-sm">
-                        <span className="w-6 text-slate-400 font-bold">{student.rollNumber}</span>
+                      <div key={idx} className="flex items-center gap-3 p-2 bg-slate-50 dark:bg-slate-800 rounded-lg text-sm transition-colors">
+                        <span className="w-6 text-slate-400 dark:text-slate-500 font-bold">{student.rollNumber}</span>
                         <input 
                           type="text" 
                           value={student.name}
@@ -777,7 +777,7 @@ export default function ClassesView() {
                             newStudents[idx].name = e.target.value;
                             setPreviewData({ ...previewData, students: newStudents });
                           }}
-                          className="flex-1 bg-transparent border-none p-0 focus:ring-0"
+                          className="flex-1 bg-transparent border-none p-0 focus:ring-0 dark:text-white"
                         />
                       </div>
                     ))}
@@ -787,13 +787,13 @@ export default function ClassesView() {
                 <div className="flex gap-4">
                   <button 
                     onClick={() => setPreviewData(null)}
-                    className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                    className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                   >
                     Voltar
                   </button>
                   <button 
                     onClick={handleSave}
-                    className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg"
+                    className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg transition-colors"
                   >
                     Salvar Turma
                   </button>
@@ -805,23 +805,23 @@ export default function ClassesView() {
                   {...getRootProps()} 
                   className={cn(
                     "border-2 border-dashed rounded-2xl p-10 flex flex-col items-center justify-center gap-4 transition-all cursor-pointer",
-                    isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
+                    isDragActive ? "border-brand-yellow bg-brand-yellow/5 dark:bg-brand-yellow/10" : "border-slate-200 dark:border-slate-700 hover:border-brand-gold hover:bg-slate-50 dark:hover:bg-slate-800/30"
                   )}
                 >
                   <input {...getInputProps()} />
                   {isProcessing ? (
                     <div className="flex flex-col items-center gap-4">
                       <Loader2 className="animate-spin text-brand-gold" size={48} />
-                      <p className="text-brand-blue-dark font-medium">A IA está lendo o PDF...</p>
+                      <p className="text-brand-blue-dark dark:text-brand-yellow font-medium">A IA está lendo o PDF...</p>
                     </div>
                   ) : (
                     <>
-                      <div className="p-4 bg-brand-gold/10 rounded-full text-brand-gold">
+                      <div className="p-4 bg-brand-gold/10 dark:bg-brand-gold/5 rounded-full text-brand-gold">
                         <FileUp size={40} />
                       </div>
                       <div className="text-center">
-                        <p className="text-lg font-bold text-brand-blue-dark">Arraste o PDF da lista de alunos</p>
-                        <p className="text-sm text-slate-500">ou clique para selecionar o arquivo</p>
+                        <p className="text-lg font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">Arraste o PDF da lista de alunos</p>
+                        <p className="text-sm text-slate-500 dark:text-slate-400 transition-colors">ou clique para selecionar o arquivo</p>
                       </div>
                     </>
                   )}
@@ -830,7 +830,7 @@ export default function ClassesView() {
                 <div className="mt-6 flex gap-4">
                   <button 
                     onClick={() => setShowUploadModal(false)}
-                    className="flex-1 py-3 border border-slate-200 rounded-xl font-bold text-slate-600 hover:bg-slate-50"
+                    className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors transition-colors"
                   >
                     Cancelar
                   </button>

@@ -244,23 +244,23 @@ export default function NotebookChecksView() {
 
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Vistos do Caderno</h3>
-          <p className="text-slate-500">Gerencie os vistos de caderno dos alunos por unidade.</p>
+          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">Vistos do Caderno</h3>
+          <p className="text-slate-500 dark:text-slate-400 transition-colors">Gerencie os vistos de caderno dos alunos por unidade.</p>
         </div>
-        <div className="flex flex-wrap items-center gap-3 bg-white p-2 rounded-2xl shadow-sm border border-slate-100 w-full sm:w-auto">
-          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 rounded-xl border border-slate-100">
-            <label className="text-[10px] font-bold uppercase text-slate-400">Total de Vistos</label>
+        <div className="flex flex-wrap items-center gap-3 bg-white dark:bg-slate-900 p-2 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 w-full sm:w-auto transition-colors">
+          <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-50 dark:bg-slate-800 rounded-xl border border-slate-100 dark:border-slate-700 transition-colors">
+            <label className="text-[10px] font-bold uppercase text-slate-400 dark:text-slate-500">Total de Vistos</label>
             <input 
               type="number" 
               min="1"
               value={maxStamps}
               onChange={(e) => setMaxStamps(Math.max(1, parseInt(e.target.value) || 1))}
-              className="w-10 bg-transparent border-none p-0 text-center font-bold text-brand-blue focus:ring-0"
+              className="w-10 bg-transparent border-none p-0 text-center font-bold text-brand-blue dark:text-brand-yellow focus:ring-0 transition-colors"
             />
           </div>
           <button 
             onClick={handleRecalculateMax}
-            className="px-3 py-1.5 bg-brand-yellow/10 text-brand-blue-dark text-xs font-bold uppercase rounded-xl hover:bg-brand-yellow/30 transition-colors"
+            className="px-3 py-1.5 bg-brand-yellow/10 dark:bg-brand-yellow/5 text-brand-blue-dark dark:text-brand-yellow text-xs font-bold uppercase rounded-xl hover:bg-brand-yellow/30 dark:hover:bg-brand-yellow/20 transition-colors"
             title="Ajustar o total pelo aluno que tem mais vistos"
           >
             Sincronizar Maior
@@ -277,13 +277,13 @@ export default function NotebookChecksView() {
       </div>
 
       {/* Selection Header */}
-      <div className="bg-white p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-100 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+      <div className="bg-white dark:bg-slate-900 p-4 sm:p-6 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6 transition-colors">
         <div className="space-y-2">
-          <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
+          <label className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">Turma</label>
           <select 
             value={selectedClassId}
             onChange={(e) => setSelectedClassId(e.target.value)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white transition-colors"
           >
             <option value="">Selecionar Turma</option>
             {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -291,11 +291,11 @@ export default function NotebookChecksView() {
         </div>
 
         <div className="space-y-2">
-          <label className="text-xs font-bold uppercase text-slate-400">Unidade</label>
+          <label className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">Unidade</label>
           <select 
             value={selectedUnitId}
             onChange={(e) => setSelectedUnitId(e.target.value)}
-            className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white transition-colors"
           >
             {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
           </select>
@@ -307,27 +307,27 @@ export default function NotebookChecksView() {
           <Loader2 className="animate-spin text-brand-gold" size={40} />
         </div>
       ) : selectedClassId ? (
-        <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-x-auto -mx-4 sm:mx-0">
+        <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-x-auto -mx-4 sm:mx-0 transition-colors">
           <div className="inline-block min-w-full align-middle px-4 sm:px-0">
             <table className="min-w-full text-left">
-              <thead className="bg-slate-50 border-b border-slate-100">
+              <thead className="bg-slate-50 dark:bg-slate-800 border-b border-slate-100 dark:border-slate-700 transition-colors">
                 <tr>
-                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase">Nº</th>
-                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase">Aluno</th>
-                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase text-center">Vistos ({maxStamps})</th>
-                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase text-center">Nota</th>
-                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark uppercase text-center">Ações</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark dark:text-brand-yellow uppercase">Nº</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark dark:text-brand-yellow uppercase">Aluno</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark dark:text-brand-yellow uppercase text-center">Vistos ({maxStamps})</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark dark:text-brand-yellow uppercase text-center">Nota</th>
+                  <th className="px-4 py-4 text-xs font-bold text-brand-blue-dark dark:text-brand-yellow uppercase text-center">Ações</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50">
+              <tbody className="divide-y divide-slate-50 dark:divide-slate-800">
                 {students.map((student) => {
                   const count = checks[student.id] || 0;
                   const score = maxStamps > 0 ? (count / maxStamps) * 1.5 : 0;
                   return (
-                    <tr key={student.id} className="hover:bg-slate-50 transition-colors">
-                      <td className="px-4 py-4 text-sm font-bold text-slate-400">{student.roll_number}</td>
+                    <tr key={student.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors">
+                      <td className="px-4 py-4 text-sm font-bold text-slate-400 dark:text-slate-600 transition-colors">{student.roll_number}</td>
                       <td className="px-4 py-4">
-                        <span className="font-bold text-brand-blue-dark block truncate max-w-[120px] sm:max-w-[200px] md:max-w-none">{student.name}</span>
+                        <span className="font-bold text-brand-blue-dark dark:text-slate-200 block truncate max-w-[120px] sm:max-w-[200px] md:max-w-none transition-colors">{student.name}</span>
                       </td>
                       <td className="px-4 py-4">
                         <div className="flex justify-center flex-wrap gap-1 max-w-[120px] mx-auto">
@@ -336,7 +336,7 @@ export default function NotebookChecksView() {
                               key={i} 
                               className={cn(
                                 "w-2.5 h-2.5 rounded-full transition-all duration-300",
-                                i < count ? "bg-brand-gold shadow-[0_0_8px_rgba(212,175,55,0.4)]" : "bg-slate-200"
+                                i < count ? "bg-brand-gold shadow-[0_0_8px_rgba(212,175,55,0.4)]" : "bg-slate-200 dark:bg-slate-700"
                               )}
                             />
                           ))}
@@ -349,19 +349,19 @@ export default function NotebookChecksView() {
                         </div>
                       </td>
                       <td className="px-4 py-4 text-center">
-                        <span className="font-mono font-bold text-brand-blue">{score.toFixed(1)}</span>
+                        <span className="font-mono font-bold text-brand-blue dark:text-brand-yellow transition-colors">{score.toFixed(1)}</span>
                       </td>
                       <td className="px-4 py-4">
                         <div className="flex justify-center gap-1 sm:gap-2">
                           <button 
                             onClick={() => handleToggleCheck(student.id, false)}
-                            className="p-1.5 sm:p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-red-50 hover:text-red-500 transition-colors"
+                            className="p-1.5 sm:p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/20 hover:text-red-500 dark:hover:text-red-500 transition-colors"
                           >
                             <Minus size={14} />
                           </button>
                           <button 
                             onClick={() => handleToggleCheck(student.id, true)}
-                            className="p-1.5 sm:p-2 bg-slate-100 text-slate-600 rounded-lg hover:bg-emerald-50 hover:text-emerald-500 transition-colors"
+                            className="p-1.5 sm:p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-lg hover:bg-emerald-50 dark:hover:bg-emerald-950/20 hover:text-emerald-500 dark:hover:text-emerald-500 transition-colors"
                           >
                             <Plus size={14} />
                           </button>
@@ -375,10 +375,10 @@ export default function NotebookChecksView() {
           </div>
         </div>
       ) : (
-        <div className="text-center py-32 bg-white rounded-3xl border border-dashed border-slate-200">
-          <Users size={64} className="mx-auto text-slate-200 mb-4" />
-          <h4 className="text-xl font-serif font-bold text-brand-blue-dark">Selecione uma turma para lançar vistos</h4>
-          <p className="text-slate-400">Escolha uma turma acima para visualizar a lista de alunos.</p>
+        <div className="text-center py-32 bg-white dark:bg-slate-900 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800 transition-colors transition-colors">
+          <Users size={64} className="mx-auto text-slate-200 dark:text-slate-800 mb-4 transition-colors" />
+          <h4 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">Selecione uma turma para lançar vistos</h4>
+          <p className="text-slate-400 dark:text-slate-500 transition-colors">Escolha uma turma acima para visualizar a lista de alunos.</p>
         </div>
       )}
     </div>

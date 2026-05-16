@@ -612,8 +612,8 @@ export default function AnswerKeysView() {
 
       <div className="flex justify-between items-center">
         <div>
-          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Gabaritos</h3>
-          <p className="text-slate-500">Cadastre e gerencie os gabaritos das atividades.</p>
+          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">Gabaritos</h3>
+          <p className="text-slate-500 dark:text-slate-400">Cadastre e gerencie os gabaritos das atividades.</p>
         </div>
         <button 
           onClick={() => setShowAddModal(true)}
@@ -624,57 +624,57 @@ export default function AnswerKeysView() {
         </button>
       </div>
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
+      <div className="bg-white dark:bg-slate-900 rounded-2xl shadow-sm border border-slate-100 dark:border-slate-800 overflow-hidden transition-colors">
         <table className="w-full text-left">
-          <thead className="bg-slate-50 border-b border-slate-100">
+          <thead className="bg-slate-50 dark:bg-slate-800/50 border-b border-slate-100 dark:border-slate-800 transition-colors">
             <tr>
-              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Título</th>
-              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Unidade</th>
-              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Tipo</th>
-              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Questões</th>
-              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark">Ações</th>
+              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark dark:text-slate-200">Título</th>
+              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark dark:text-slate-200">Unidade</th>
+              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark dark:text-slate-200">Tipo</th>
+              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark dark:text-slate-200">Questões</th>
+              <th className="px-6 py-4 text-sm font-bold text-brand-blue-dark dark:text-slate-200">Ações</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-50">
+          <tbody className="divide-y divide-slate-50 dark:divide-slate-800/50">
             {assessments.map((assessment) => (
-              <tr key={assessment.id} className="hover:bg-slate-50 transition-colors">
+              <tr key={assessment.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors">
                 <td className="px-6 py-4">
                   <div className="flex items-center gap-3">
-                    <div className="p-2 bg-brand-yellow/10 text-brand-yellow rounded-lg">
+                    <div className="p-2 bg-brand-yellow/10 dark:bg-brand-yellow/5 text-brand-yellow rounded-lg">
                       <FileText size={18} />
                     </div>
-                    <span className="font-medium text-brand-blue-dark">{assessment.title}</span>
+                    <span className="font-medium text-brand-blue-dark dark:text-brand-yellow transition-colors">{assessment.title}</span>
                   </div>
                 </td>
-                <td className="px-6 py-4 text-sm text-slate-600">{assessment.units?.name}</td>
+                <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{assessment.units?.name}</td>
                 <td className="px-6 py-4">
                   <span className={cn(
                     "px-3 py-1 rounded-full text-xs font-bold uppercase",
-                    assessment.type === 'prova' ? "bg-red-50 text-red-600" : "bg-blue-50 text-blue-600"
+                    assessment.type === 'prova' ? "bg-red-50 dark:bg-red-950/30 text-red-600 dark:text-red-400" : "bg-blue-50 dark:bg-blue-950/30 text-blue-600 dark:text-blue-400"
                   )}>
                     {assessment.type}
                   </span>
                 </td>
-                <td className="px-6 py-4 text-sm text-slate-600">{assessment.total_questions}</td>
+                <td className="px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{assessment.total_questions}</td>
                 <td className="px-6 py-4">
                     <div className="flex gap-2">
                       <button 
                         onClick={() => handleEditClick(assessment)}
-                        className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-blue"
+                        className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-blue transition-colors"
                         title="Editar Gabarito"
                       >
                         <Edit2 size={16} />
                       </button>
                       <button 
                         onClick={() => handleEditName(assessment)}
-                        className="p-2 hover:bg-slate-100 rounded-lg text-slate-400 hover:text-brand-gold"
+                        className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-gold transition-colors"
                         title="Mudar Nome"
                       >
                         <FileText size={16} />
                       </button>
                       <button 
                         onClick={() => handleDeleteAssessment(assessment.id, assessment.title)}
-                        className="p-2 hover:bg-red-50 rounded-lg text-slate-400 hover:text-red-500"
+                        className="p-2 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-slate-400 hover:text-red-500 transition-colors"
                         title="Excluir"
                       >
                         <Trash2 size={16} />
@@ -693,10 +693,10 @@ export default function AnswerKeysView() {
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white rounded-3xl p-8 max-w-5xl w-full shadow-2xl max-h-[90vh] overflow-y-auto"
+            className="bg-white dark:bg-slate-900 rounded-3xl p-8 max-w-5xl w-full shadow-2xl max-h-[90vh] overflow-y-auto transition-colors"
           >
             <div className="flex justify-between items-center mb-8">
-              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">
+              <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow">
                 {editingAssessment ? 'Editar Gabarito' : 'Novo Gabarito'}
               </h3>
               <button onClick={() => {
@@ -710,18 +710,18 @@ export default function AnswerKeysView() {
                   type: 'prova',
                   questions: [{ question_number: 1, question_type: 'objetiva', expected_answer: '', max_score: 1, criteria: '', bncc_skills: [] }]
                 });
-              }} className="text-slate-400 hover:text-brand-black">
+              }} className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors">
                 <X size={24} />
               </button>
             </div>
 
             {/* Import Mode Toggle */}
-            <div className="flex bg-slate-100 p-1 rounded-xl mb-6">
+            <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl mb-6 transition-colors">
               <button
                 onClick={() => setImportMode('pdf')}
                 className={cn(
                   "flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all",
-                  importMode === 'pdf' ? "bg-white text-brand-blue shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  importMode === 'pdf' ? "bg-white dark:bg-slate-700 text-brand-blue dark:text-brand-yellow shadow-sm" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
                 )}
               >
                 <FileUp size={16} />
@@ -731,7 +731,7 @@ export default function AnswerKeysView() {
                 onClick={() => setImportMode('latex')}
                 className={cn(
                   "flex-1 flex items-center justify-center gap-2 py-2 text-sm font-bold rounded-lg transition-all",
-                  importMode === 'latex' ? "bg-white text-brand-blue shadow-sm" : "text-slate-500 hover:text-slate-700"
+                  importMode === 'latex' ? "bg-white dark:bg-slate-700 text-brand-blue dark:text-brand-yellow shadow-sm" : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
                 )}
               >
                 <FileText size={16} />
@@ -745,14 +745,14 @@ export default function AnswerKeysView() {
                 {...getRootProps()} 
                 className={cn(
                   "mb-8 border-2 border-dashed rounded-2xl p-8 flex flex-col items-center justify-center gap-3 transition-all cursor-pointer",
-                  isDragActive ? "border-brand-yellow bg-brand-yellow/5" : "border-slate-200 hover:border-brand-gold hover:bg-slate-50"
+                  isDragActive ? "border-brand-yellow bg-brand-yellow/5 dark:bg-brand-yellow/10" : "border-slate-200 dark:border-slate-700 hover:border-brand-gold hover:bg-slate-50 dark:hover:bg-slate-800"
                 )}
               >
                 <input {...getInputProps()} />
                 {isProcessing ? (
                   <div className="flex flex-col items-center gap-3">
                     <Loader2 className="animate-spin text-brand-gold" size={32} />
-                    <p className="text-brand-blue-dark font-medium">A IA está extraindo as questões do PDF...</p>
+                    <p className="text-brand-blue-dark dark:text-slate-200 font-medium">A IA está extraindo as questões do PDF...</p>
                   </div>
                 ) : (
                   <>
@@ -760,27 +760,27 @@ export default function AnswerKeysView() {
                       <FileUp size={24} />
                     </div>
                     <div className="text-center">
-                      <p className="font-bold text-brand-blue-dark">Importar Gabarito via PDF</p>
-                      <p className="text-xs text-slate-500">Arraste a prova em PDF para extrair questões e critérios automaticamente</p>
+                      <p className="font-bold text-brand-blue-dark dark:text-brand-yellow">Importar Gabarito via PDF</p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">Arraste a prova em PDF para extrair questões e critérios automaticamente</p>
                     </div>
                   </>
                 )}
               </div>
             ) : (
               <div className="mb-8 space-y-4">
-                <div className="bg-brand-blue/5 p-4 rounded-2xl border border-brand-blue/10">
-                  <div className="flex items-center gap-2 text-brand-blue font-bold text-sm mb-2">
+                <div className="bg-brand-blue/5 dark:bg-brand-blue/10 p-4 rounded-2xl border border-brand-blue/10 dark:border-brand-blue/20">
+                  <div className="flex items-center gap-2 text-brand-blue dark:text-brand-yellow font-bold text-sm mb-2">
                     <FileText size={18} />
                     Modo Texto / LaTeX Direto
                   </div>
-                  <p className="text-xs text-brand-blue/70 mb-4">
+                  <p className="text-xs text-brand-blue/70 dark:text-brand-yellow/70 mb-4">
                     Cole o código LaTeX ou o texto corrido do gabarito. A IA identificará o título e as questões instantaneamente.
                   </p>
                   <textarea
                     value={latexText}
                     onChange={(e) => setLatexText(e.target.value)}
                     placeholder="Cole aqui o conteúdo LaTeX ou texto do gabarito..."
-                    className="w-full h-48 p-4 bg-white border border-slate-200 rounded-xl text-xs font-mono focus:ring-2 focus:ring-brand-blue resize-none"
+                    className="w-full h-48 p-4 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono focus:ring-2 focus:ring-brand-blue outline-none resize-none dark:text-slate-100"
                   />
                 </div>
                 <button
@@ -796,21 +796,21 @@ export default function AnswerKeysView() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
               <div className="space-y-2">
-                <label className="text-sm font-bold text-brand-blue-dark">Título da Atividade</label>
+                <label className="text-sm font-bold text-brand-blue-dark dark:text-brand-gray">Título da Atividade</label>
                 <input 
                   type="text" 
                   value={formData.title}
                   onChange={(e) => setFormData({ ...formData, title: e.target.value })}
                   placeholder="Ex: Prova de Química - Unidade II"
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
                 />
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-bold text-brand-blue-dark">Tipo</label>
+                <label className="text-sm font-bold text-brand-blue-dark dark:text-brand-gray">Tipo</label>
                 <select 
                   value={formData.type}
                   onChange={(e) => setFormData({ ...formData, type: e.target.value as any })}
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
                 >
                   <option value="prova">Prova</option>
                   <option value="lista1">Lista 1</option>
@@ -819,11 +819,11 @@ export default function AnswerKeysView() {
                 </select>
               </div>
               <div className="space-y-2">
-                <label className="text-sm font-bold text-brand-blue-dark">Unidade</label>
+                <label className="text-sm font-bold text-brand-blue-dark dark:text-brand-gray">Unidade</label>
                 <select 
                   value={formData.unit_id}
                   onChange={(e) => setFormData({ ...formData, unit_id: e.target.value })}
-                  className="w-full p-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
                 >
                   <option value="">Selecionar Unidade</option>
                   {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
@@ -833,10 +833,10 @@ export default function AnswerKeysView() {
 
             <div className="space-y-4">
               <div className="flex justify-between items-center">
-                <h4 className="text-lg font-bold text-brand-blue-dark">Questões Extraídas/Cadastradas</h4>
+                <h4 className="text-lg font-bold text-brand-blue-dark dark:text-brand-yellow">Questões Extraídas/Cadastradas</h4>
                 <button 
                   onClick={addQuestion}
-                  className="text-brand-blue font-bold text-sm flex items-center gap-1 hover:text-brand-blue-dark"
+                  className="text-brand-blue dark:text-brand-yellow font-bold text-sm flex items-center gap-1 hover:text-brand-blue-dark dark:hover:text-brand-gold transition-colors"
                 >
                   <Plus size={16} /> Adicionar Questão Manualmente
                 </button>
@@ -844,18 +844,18 @@ export default function AnswerKeysView() {
 
               <div className="space-y-4">
                 {formData.questions.map((q, i) => (
-                  <div key={i} className="p-6 bg-slate-50 rounded-2xl space-y-4">
+                  <div key={i} className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-2xl space-y-4 transition-colors">
                     <div className="grid grid-cols-12 gap-4 items-end">
                       <div className="col-span-1">
                         <label className="text-[10px] font-bold uppercase text-slate-400">Nº</label>
-                        <div className="p-3 font-bold text-brand-blue-dark">{q.question_number}</div>
+                        <div className="p-3 font-bold text-brand-blue-dark dark:text-slate-200">{q.question_number}</div>
                       </div>
                       <div className="col-span-3">
                         <label className="text-[10px] font-bold uppercase text-slate-400">Tipo</label>
                         <select 
                           value={q.question_type}
                           onChange={(e) => updateQuestion(i, 'question_type', e.target.value)}
-                          className="w-full p-2 bg-white border-none rounded-lg text-sm"
+                          className="w-full p-2 bg-white dark:bg-slate-800 border-none rounded-lg text-sm dark:text-white"
                         >
                           <option value="objetiva">Objetiva</option>
                           <option value="dissertativa">Dissertativa</option>
@@ -868,7 +868,7 @@ export default function AnswerKeysView() {
                           value={q.expected_answer}
                           onChange={(e) => updateQuestion(i, 'expected_answer', e.target.value)}
                           placeholder={q.question_type === 'objetiva' ? "A, B, C..." : "Palavras-chave..."}
-                          className="w-full p-2 bg-white border-none rounded-lg text-sm"
+                          className="w-full p-2 bg-white dark:bg-slate-800 border-none rounded-lg text-sm dark:text-white"
                         />
                       </div>
                       <div className="col-span-2">
@@ -877,13 +877,13 @@ export default function AnswerKeysView() {
                           type="number" 
                           value={q.max_score}
                           onChange={(e) => updateQuestion(i, 'max_score', parseFloat(e.target.value))}
-                          className="w-full p-2 bg-white border-none rounded-lg text-sm"
+                          className="w-full p-2 bg-white dark:bg-slate-800 border-none rounded-lg text-sm dark:text-white"
                         />
                       </div>
                       <div className="col-span-1 flex justify-center pb-2">
                         <button 
                           onClick={() => removeQuestion(i)}
-                          className="text-red-400 hover:text-red-600"
+                          className="text-red-400 hover:text-red-600 transition-colors"
                         >
                           <Trash2 size={18} />
                         </button>
@@ -896,7 +896,7 @@ export default function AnswerKeysView() {
                         <textarea 
                           value={q.criteria}
                           onChange={(e) => updateQuestion(i, 'criteria', e.target.value)}
-                          className="w-full p-2 bg-white border-none rounded-lg text-xs h-16 resize-none"
+                          className="w-full p-2 bg-white dark:bg-slate-800 border-none rounded-lg text-xs h-16 resize-none dark:text-white"
                           placeholder="Descreva o que a IA deve considerar para dar a pontuação..."
                         />
                       </div>
@@ -906,7 +906,7 @@ export default function AnswerKeysView() {
                           type="text" 
                           value={q.bncc_skills.join(', ')}
                           onChange={(e) => updateQuestion(i, 'bncc_skills', e.target.value.split(',').map((s: string) => s.trim()))}
-                          className="w-full p-2 bg-white border-none rounded-lg text-xs"
+                          className="w-full p-2 bg-white dark:bg-slate-800 border-none rounded-lg text-xs dark:text-white"
                           placeholder="Ex: EF01MA01, EF01MA02"
                         />
                       </div>
@@ -919,13 +919,13 @@ export default function AnswerKeysView() {
             <div className="mt-10 flex gap-4">
               <button 
                 onClick={() => setShowAddModal(false)}
-                className="flex-1 py-4 border border-slate-200 rounded-2xl font-bold text-slate-600 hover:bg-slate-50"
+                className="flex-1 py-4 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all"
               >
                 Cancelar
               </button>
               <button 
                 onClick={handleSave}
-                className="flex-1 py-4 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-lg"
+                className="flex-1 py-4 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-lg transition-all"
               >
                 Salvar Gabarito
               </button>
@@ -939,9 +939,9 @@ export default function AnswerKeysView() {
           <motion.div 
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white w-full max-w-md rounded-3xl shadow-2xl p-8"
+            className="bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl shadow-2xl p-8 transition-colors"
           >
-            <h3 className="text-2xl font-serif font-bold text-brand-blue-dark mb-6">Editar Nome do Gabarito</h3>
+            <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow mb-6">Editar Nome do Gabarito</h3>
             <div className="space-y-4">
               <div className="space-y-2">
                 <label className="text-xs font-bold uppercase text-slate-400">Novo Nome</label>
@@ -949,14 +949,14 @@ export default function AnswerKeysView() {
                   type="text"
                   value={newAssessmentName}
                   onChange={(e) => setNewAssessmentName(e.target.value)}
-                  className="w-full p-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-brand-yellow"
+                  className="w-full p-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
                   placeholder="Ex: Prova de Matemática - 1º Bimestre"
                 />
               </div>
               <div className="flex gap-4 pt-4">
                 <button 
                   onClick={() => setShowEditNameModal(false)}
-                  className="flex-1 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                  className="flex-1 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
                 >
                   Cancelar
                 </button>

@@ -104,7 +104,7 @@ export default function ReportsView() {
     // Header
     currentDoc.setFontSize(20);
     currentDoc.setTextColor(10, 37, 64);
-    currentDoc.text(detailed ? 'Relatório Pedagógico Detalhado' : 'Comprovante de Correção', pageWidth / 2, 20, { align: 'center' });
+    currentDoc.text(detailed ? 'Relatório Pedagógico Detalhado' : 'Relatório de Desempenho', pageWidth / 2, 20, { align: 'center' });
 
     // Student Info
     currentDoc.setFontSize(12);
@@ -119,44 +119,62 @@ export default function ReportsView() {
     currentDoc.setTextColor(10, 37, 64);
     currentDoc.text(`Nota: ${result.total_score.toFixed(1)} / ${result.max_score}`, pageWidth - 20, 45, { align: 'right' });
 
-    // Overall Feedback (Only if detailed)
-    let currentY = 70;
-    if (detailed && result.overall_feedback) {
+    let currentY = 65;
+
+    // 1. BNCC Skills Section (Moved up)
+    if (detailed && result.bncc_descriptions && result.bncc_descriptions.length > 0) {
       currentDoc.setFontSize(12);
       currentDoc.setTextColor(10, 37, 64);
-      currentDoc.text('Parecer Pedagógico:', 20, 70);
-      currentDoc.setFontSize(10);
-      currentDoc.setTextColor(80);
-      const splitFeedback = currentDoc.splitTextToSize(result.overall_feedback, pageWidth - 40);
-      currentDoc.text(splitFeedback, 20, 77);
-      currentY = 77 + (splitFeedback.length * 5) + 10;
+      currentDoc.setFont('helvetica', 'bold');
+      currentDoc.text('Habilidades BNCC Abordadas:', 20, currentY);
+      
+      let skillY = currentY + 8;
+      result.bncc_descriptions.forEach((skill: any) => {
+        if (skillY > currentDoc.internal.pageSize.getHeight() - 30) {
+          currentDoc.addPage();
+          skillY = 20;
+        }
+        currentDoc.setFontSize(9);
+        currentDoc.setFont('helvetica', 'bold');
+        currentDoc.text(`${skill.codigo}:`, 20, skillY);
+        currentDoc.setFont('helvetica', 'normal');
+        const splitDesc = currentDoc.splitTextToSize(skill.descricao, pageWidth - 65);
+        currentDoc.text(splitDesc, 45, skillY);
+        skillY += (splitDesc.length * 5) + 3;
+      });
+      currentY = skillY + 5;
     }
 
-    // Table of corrections
-    let headers = ['Nº', 'Resposta do Aluno', 'Resultado', 'Nota'];
-    if (detailed) headers = ['Nº', 'Resposta', 'Justificativa Técnica / BNCC', 'Nota'];
+    // 2. Table of corrections (Question by Question Analysis)
+    currentDoc.setFontSize(12);
+    currentDoc.setTextColor(10, 37, 64);
+    currentDoc.setFont('helvetica', 'bold');
+    if (detailed) {
+      currentDoc.text('Análise por Questão:', 20, currentY);
+      currentY += 5;
+    }
 
-    const tableData = result.corrections.map((corr: any) => {
+    let headers = ['Questão Nº', 'Resultado (Status)'];
+    if (detailed) headers = ['Nº', 'Resposta do Aluno', 'Resposta Esperada', 'Status', 'Feedback / Nota'];
+
+    const tableData = [...result.corrections]
+      .sort((a, b) => (a.questions?.question_number || 0) - (b.questions?.question_number || 0))
+      .map((corr: any) => {
       const isCorrect = corr.score >= (corr.questions?.max_score || 0);
       const resultText = isCorrect ? 'ACERTO' : corr.score > 0 ? 'PARCIAL' : 'ERRO';
       
       if (detailed) {
-        const skills = corr.questions?.bncc_skills?.join(', ') || 'N/A';
         const feedback = corr.ai_corrections?.[0]?.justification || corr.ai_corrections?.[0]?.correction_feedback || '-';
         return [
           corr.questions?.question_number,
           corr.answer_text || 'Sem resposta',
-          `[BNCC: ${skills}]\n${feedback}`,
-          `${corr.score.toFixed(2)}`
+          corr.questions?.expected_answer || '-',
+          resultText,
+          `${feedback}\n(Nota: ${corr.score.toFixed(1)})`
         ];
       }
 
-      return [
-        corr.questions?.question_number,
-        corr.answer_text || 'Sem resposta',
-        resultText,
-        `${corr.score.toFixed(1)}`
-      ];
+      return [corr.questions?.question_number, resultText];
     });
 
     autoTable(currentDoc, {
@@ -164,14 +182,50 @@ export default function ReportsView() {
       head: [headers],
       body: tableData,
       headStyles: { fillColor: [10, 37, 64] },
-      styles: { fontSize: detailed ? 7 : 9 },
+      styles: { fontSize: detailed ? 8 : 10, halign: detailed ? 'left' : 'center' },
       columnStyles: detailed ? {
-        1: { cellWidth: 40 },
-        2: { cellWidth: 100 }
+        0: { cellWidth: 10 },
+        1: { cellWidth: 35 },
+        2: { cellWidth: 35 },
+        3: { cellWidth: 20 },
+        4: { cellWidth: 70 }
       } : {
+        0: { cellWidth: 40 },
         1: { cellWidth: 80 }
+      },
+      didDrawPage: (data) => {
+        currentY = data.cursor.y;
       }
     });
+
+    // 3. Overall Feedback (Moved to end)
+    if (detailed && result.overall_feedback) {
+      const lastTable = (currentDoc as any).lastAutoTable;
+      const finalY = (lastTable && lastTable.finalY) ? lastTable.finalY + 15 : currentY + 15;
+      
+      if (finalY > currentDoc.internal.pageSize.getHeight() - 40) {
+        currentDoc.addPage();
+        currentDoc.setFontSize(12);
+        currentDoc.setTextColor(10, 37, 64);
+        currentDoc.setFont('helvetica', 'bold');
+        currentDoc.text('Parecer Pedagógico Geral:', 20, 20);
+        currentDoc.setFontSize(10);
+        currentDoc.setTextColor(80);
+        currentDoc.setFont('helvetica', 'italic');
+        const splitFeedback = currentDoc.splitTextToSize(result.overall_feedback, pageWidth - 40);
+        currentDoc.text(splitFeedback, 20, 30);
+      } else {
+        currentDoc.setFontSize(12);
+        currentDoc.setTextColor(10, 37, 64);
+        currentDoc.setFont('helvetica', 'bold');
+        currentDoc.text('Parecer Pedagógico Geral:', 20, finalY);
+        currentDoc.setFontSize(10);
+        currentDoc.setTextColor(80);
+        currentDoc.setFont('helvetica', 'italic');
+        const splitFeedback = currentDoc.splitTextToSize(result.overall_feedback, pageWidth - 40);
+        currentDoc.text(splitFeedback, 20, finalY + 8);
+      }
+    }
 
     if (!doc) {
       currentDoc.save(`Relatorio_${detailed ? 'Detalhado_' : ''}${result.students?.name}.pdf`);
@@ -182,44 +236,134 @@ export default function ReportsView() {
     return currentDoc;
   };
 
-  const handleBulkDownload = async () => {
-    if (!filters.classId || results.length === 0) return;
+  const handleBulkSimpleReports = async () => {
+    if (selectedIds.size === 0) return;
     
     setIsBulkDownloading(true);
     try {
       const doc = new jsPDF();
+      const selectedResults = results.filter(r => selectedIds.has(r.id));
       
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
+      for (let i = 0; i < selectedResults.length; i++) {
+        const result = selectedResults[i];
         const { data: corrections } = await supabase!
           .from('student_answers')
           .select('*, questions(*), ai_corrections(*)')
           .eq('student_id', result.student_id)
-          .eq('assessment_id', result.assessment_id);
+          .eq('assessment_id', result.assessment_id)
+          .order('questions(question_number)', { ascending: true });
         
-        exportToPDF({ ...result, corrections }, doc, i === results.length - 1);
+        exportToPDF({ ...result, corrections }, doc, i === selectedResults.length - 1, false);
       }
       
-      const className = classes.find(c => c.id === filters.classId)?.name || 'Turma';
-      doc.save(`Relatorios_${className}_${new Date().toLocaleDateString()}.pdf`);
+      const className = classes.find(c => c.id === filters.classId)?.name || 'Selecao';
+      doc.save(`Relatorios_Simples_${className}_${new Date().toLocaleDateString()}.pdf`);
       
       setModal({
         isOpen: true,
         title: 'Sucesso!',
-        message: `${results.length} relatórios foram compilados em um único arquivo PDF.`,
+        message: `${selectedIds.size} relatórios simples foram gerados com sucesso.`,
         type: 'success'
       });
     } catch (error) {
-      console.error('Error in bulk download:', error);
-      setModal({
-        isOpen: true,
-        title: 'Erro',
-        message: 'Ocorreu um erro ao gerar os relatórios em massa.',
-        type: 'error'
-      });
+      console.error('Error in bulk simple reports:', error);
+      setModal({ isOpen: true, title: 'Erro', message: 'Erro ao gerar relatórios simples.', type: 'error' });
     } finally {
       setIsBulkDownloading(false);
     }
+  };
+
+  const handleBulkCompleteReports = async () => {
+    if (selectedIds.size === 0) return;
+    
+    setIsGeneratingDetailed(true);
+    try {
+      const doc = new jsPDF();
+      const selectedResults = results.filter(r => selectedIds.has(r.id));
+      
+      for (let i = 0; i < selectedResults.length; i++) {
+        let result = selectedResults[i];
+        
+        // Fetch corrections
+        const { data: corrections } = await supabase!
+          .from('student_answers')
+          .select('*, questions(*), ai_corrections(*)')
+          .eq('student_id', result.student_id)
+          .eq('assessment_id', result.assessment_id)
+          .order('questions(question_number)', { ascending: true });
+        
+        let resultWithCorrections = { ...result, corrections };
+
+        // If overall_feedback is missing, generate it via AI (Internal helper without alerts)
+        if (!result.overall_feedback) {
+          const enriched = await generateAIDataOnly(resultWithCorrections);
+          if (enriched) resultWithCorrections = enriched;
+        }
+        
+        exportToPDF(resultWithCorrections, doc, i === selectedResults.length - 1, true);
+      }
+      
+      const className = classes.find(c => c.id === filters.classId)?.name || 'Selecao';
+      doc.save(`Relatorios_Completos_${className}_${new Date().toLocaleDateString()}.pdf`);
+      
+      setModal({
+        isOpen: true,
+        title: 'Relatórios Completos Gerados!',
+        message: `${selectedIds.size} relatórios detalhados com IA foram processados e baixados.`,
+        type: 'success'
+      });
+    } catch (error: any) {
+      console.error('Error in bulk complete reports:', error);
+      setModal({ isOpen: true, title: 'Erro', message: error.message, type: 'error' });
+    } finally {
+      setIsGeneratingDetailed(false);
+    }
+  };
+
+  const generateAIDataOnly = async (result: any) => {
+    if (!supabase) return null;
+    const { ai, GEMINI_MODEL } = await import('../lib/gemini');
+    
+    const prompt = `
+      Como Especialista Pedagógico e Analista de BNCC, gere um relatório detalhado e humanizado.
+      Aluno: ${result.students?.name} | Nota: ${result.total_score} / ${result.max_score}
+      
+      RESPOSTAS:
+      ${result.corrections.map((c: any) => `- Q${c.questions?.question_number}: ${c.answer_text} (Gabarito: ${c.questions?.expected_answer})`).join('\n')}
+      
+      RETORNE APENAS JSON:
+      {
+        "parecer_geral": "string",
+        "questoes": [{"n_questao": number, "comentario": "string"}],
+        "habilidades_bncc": [{"codigo": "string", "descricao": "string"}]
+      }
+    `;
+
+    try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }]
+      });
+
+      const responseText = response.text || '';
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      
+      if (jsonMatch) {
+        const payload = JSON.parse(jsonMatch[0]);
+        await supabase.from('assessment_results').update({ overall_feedback: payload.parecer_geral }).eq('id', result.id);
+        
+        for (const item of payload.questoes) {
+          const corr = result.corrections.find((c: any) => c.questions?.question_number === item.n_questao);
+          if (corr && corr.ai_corrections?.[0]) {
+            await supabase.from('ai_corrections').update({ justification: item.comentario, correction_feedback: item.comentario }).eq('id', corr.ai_corrections[0].id);
+          }
+        }
+        return { ...result, overall_feedback: payload.parecer_geral, bncc_descriptions: payload.habilidades_bncc };
+      }
+    } catch (e) {
+      console.error('Data generation error for ID:', result.id, e);
+    }
+    return null;
   };
 
   const generateDetailedAIReport = async (result: any) => {
@@ -230,32 +374,43 @@ export default function ReportsView() {
       const { ai, GEMINI_MODEL } = await import('../lib/gemini');
       
       const prompt = `
-        Como Especialista Pedagógico, justifique detalhadamente a correção desta atividade.
-        Analise o desempenho do aluno com base no gabarito e habilidades BNCC.
+        Como Especialista Pedagógico e Analista de BNCC, gere um relatório detalhado e humanizado para este aluno.
         
-        ALUNO: ${result.students?.name}
-        ATIVIDADE: ${result.assessments?.title}
-        NOTA: ${result.total_score} / ${result.max_score}
+        INFORMAÇÕES DA ATIVIDADE:
+        Aluno: ${result.students?.name}
+        Nota: ${result.total_score} / ${result.max_score}
         
-        CORREÇÕES:
+        RESPOSTAS POR QUESTÃO:
         ${result.corrections.map((c: any) => `
-          Questão ${c.questions?.question_number} (${c.questions?.question_type}):
-          Gabarito: ${c.questions?.expected_answer}
-          Resposta Aluno: ${c.answer_text}
-          Nota dada: ${c.score}
-          Habilidades BNCC: ${c.questions?.bncc_skills?.join(', ')}
+          - Questão ${c.questions?.question_number} (${c.questions?.question_type}):
+            Gabarito: ${c.questions?.expected_answer}
+            Resposta do Aluno: ${c.answer_text}
+            Nota: ${c.score}/${c.questions?.max_score}
+            Habilidades: ${c.questions?.bncc_skills?.join(', ')}
         `).join('\n')}
         
-        TAREFA:
-        1. Para cada questão, escreva uma "justification" pedagógica curta e técnica.
-        2. Escreva um "overall_feedback" motivador e direcionado.
-        
+        REQUISITOS DO RELATÓRIO:
+        1. Para cada questão, escreva um "comentario_pedagogico" (curto e direto) explicando por que o aluno acertou, errou ou teve nota parcial.
+        2. Para cada Habilidade BNCC mencionada em toda a atividade, forneça uma "descricao_curta" (máx 150 caracteres) precisa conforme a base oficial.
+        3. Escreva um "parecer_geral" (comentário geral) sobre o desempenho, dificuldades e pontos fortes.
+        4. O tom deve ser profissional porém encorajador.
+
         RETORNE APENAS JSON:
         {
-          "overall_feedback": "string",
-          "justifications": {
-            "[question_number]": "string"
-          }
+          "parecer_geral": "string",
+          "questoes": [
+            {
+              "n_questao": number,
+              "comentario": "string",
+              "status": "acerto" | "erro" | "parcial"
+            }
+          ],
+          "habilidades_bncc": [
+            {
+              "codigo": "string",
+              "descricao": "string"
+            }
+          ]
         }
       `;
 
@@ -270,27 +425,43 @@ export default function ReportsView() {
       if (jsonMatch) {
         const payload = JSON.parse(jsonMatch[0]);
         
-        // Update database
+        // Transform and save to DB
+        // We'll store the richer data in assessment_results.overall_feedback as a JSON string for now
+        // or just update existing fields. Let's update the records.
+        
         await supabase.from('assessment_results')
-          .update({ overall_feedback: payload.overall_feedback })
+          .update({ 
+            overall_feedback: payload.parecer_geral,
+            // We can store the BNCC list in a separate field if needed, 
+            // but for now let's use the UI state to handle the display
+          })
           .eq('id', result.id);
           
-        for (const [qNum, just] of Object.entries(payload.justifications)) {
-          const corr = result.corrections.find((c: any) => c.questions?.question_number === parseInt(qNum));
+        for (const item of payload.questoes) {
+          const corr = result.corrections.find((c: any) => c.questions?.question_number === item.n_questao);
           if (corr && corr.ai_corrections?.[0]) {
             await supabase.from('ai_corrections')
-              .update({ justification: just })
+              .update({ 
+                justification: item.comentario,
+                correction_feedback: item.comentario 
+              })
               .eq('id', corr.ai_corrections[0].id);
           }
         }
 
-        // Refresh UI
-        await fetchResultDetails(result);
+        // Attach the BNCC skills to the result object for the PDF export immediate use
+        const enrichedResult = { ...result, bncc_descriptions: payload.habilidades_bncc };
+
+        // Refresh list if needed (optional)
+        fetchData();
         
+        // Automatically trigger PDF export with the enriched data
+        exportToPDF(enrichedResult, undefined, false, true);
+
         setModal({
           isOpen: true,
-          title: 'IA Concluiu a Análise',
-          message: 'Justificativas pedagógicas e BNCC foram geradas e salvas com sucesso.',
+          title: 'Relatório Completo Gerado!',
+          message: 'A análise pedagógica foi concluída e o PDF detalhado foi baixado.',
           type: 'success'
         });
       }
@@ -301,7 +472,7 @@ export default function ReportsView() {
       setIsGeneratingDetailed(false);
     }
   };
-  async function fetchResultDetails(result: any) {
+  const handleCompleteReport = async (result: any) => {
     if (!supabase) return;
     setIsFetchingDetails(true);
     try {
@@ -309,11 +480,19 @@ export default function ReportsView() {
         .from('student_answers')
         .select('*, questions(*), ai_corrections(*)')
         .eq('student_id', result.student_id)
-        .eq('assessment_id', result.assessment_id);
+        .eq('assessment_id', result.assessment_id)
+        .order('questions(question_number)', { ascending: true });
       
-      setSelectedResult({ ...result, corrections });
+      const resultWithCorrections = { ...result, corrections };
+
+      // If already has overall feedback, just download, otherwise generate
+      if (result.overall_feedback) {
+        exportToPDF(resultWithCorrections, undefined, false, true);
+      } else {
+        await generateDetailedAIReport(resultWithCorrections);
+      }
     } catch (error) {
-      console.error('Error fetching result details:', error);
+      console.error('Error in complete report:', error);
     } finally {
       setIsFetchingDetails(false);
     }
@@ -482,29 +661,29 @@ export default function ReportsView() {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <div>
-          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark">Relatórios de Correção</h3>
-          <p className="text-slate-500">Acompanhe o histórico de todas as atividades corrigidas.</p>
+          <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">Relatórios de Correção</h3>
+          <p className="text-slate-500 dark:text-slate-400 transition-colors">Acompanhe o histórico de todas as atividades corrigidas.</p>
         </div>
       </div>
 
       {/* Simplified Search Bar */}
-      <div className="bg-white p-6 rounded-3xl shadow-sm border border-slate-100 space-y-4">
+      <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 space-y-4 transition-colors">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+            <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={20} />
             <input 
               type="text"
               placeholder="Nome do aluno (mín. 3 letras)..."
               value={filters.search}
               onChange={(e) => setFilters({ ...filters, search: e.target.value })}
-              className="w-full pl-12 pr-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner"
+              className="w-full pl-12 pr-4 py-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner dark:text-white transition-colors"
             />
           </div>
           <div className="flex gap-2">
             <select
               value={filters.classId}
               onChange={(e) => setFilters({ ...filters, classId: e.target.value })}
-              className="flex-1 px-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner"
+              className="flex-1 px-4 py-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner dark:text-white transition-colors"
             >
               <option value="">Todas as Turmas</option>
               {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -514,7 +693,7 @@ export default function ReportsView() {
             <select
               value={filters.activityType}
               onChange={(e) => setFilters({ ...filters, activityType: e.target.value })}
-              className="flex-1 px-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner"
+              className="flex-1 px-4 py-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow text-base shadow-inner dark:text-white transition-colors"
             >
               <option value="">Todas as Atividades</option>
               <option value="prova">Prova</option>
@@ -524,7 +703,7 @@ export default function ReportsView() {
             </select>
             <button 
               onClick={handleClearFilters}
-              className="px-4 py-3 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
+              className="px-4 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
               title="Limpar Filtros"
             >
               <Trash2 size={20} />
@@ -532,9 +711,9 @@ export default function ReportsView() {
           </div>
         </div>
         
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-50">
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-50 dark:border-slate-800">
           <div className="flex items-center gap-4">
-            <p className="text-xs text-slate-400">
+            <p className="text-xs text-slate-400 dark:text-slate-500 transition-colors">
               {results.length > 0 ? `${results.length} resultados encontrados.` : 'Use os filtros para buscar relatórios.'}
             </p>
             {results.length > 0 && (
@@ -543,35 +722,42 @@ export default function ReportsView() {
                   type="checkbox" 
                   checked={selectedIds.size === results.length && results.length > 0}
                   onChange={toggleSelectAll}
-                  className="w-4 h-4 rounded border-slate-300 text-brand-blue focus:ring-brand-yellow"
+                  className="w-4 h-4 rounded border-slate-300 dark:border-slate-700 text-brand-blue dark:text-brand-yellow focus:ring-brand-yellow bg-white dark:bg-slate-800"
                 />
-                <span className="text-xs font-bold text-slate-500 group-hover:text-brand-blue transition-colors">Selecionar Tudo</span>
+                <span className="text-xs font-bold text-slate-500 dark:text-slate-400 group-hover:text-brand-blue dark:group-hover:text-brand-yellow transition-colors">Selecionar Tudo</span>
               </label>
             )}
           </div>
           
           <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
             {selectedIds.size > 0 && (
-              <button
-                onClick={handleBulkDelete}
-                disabled={isBulkDeleting}
-                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-red-500 text-white rounded-xl font-bold hover:bg-red-600 transition-all shadow-md disabled:opacity-50"
-              >
-                {isBulkDeleting ? <Loader2 className="animate-spin" size={18} /> : <Trash2 size={18} />}
-                Excluir Selecionados ({selectedIds.size})
-              </button>
-            )}
-
-            {results.length > 0 && (filters.classId || filters.activityType) && (
-              <button
-                onClick={handleBulkDownload}
-                disabled={isBulkDownloading}
-                className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md disabled:opacity-50"
-              >
-                {isBulkDownloading ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
-                {filters.classId && filters.activityType ? 'Baixar Turma + Atividade' : 
-                 filters.classId ? 'Baixar Todos da Turma' : 'Baixar Todos da Atividade'}
-              </button>
+              <>
+                <button
+                  onClick={handleBulkDelete}
+                  disabled={isBulkDeleting}
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 px-4 py-2.5 bg-red-50 text-red-500 border border-red-100 rounded-xl font-bold hover:bg-red-500 hover:text-white transition-all text-xs"
+                >
+                  {isBulkDeleting ? <Loader2 className="animate-spin" size={16} /> : <Trash2 size={16} />}
+                  Excluir ({selectedIds.size})
+                </button>
+                <div className="w-px h-8 bg-slate-100 hidden sm:block" />
+                <button
+                  onClick={handleBulkSimpleReports}
+                  disabled={isBulkDownloading}
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all shadow-md disabled:opacity-50 text-xs"
+                >
+                  {isBulkDownloading ? <Loader2 className="animate-spin" size={16} /> : <Download size={16} />}
+                  Relatório Simples
+                </button>
+                <button
+                  onClick={handleBulkCompleteReports}
+                  disabled={isGeneratingDetailed}
+                  className="w-full sm:w-auto flex items-center justify-center gap-2 px-6 py-2.5 bg-brand-gold text-white rounded-xl font-bold hover:opacity-90 transition-all shadow-md disabled:opacity-50 text-xs"
+                >
+                  {isGeneratingDetailed ? <Loader2 className="animate-spin" size={16} /> : <FileText size={16} />}
+                  Relatório Completo (IA)
+                </button>
+              </>
             )}
           </div>
         </div>
@@ -590,8 +776,10 @@ export default function ReportsView() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: i * 0.05 }}
             className={cn(
-              "bg-white p-4 sm:p-6 rounded-2xl shadow-sm border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 group transition-all",
-              selectedIds.has(result.id) ? "border-brand-blue bg-brand-blue/5" : "border-slate-100 hover:border-brand-yellow"
+              "bg-white dark:bg-slate-900 p-4 sm:p-6 rounded-2xl shadow-sm border flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 group transition-all",
+              selectedIds.has(result.id) 
+                ? "border-brand-blue dark:border-brand-yellow bg-brand-blue/5 dark:bg-brand-yellow/5" 
+                : "border-slate-100 dark:border-slate-800 hover:border-brand-yellow dark:hover:border-brand-yellow/50"
             )}
           >
             <div className="flex items-center gap-4 sm:gap-6 w-full sm:w-auto">
@@ -599,30 +787,30 @@ export default function ReportsView() {
                 type="checkbox"
                 checked={selectedIds.has(result.id)}
                 onChange={() => toggleSelect(result.id)}
-                className="w-5 h-5 rounded border-slate-300 text-brand-blue focus:ring-brand-yellow"
+                className="w-5 h-5 rounded border-slate-300 dark:border-slate-700 text-brand-blue dark:text-brand-yellow focus:ring-brand-yellow bg-white dark:bg-slate-800 transition-colors"
               />
               <div className={cn(
-                "w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-white font-bold shrink-0",
+                "w-10 h-10 sm:w-12 sm:h-12 rounded-full flex items-center justify-center text-white font-bold shrink-0 shadow-sm",
                 result.percentage >= 50 ? "bg-emerald-500" : "bg-red-500"
               )}>
                 {Math.round(result.percentage)}%
               </div>
               <div className="min-w-0 flex-1">
-                <h4 className="font-bold text-brand-blue-dark flex flex-wrap items-center gap-x-2">
+                <h4 className="font-bold text-brand-blue-dark dark:text-brand-yellow flex flex-wrap items-center gap-x-2 transition-colors">
                   <span className="truncate">{result.students?.name}</span>
-                  <ChevronRight size={14} className="text-slate-300 hidden sm:inline" />
-                  <span className="text-slate-400 font-medium truncate">{result.assessments?.title}</span>
+                  <ChevronRight size={14} className="text-slate-300 dark:text-slate-700 hidden sm:inline transition-colors" />
+                  <span className="text-slate-400 dark:text-slate-500 font-medium truncate transition-colors">{result.assessments?.title}</span>
                 </h4>
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1">
-                  <span className="text-xs text-slate-500 flex items-center gap-1">
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mt-1 transition-colors">
+                  <span className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 transition-colors">
                     <Users size={12} /> {result.students?.classes?.name}
                   </span>
-                  <span className="text-xs text-slate-500 flex items-center gap-1">
+                  <span className="text-xs text-slate-500 dark:text-slate-400 flex items-center gap-1 transition-colors">
                     <Calendar size={12} /> {new Date(result.created_at).toLocaleDateString()}
                   </span>
                   <span className={cn(
-                    "text-[10px] font-bold uppercase px-2 py-0.5 rounded",
-                    result.assessments?.type === 'prova' ? "bg-red-50 text-red-600" : "bg-blue-50 text-blue-600"
+                    "text-[10px] font-bold uppercase px-2 py-0.5 rounded transition-colors",
+                    result.assessments?.type === 'prova' ? "bg-red-50 dark:bg-red-950/20 text-red-600 dark:text-red-400" : "bg-blue-50 dark:bg-blue-950/20 text-blue-600 dark:text-blue-400"
                   )}>
                     {result.assessments?.type === 'prova' ? 'Prova' : 
                      result.assessments?.type === 'lista1' ? 'Lista 1' :
@@ -632,43 +820,16 @@ export default function ReportsView() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center justify-between sm:justify-end gap-4 w-full sm:w-auto pt-4 sm:pt-0 border-t sm:border-t-0 border-slate-50">
-              <div className="text-left sm:text-right">
-                <p className="text-lg font-bold text-brand-blue-dark">{result.total_score.toFixed(1)} / {result.max_score}</p>
-                <p className="text-xs text-slate-400">Pontuação</p>
+            <div className="flex items-center justify-end gap-3 w-full sm:w-auto pt-4 sm:pt-0 border-t sm:border-t-0 border-slate-50 dark:border-slate-800 transition-colors">
+              <div className="text-right hidden sm:block mr-4">
+                <p className="text-lg font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">{result.total_score.toFixed(1)} / {result.max_score}</p>
+                <p className="text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase transition-colors">Nota Final</p>
               </div>
               <div className="flex items-center gap-2">
                 <button 
-                  onClick={() => fetchResultDetails(result)}
-                  className="p-2.5 bg-slate-50 text-brand-blue rounded-xl hover:bg-brand-blue hover:text-white transition-all"
-                  title="Ver Detalhes"
-                >
-                  <FileText size={18} />
-                </button>
-                <button 
-                  onClick={async () => {
-                    setIsFetchingDetails(true);
-                    try {
-                      const { data: corrections } = await supabase
-                        .from('student_answers')
-                        .select('*, questions(*), ai_corrections(*)')
-                        .eq('student_id', result.student_id)
-                        .eq('assessment_id', result.assessment_id);
-                      
-                      exportToPDF({ ...result, corrections });
-                    } finally {
-                      setIsFetchingDetails(false);
-                    }
-                  }}
-                  className="p-2.5 bg-slate-50 text-brand-gold rounded-xl hover:bg-brand-gold hover:text-white transition-all"
-                  title="Baixar PDF"
-                >
-                  <Download size={18} />
-                </button>
-                <button 
                   onClick={() => handleDeleteResult(result)}
                   disabled={isDeleting === result.id}
-                  className="p-2.5 bg-slate-50 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all disabled:opacity-50"
+                  className="p-2.5 bg-slate-50 dark:bg-slate-800 text-red-500 rounded-xl hover:bg-red-500 hover:text-white transition-all disabled:opacity-50 transition-colors"
                   title="Excluir"
                 >
                   {isDeleting === result.id ? <Loader2 className="animate-spin" size={18} /> : <Trash2 size={18} />}
@@ -679,9 +840,9 @@ export default function ReportsView() {
         ))}
 
         {results.length === 0 && !isLoading && (
-          <div className="text-center py-20 bg-white rounded-3xl border border-dashed border-slate-200">
-            <BarChart3 size={48} className="mx-auto text-slate-300 mb-4" />
-            <p className="text-slate-500 font-medium">
+          <div className="text-center py-20 bg-white dark:bg-slate-900 rounded-3xl border border-dashed border-slate-200 dark:border-slate-800 transition-colors">
+            <BarChart3 size={48} className="mx-auto text-slate-300 dark:text-slate-700 mb-4 transition-colors" />
+            <p className="text-slate-500 dark:text-slate-400 font-medium transition-colors">
               {filters.search || filters.classId 
                 ? 'Nenhum resultado encontrado com os filtros selecionados.' 
                 : 'Busque por nome ou selecione uma turma para ver os relatórios.'}
@@ -699,150 +860,6 @@ export default function ReportsView() {
         type={modal.type}
         onConfirm={modal.onConfirm}
       />
-
-      {/* Details Modal */}
-      {selectedResult && (
-        <div className="fixed inset-0 bg-brand-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <motion.div 
-            initial={{ opacity: 0, scale: 0.95 }}
-            animate={{ opacity: 1, scale: 1 }}
-            className="bg-white w-full max-w-4xl max-h-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col"
-          >
-            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-brand-blue-dark text-white">
-              <div>
-                <h3 className="text-xl font-bold">{selectedResult.students?.name}</h3>
-                <p className="text-brand-gray text-sm">{selectedResult.assessments?.title}</p>
-              </div>
-              <button 
-                onClick={() => setSelectedResult(null)}
-                className="p-2 hover:bg-white/10 rounded-full transition-all"
-              >
-                <ChevronRight className="rotate-90" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-6 space-y-8 overscroll-contain custom-scrollbar">
-              {/* Summary */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                <div className="bg-slate-50 p-4 rounded-2xl text-center border border-slate-100">
-                  <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Nota Final</p>
-                  <p className="text-3xl font-bold text-brand-blue-dark">{(selectedResult.total_score || 0).toFixed(1)} / {selectedResult.max_score}</p>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-2xl text-center border border-slate-100">
-                  <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Aproveitamento</p>
-                  <p className="text-3xl font-bold text-emerald-600">{Math.round(selectedResult.percentage || 0)}%</p>
-                </div>
-                <div className="bg-slate-50 p-4 rounded-2xl text-center border border-slate-100">
-                  <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Data</p>
-                  <p className="text-xl font-bold text-brand-blue-dark">{new Date(selectedResult.created_at).toLocaleDateString()}</p>
-                </div>
-              </div>
-
-              {/* Overall Feedback */}
-              {selectedResult.overall_feedback && (
-                <div className="bg-brand-yellow/10 p-6 rounded-2xl border border-brand-yellow/20">
-                  <h4 className="font-bold text-brand-blue-dark mb-2 flex items-center gap-2">
-                    <CheckCircle2 size={18} className="text-brand-yellow" />
-                    Feedback Geral da IA
-                  </h4>
-                  <p className="text-slate-700 text-sm leading-relaxed italic">
-                    "{selectedResult.overall_feedback}"
-                  </p>
-                </div>
-              )}
-
-              {/* Corrections List */}
-              <div className="space-y-4">
-                <h4 className="font-bold text-brand-blue-dark flex items-center gap-2">
-                  <FileText size={18} className="text-brand-gold" />
-                  Detalhamento por Questão
-                </h4>
-                <div className="space-y-4">
-                  {selectedResult.corrections?.map((corr: any, i: number) => (
-                    <div key={i} className="border border-slate-100 rounded-2xl p-5 space-y-4">
-                      <div className="flex justify-between items-start">
-                        <div className="flex items-center gap-3">
-                          <span className="w-8 h-8 bg-brand-blue-dark text-white rounded-full flex items-center justify-center font-bold text-sm">
-                            {corr.questions?.question_number}
-                          </span>
-                          <div>
-                            <p className="font-bold text-brand-blue-dark">Questão {corr.questions?.question_number}</p>
-                            <p className="text-[10px] uppercase text-slate-400 font-bold">{corr.questions?.question_type}</p>
-                          </div>
-                        </div>
-                        <div className="text-right">
-                          <p className="font-bold text-brand-blue-dark">{corr.score.toFixed(3)} / {(corr.questions?.max_score || 0).toFixed(3)}</p>
-                          <p className="text-[10px] text-slate-400 font-bold uppercase">Pontos</p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-sm">
-                        <div className="bg-slate-50 p-3 rounded-xl">
-                          <p className="text-[10px] font-bold uppercase text-slate-400 mb-1">Resposta do Aluno</p>
-                          <p className="text-slate-700">{corr.answer_text || 'Sem resposta'}</p>
-                        </div>
-                        <div className="bg-emerald-50 p-3 rounded-xl">
-                          <p className="text-[10px] font-bold uppercase text-emerald-600 mb-1">Feedback da IA</p>
-                          <p className="text-slate-700">{corr.ai_corrections?.[0]?.correction_feedback}</p>
-                        </div>
-                      </div>
-
-                      {/* Skills */}
-                      {(corr.ai_corrections?.[0]?.skills_mastered?.length > 0 || corr.ai_corrections?.[0]?.skills_to_improve?.length > 0) && (
-                        <div className="flex flex-wrap gap-2">
-                          {corr.ai_corrections?.[0]?.skills_mastered?.map((skill: string) => (
-                            <span key={skill} className="text-[10px] font-bold bg-emerald-100 text-emerald-700 px-2 py-1 rounded-full">
-                              ✓ {skill}
-                            </span>
-                          ))}
-                          {corr.ai_corrections?.[0]?.skills_to_improve?.map((skill: string) => (
-                            <span key={skill} className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded-full">
-                              ⚠ {skill}
-                            </span>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div className="p-6 border-t border-slate-100 bg-slate-50 flex flex-wrap gap-3 justify-between">
-              <div className="flex gap-2">
-                <button 
-                  onClick={() => exportToPDF(selectedResult, undefined, false, false)}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-brand-blue rounded-xl font-bold hover:bg-slate-50 transition-all text-xs"
-                >
-                  <Download size={16} />
-                  Baixar Comprovante
-                </button>
-                <button 
-                  onClick={() => exportToPDF(selectedResult, undefined, false, true)}
-                  className="flex items-center gap-2 px-4 py-2 bg-white border border-slate-200 text-brand-gold rounded-xl font-bold hover:bg-slate-50 transition-all text-xs"
-                >
-                  <FileText size={16} />
-                  Baixar Relatório Detalhado
-                </button>
-                <button 
-                  onClick={() => generateDetailedAIReport(selectedResult)}
-                  disabled={isGeneratingDetailed}
-                  className="flex items-center gap-2 px-4 py-2 bg-brand-blue-dark text-white rounded-xl font-bold hover:opacity-90 transition-all text-xs"
-                >
-                  {isGeneratingDetailed ? <Loader2 className="animate-spin" size={16} /> : <BarChart3 size={16} />}
-                  Gerar Justificativas IA
-                </button>
-              </div>
-              <button 
-                onClick={() => setSelectedResult(null)}
-                className="px-8 py-2 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark transition-all"
-              >
-                Fechar
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
     </div>
   );
 }
