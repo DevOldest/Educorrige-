@@ -9,7 +9,7 @@ export interface GeminiResponse {
 
 export const ai = {
   models: {
-    generateContent: async (args: any): Promise<GeminiResponse> => {
+    generateContent: async (args: any): Promise<any> => {
       try {
         const response = await fetch("/api/gemini", {
           method: "POST",
@@ -23,18 +23,25 @@ export const ai = {
         });
 
         if (!response.ok) {
-          const errorData = await response.json();
-          throw new Error(errorData.error || `Erro na API: ${response.status}`);
+          let errorMsg = `Erro na API: ${response.status}`;
+          try {
+            const errorData = await response.json();
+            errorMsg = errorData.error || errorMsg;
+          } catch (e) {
+            // If not JSON, it might be the HTML 404 page
+            const text = await response.text();
+            if (text.includes("<!DOCTYPE html>") || text.includes("<html")) {
+              errorMsg = "O servidor retornou uma página HTML em vez de JSON (possível erro de rota 404).";
+            }
+          }
+          throw new Error(errorMsg);
         }
 
         const data = await response.json();
         return {
-          text: data.text,
-          response: data.response,
-          // Add helper method to match SDK signature if needed
-          // @ts-ignore
-          text: () => data.text 
-        } as any;
+          text: () => data.text,
+          response: data.response
+        };
       } catch (error: any) {
         console.error("Gemini Proxy Call Error:", error);
         throw error;
