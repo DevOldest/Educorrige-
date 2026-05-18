@@ -19,6 +19,6 @@ const getApiKey = () => {
 const apiKey = getApiKey();
 
 // Use standard stable model with explicit prefix
-export const GEMINI_MODEL = "gemini-1.5-flash-latest";
+export const GEMINI_MODEL = "gemini-flash-latest";
 
 export const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
