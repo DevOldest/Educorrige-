@@ -26,6 +26,8 @@ import { supabase } from '../lib/supabase';
 import { ai, GEMINI_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
+import CameraCapture from '../components/CameraCapture';
+import { Camera } from 'lucide-react';
 
 export default function GradingView() {
   const [classes, setClasses] = useState<any[]>([]);
@@ -67,6 +69,11 @@ export default function GradingView() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [targetScale, setTargetScale] = useState(10);
   const [useConvertedScore, setUseConvertedScore] = useState(true);
+
+  const [cameraConfig, setCameraConfig] = useState<{ isOpen: boolean; slotId: string | null }>({
+    isOpen: false,
+    slotId: null
+  });
 
   const [modal, setModal] = useState<{
     isOpen: boolean;
@@ -575,6 +582,16 @@ export default function GradingView() {
         onConfirm={modal.onConfirm}
       />
 
+      <CameraCapture 
+        isOpen={cameraConfig.isOpen}
+        onClose={() => setCameraConfig({ isOpen: false, slotId: null })}
+        onCapture={(files) => {
+          if (cameraConfig.slotId) {
+            handleFilesAdded(cameraConfig.slotId, files);
+          }
+        }}
+      />
+
       {/* Configuração Global */}
       <div className="bg-white dark:bg-slate-900 p-6 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 flex flex-wrap gap-4 items-end transition-colors">
         <div className="flex-1 min-w-[200px] space-y-2">
@@ -765,6 +782,15 @@ export default function GradingView() {
                         </div>
                       )}
                       
+                      <button 
+                        onClick={() => setCameraConfig({ isOpen: true, slotId: slot.id })}
+                        disabled={slot.status === 'processing'}
+                        className="w-8 h-8 rounded-lg bg-brand-yellow/10 dark:bg-brand-yellow/5 text-brand-yellow flex items-center justify-center hover:bg-brand-yellow/30 transition-colors disabled:opacity-50"
+                        title="Tirar Fotos agora"
+                      >
+                        <Camera size={16} />
+                      </button>
+
                       <SlotDropzone onFiles={(f) => handleFilesAdded(slot.id, f)} disabled={slot.status === 'processing'} miniature />
                     </div>
                   </div>
@@ -819,7 +845,13 @@ function SlotDropzone({ onFiles, disabled, miniature }: { onFiles: (f: File[]) =
     accept: { 'image/*': ['.jpeg', '.jpg', '.png'] },
     disabled
   };
-  const { getRootProps, getInputProps, isDragActive } = useDropzone(dropOptions);
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    ...dropOptions,
+    inputProps: {
+      ...dropOptions.inputProps,
+      capture: 'environment'
+    }
+  });
 
   if (miniature) {
     return (
