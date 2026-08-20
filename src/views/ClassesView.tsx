@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X, Search } from 'lucide-react';
+import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X, Search, ArrowRightLeft, Check, UserCheck, School } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
@@ -27,6 +27,19 @@ export default function ClassesView() {
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
   const [newStudentName, setNewStudentName] = useState('');
   const [isAddingStudent, setIsAddingStudent] = useState(false);
+
+  // Student Edit State
+  const [editingStudent, setEditingStudent] = useState<any | null>(null);
+  const [editStudentName, setEditStudentName] = useState('');
+  const [editStudentRoll, setEditStudentRoll] = useState<number>(1);
+  const [isUpdatingStudent, setIsUpdatingStudent] = useState(false);
+  const [showEditStudentModal, setShowEditStudentModal] = useState(false);
+
+  // Student Transfer State
+  const [transferringStudent, setTransferringStudent] = useState<any | null>(null);
+  const [targetClassId, setTargetClassId] = useState('');
+  const [isTransferring, setIsTransferring] = useState(false);
+  const [showTransferModal, setShowTransferModal] = useState(false);
 
   const [searchTerm, setSearchTerm] = useState('');
   const [studentSearchResults, setStudentSearchResults] = useState<any[]>([]);
@@ -235,13 +248,146 @@ export default function ClassesView() {
     });
   }
 
-  async function handleDeleteStudent(studentId: string) {
+  // --- Student Management Actions ---
+
+  const handleOpenEditStudent = (student: any) => {
+    setEditingStudent(student);
+    setEditStudentName(student.name);
+    setEditStudentRoll(student.roll_number || 1);
+    setShowEditStudentModal(true);
+  };
+
+  async function handleSaveEditStudent() {
+    if (!supabase || !editingStudent || !editStudentName.trim()) return;
+    setIsUpdatingStudent(true);
+    try {
+      const { error } = await supabase
+        .from('students')
+        .update({
+          name: editStudentName.trim(),
+          roll_number: Number(editStudentRoll) || 1
+        })
+        .eq('id', editingStudent.id);
+
+      if (error) throw error;
+
+      // Update in classStudents state
+      setClassStudents(prev => 
+        prev.map(s => s.id === editingStudent.id 
+          ? { ...s, name: editStudentName.trim(), roll_number: Number(editStudentRoll) || 1 } 
+          : s
+        ).sort((a, b) => a.roll_number - b.roll_number)
+      );
+
+      // Update in search results
+      setStudentSearchResults(prev => 
+        prev.map(s => s.id === editingStudent.id 
+          ? { ...s, name: editStudentName.trim(), roll_number: Number(editStudentRoll) || 1 } 
+          : s
+        )
+      );
+
+      setShowEditStudentModal(false);
+      setEditingStudent(null);
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: 'Nome e dados do aluno atualizados com sucesso!',
+        type: 'success'
+      });
+    } catch (error) {
+      console.error('Error updating student:', error);
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao atualizar dados do aluno.',
+        type: 'error'
+      });
+    } finally {
+      setIsUpdatingStudent(false);
+    }
+  }
+
+  const handleOpenTransferStudent = (student: any) => {
+    setTransferringStudent(student);
+    // Default to first available different class
+    const otherClasses = classes.filter(c => c.id !== student.class_id);
+    setTargetClassId(otherClasses.length > 0 ? otherClasses[0].id : '');
+    setShowTransferModal(true);
+  };
+
+  async function handleConfirmTransferStudent() {
+    if (!supabase || !transferringStudent || !targetClassId) return;
+    setIsTransferring(true);
+    try {
+      // 1. Get next roll number in destination class
+      const { data: targetStudents } = await supabase
+        .from('students')
+        .select('roll_number')
+        .eq('class_id', targetClassId);
+
+      const nextRoll = targetStudents && targetStudents.length > 0 
+        ? Math.max(...targetStudents.map(s => s.roll_number || 0)) + 1 
+        : 1;
+
+      // 2. Update student in database
+      const { error } = await supabase
+        .from('students')
+        .update({
+          class_id: targetClassId,
+          roll_number: nextRoll
+        })
+        .eq('id', transferringStudent.id);
+
+      if (error) throw error;
+
+      const targetClass = classes.find(c => c.id === targetClassId);
+
+      // 3. Remove student from current modal view if viewing the origin class
+      setClassStudents(prev => prev.filter(s => s.id !== transferringStudent.id));
+
+      // 4. Refresh classes count
+      fetchClasses();
+
+      // 5. Update search results if active
+      setStudentSearchResults(prev => prev.map(s => s.id === transferringStudent.id ? {
+        ...s,
+        class_id: targetClassId,
+        roll_number: nextRoll,
+        classes: { name: targetClass?.name || 'Nova Turma' }
+      } : s));
+
+      const transferredName = transferringStudent.name;
+      setShowTransferModal(false);
+      setTransferringStudent(null);
+      setTargetClassId('');
+
+      setModal({
+        isOpen: true,
+        title: 'Transferência Realizada',
+        message: `O aluno "${transferredName}" foi transferido com sucesso para a turma "${targetClass?.name}" (Chamada nº ${nextRoll}).`,
+        type: 'success'
+      });
+    } catch (error) {
+      console.error('Error transferring student:', error);
+      setModal({
+        isOpen: true,
+        title: 'Erro',
+        message: 'Erro ao transferir aluno de turma.',
+        type: 'error'
+      });
+    } finally {
+      setIsTransferring(false);
+    }
+  }
+
+  async function handleDeleteStudent(studentId: string, studentName?: string) {
     if (!supabase) return;
     
     setModal({
       isOpen: true,
-      title: 'Confirmar Exclusão',
-      message: 'Deseja realmente excluir este aluno? Todas as notas e atividades associadas serão removidas.',
+      title: 'Confirmar Exclusão de Aluno',
+      message: `Deseja realmente excluir ${studentName ? `o aluno "${studentName}"` : 'este aluno'}? Todas as notas, correções e atividades associadas serão removidas permanentemente.`,
       type: 'confirm',
       onConfirm: async () => {
         try {
@@ -262,8 +408,16 @@ export default function ClassesView() {
           const { error } = await supabase.from('students').delete().eq('id', studentId);
           if (error) throw error;
 
-          setClassStudents(classStudents.filter(s => s.id !== studentId));
+          setClassStudents(prev => prev.filter(s => s.id !== studentId));
+          setStudentSearchResults(prev => prev.filter(s => s.id !== studentId));
           fetchClasses();
+
+          setModal({
+            isOpen: true,
+            title: 'Sucesso',
+            message: 'Aluno excluído com sucesso!',
+            type: 'success'
+          });
         } catch (error) {
           console.error('Error deleting student:', error);
           setModal({
@@ -450,7 +604,7 @@ export default function ClassesView() {
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
           <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow">Minhas Turmas</h3>
-          <p className="text-slate-500 dark:text-slate-400">Gerencie suas turmas e alunos cadastrados.</p>
+          <p className="text-slate-500 dark:text-slate-400">Gerencie suas turmas, edite alunos e faça transferências.</p>
         </div>
         <div className="flex flex-col sm:flex-row items-stretch gap-3 w-full sm:w-auto">
           <div className="relative group min-w-[250px]">
@@ -499,27 +653,53 @@ export default function ClassesView() {
               </div>
             ) : studentSearchResults.length > 0 ? (
               studentSearchResults.map((student) => (
-                <div key={student.id} className="p-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex justify-between items-center transition-colors">
+                <div key={student.id} className="p-4 hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition-colors">
                   <div>
-                    <p className="font-bold text-brand-blue-dark dark:text-slate-200 transition-colors">{student.name}</p>
+                    <p className="font-bold text-brand-blue-dark dark:text-slate-200 transition-colors text-base">{student.name}</p>
                     <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400 mt-1 transition-colors">
-                      <span className="bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue dark:text-brand-yellow px-2 py-0.5 rounded-full font-bold transition-colors">
-                        Chamada: {student.roll_number}
+                      <span className="bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue dark:text-brand-yellow px-2.5 py-0.5 rounded-full font-bold transition-colors">
+                        Nº {student.roll_number}
                       </span>
                       <span>•</span>
-                      <span className="font-medium">Turma: {student.classes?.name}</span>
+                      <span className="font-medium text-slate-600 dark:text-slate-300">Turma: {student.classes?.name}</span>
                     </div>
                   </div>
-                  <button 
-                    onClick={() => {
-                      const cls = classes.find(c => c.id === student.class_id);
-                      if (cls) handleViewStudents(cls);
-                      setSearchTerm('');
-                    }}
-                    className="px-4 py-2 text-xs font-bold text-brand-blue dark:text-brand-yellow hover:bg-brand-blue/5 dark:hover:bg-brand-yellow/5 rounded-lg transition-colors border border-brand-blue/20 dark:border-brand-yellow/20"
-                  >
-                    Ver Turma
-                  </button>
+                  <div className="flex items-center gap-2 self-end sm:self-center">
+                    <button 
+                      onClick={() => handleOpenEditStudent(student)}
+                      className="px-3 py-1.5 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors border border-slate-200 dark:border-slate-700 flex items-center gap-1.5"
+                      title="Editar Nome do Aluno"
+                    >
+                      <Edit2 size={13} />
+                      Editar
+                    </button>
+                    <button 
+                      onClick={() => handleOpenTransferStudent(student)}
+                      className="px-3 py-1.5 text-xs font-bold text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 rounded-lg transition-colors border border-amber-200 dark:border-amber-900/50 flex items-center gap-1.5"
+                      title="Trocar Aluno de Turma"
+                    >
+                      <ArrowRightLeft size={13} />
+                      Trocar Turma
+                    </button>
+                    <button 
+                      onClick={() => handleDeleteStudent(student.id, student.name)}
+                      className="px-3 py-1.5 text-xs font-bold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-colors border border-red-200 dark:border-red-900/50 flex items-center gap-1.5"
+                      title="Excluir Aluno"
+                    >
+                      <Trash2 size={13} />
+                      Excluir
+                    </button>
+                    <button 
+                      onClick={() => {
+                        const cls = classes.find(c => c.id === student.class_id);
+                        if (cls) handleViewStudents(cls);
+                        setSearchTerm('');
+                      }}
+                      className="px-3 py-1.5 text-xs font-bold text-brand-blue dark:text-brand-yellow hover:bg-brand-blue/10 dark:hover:bg-brand-yellow/10 rounded-lg transition-colors border border-brand-blue/30 dark:border-brand-yellow/30"
+                    >
+                      Ver Turma
+                    </button>
+                  </div>
                 </div>
               ))
             ) : (
@@ -549,12 +729,14 @@ export default function ClassesView() {
                   <button 
                     onClick={() => handleEditClick(cls)}
                     className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-blue transition-colors"
+                    title="Editar Turma"
                   >
                     <Edit2 size={16} />
                   </button>
                   <button 
                     onClick={() => handleDeleteClass(cls.id, cls.name)}
                     className="p-2 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg text-slate-400 hover:text-red-500 transition-colors"
+                    title="Excluir Turma"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -564,9 +746,10 @@ export default function ClassesView() {
               <p className="text-sm text-slate-500 dark:text-slate-400 mb-4">{cls.school_year} • {cls.students?.[0]?.count || 0} Alunos</p>
               <button 
                 onClick={() => handleViewStudents(cls)}
-                className="w-full py-2 bg-slate-50 dark:bg-slate-800 text-brand-blue-dark dark:text-slate-200 font-semibold rounded-lg hover:bg-brand-yellow dark:hover:bg-brand-gold transition-colors"
+                className="w-full py-2.5 bg-slate-50 dark:bg-slate-800 text-brand-blue-dark dark:text-slate-200 font-semibold rounded-xl hover:bg-brand-yellow dark:hover:bg-brand-gold transition-colors flex items-center justify-center gap-2 shadow-sm"
               >
-                Ver Alunos
+                <Users size={16} />
+                Gerenciar Alunos
               </button>
             </motion.div>
           ))}
@@ -635,83 +818,263 @@ export default function ClassesView() {
         </div>
       )}
 
-      {/* View Students Modal */}
+      {/* View & Manage Students Modal */}
       {showStudentsModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-black/60 backdrop-blur-sm">
           <motion.div 
             initial={{ scale: 0.9, opacity: 0 }}
             animate={{ scale: 1, opacity: 1 }}
-            className="bg-white dark:bg-slate-900 rounded-3xl p-8 max-w-2xl w-full shadow-2xl max-h-[90vh] flex flex-col transition-colors border dark:border-slate-800"
+            className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 max-w-2xl w-full shadow-2xl max-h-[90vh] flex flex-col transition-colors border dark:border-slate-800"
           >
             <div className="flex justify-between items-center mb-6">
               <div>
                 <h3 className="text-2xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow transition-colors">{selectedClass?.name}</h3>
-                <p className="text-slate-500 dark:text-slate-400">Lista de Alunos Cadastrados</p>
+                <p className="text-slate-500 dark:text-slate-400 text-sm">
+                  {classStudents.length} {classStudents.length === 1 ? 'aluno cadastrado' : 'alunos cadastrados'} • Edite, transfira ou exclua alunos
+                </p>
               </div>
-              <button onClick={() => setShowStudentsModal(false)} className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors">
+              <button onClick={() => setShowStudentsModal(false)} className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors p-2">
                 <X size={24} />
               </button>
             </div>
 
-            <div className="flex-1 overflow-y-auto pr-2">
+            <div className="flex-1 overflow-y-auto pr-2 space-y-4">
+              {/* Add Student Input */}
+              <div className="flex gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors">
+                <input 
+                  type="text" 
+                  placeholder="Cadastrar novo aluno na turma..."
+                  value={newStudentName}
+                  onChange={(e) => setNewStudentName(e.target.value)}
+                  onKeyDown={(e) => e.key === 'Enter' && handleAddStudent()}
+                  className="flex-1 p-2 bg-transparent border-none focus:ring-0 text-sm font-medium dark:text-white outline-none"
+                />
+                <button 
+                  onClick={handleAddStudent}
+                  disabled={isAddingStudent || !newStudentName.trim()}
+                  className="px-4 py-2 bg-brand-blue text-white rounded-xl hover:bg-brand-blue-dark transition-all disabled:opacity-50 flex items-center gap-1.5 font-bold text-xs shadow-sm"
+                >
+                  {isAddingStudent ? <Loader2 className="animate-spin" size={16} /> : <Plus size={16} />}
+                  Adicionar
+                </button>
+              </div>
+
               {isLoadingStudents ? (
-                <div className="flex justify-center py-10">
+                <div className="flex justify-center py-12">
                   <Loader2 className="animate-spin text-brand-gold" size={32} />
                 </div>
               ) : (
-                <div className="space-y-4">
-                  {/* Add Student Input */}
-                  <div className="flex gap-2 p-2 bg-slate-50 dark:bg-slate-800 rounded-2xl border border-slate-100 dark:border-slate-700 transition-colors">
-                    <input 
-                      type="text" 
-                      placeholder="Nome do novo aluno..."
-                      value={newStudentName}
-                      onChange={(e) => setNewStudentName(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleAddStudent()}
-                      className="flex-1 p-2 bg-transparent border-none focus:ring-0 text-sm font-medium dark:text-white"
-                    />
-                    <button 
-                      onClick={handleAddStudent}
-                      disabled={isAddingStudent || !newStudentName.trim()}
-                      className="p-2 bg-brand-blue text-white rounded-xl hover:bg-brand-blue-dark transition-all disabled:opacity-50"
+                <div className="space-y-2">
+                  {classStudents.map((student) => (
+                    <div 
+                      key={student.id} 
+                      className="flex items-center justify-between p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-xl border border-slate-100 dark:border-slate-750 hover:border-slate-200 dark:hover:border-slate-700 transition-all group"
                     >
-                      {isAddingStudent ? <Loader2 className="animate-spin" size={18} /> : <Plus size={18} />}
-                    </button>
-                  </div>
+                      <div className="flex items-center gap-3.5 min-w-0 flex-1 mr-3">
+                        <span className="w-8 h-8 flex items-center justify-center bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue dark:text-brand-yellow rounded-lg font-bold text-sm shrink-0 transition-colors">
+                          {student.roll_number}
+                        </span>
+                        <span className="font-semibold text-brand-blue-dark dark:text-slate-200 transition-colors truncate">
+                          {student.name}
+                        </span>
+                      </div>
 
-                  <div className="grid grid-cols-1 gap-2">
-                    {classStudents.map((student) => (
-                      <div key={student.id} className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl group transition-colors">
-                        <div className="flex items-center gap-4">
-                          <span className="w-8 h-8 flex items-center justify-center bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue dark:text-brand-yellow rounded-lg font-bold text-sm transition-colors">
-                            {student.roll_number}
-                          </span>
-                          <span className="font-medium text-brand-blue-dark dark:text-slate-200 transition-colors">{student.name}</span>
-                        </div>
+                      <div className="flex items-center gap-1 shrink-0">
                         <button 
-                          onClick={() => handleDeleteStudent(student.id)}
-                          className="p-2 text-slate-300 dark:text-slate-600 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/20 rounded-lg transition-all opacity-0 group-hover:opacity-100"
+                          onClick={() => handleOpenEditStudent(student)}
+                          className="p-2 text-slate-500 dark:text-slate-400 hover:text-brand-blue dark:hover:text-brand-yellow hover:bg-white dark:hover:bg-slate-700 rounded-lg transition-all"
+                          title="Editar Nome do Aluno"
+                        >
+                          <Edit2 size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handleOpenTransferStudent(student)}
+                          className="p-2 text-slate-500 dark:text-slate-400 hover:text-amber-600 dark:hover:text-amber-400 hover:bg-white dark:hover:bg-slate-700 rounded-lg transition-all"
+                          title="Trocar de Turma"
+                        >
+                          <ArrowRightLeft size={16} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteStudent(student.id, student.name)}
+                          className="p-2 text-slate-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 rounded-lg transition-all"
                           title="Excluir Aluno"
                         >
                           <Trash2 size={16} />
                         </button>
                       </div>
-                    ))}
-                    {classStudents.length === 0 && (
-                      <p className="text-center py-10 text-slate-400 italic">Nenhum aluno cadastrado nesta turma.</p>
-                    )}
-                  </div>
+                    </div>
+                  ))}
+
+                  {classStudents.length === 0 && (
+                    <div className="text-center py-12 text-slate-400 dark:text-slate-500 italic">
+                      Nenhum aluno cadastrado nesta turma. Adicione acima ou importe via PDF.
+                    </div>
+                  )}
                 </div>
               )}
             </div>
 
-            <div className="mt-6">
+            <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800">
               <button 
                 onClick={() => setShowStudentsModal(false)}
                 className="w-full py-3 bg-slate-100 dark:bg-slate-800 text-brand-blue-dark dark:text-slate-200 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
               >
-                Fechar
+                Concluir
               </button>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Edit Student Modal */}
+      {showEditStudentModal && editingStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-black/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl transition-colors border dark:border-slate-800"
+          >
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow flex items-center gap-2">
+                <Edit2 size={20} className="text-brand-gold" />
+                Editar Aluno
+              </h3>
+              <button 
+                onClick={() => {
+                  setShowEditStudentModal(false);
+                  setEditingStudent(null);
+                }} 
+                className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">Nome do Aluno</label>
+                <input 
+                  type="text" 
+                  value={editStudentName}
+                  onChange={(e) => setEditStudentName(e.target.value)}
+                  placeholder="Nome completo..."
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-yellow font-semibold dark:text-white outline-none"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">Número de Chamada</label>
+                <input 
+                  type="number" 
+                  value={editStudentRoll}
+                  onChange={(e) => setEditStudentRoll(parseInt(e.target.value) || 1)}
+                  min="1"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-yellow font-semibold dark:text-white outline-none"
+                />
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button 
+                  onClick={() => {
+                    setShowEditStudentModal(false);
+                    setEditingStudent(null);
+                  }}
+                  className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-sm"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={handleSaveEditStudent}
+                  disabled={isUpdatingStudent || !editStudentName.trim()}
+                  className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg transition-colors flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                >
+                  {isUpdatingStudent ? <Loader2 className="animate-spin" size={16} /> : <Check size={16} />}
+                  Salvar
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        </div>
+      )}
+
+      {/* Transfer Student Modal */}
+      {showTransferModal && transferringStudent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-brand-black/60 backdrop-blur-sm">
+          <motion.div 
+            initial={{ scale: 0.9, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 max-w-md w-full shadow-2xl transition-colors border dark:border-slate-800"
+          >
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow flex items-center gap-2">
+                <ArrowRightLeft size={20} className="text-amber-500" />
+                Trocar Aluno de Turma
+              </h3>
+              <button 
+                onClick={() => {
+                  setShowTransferModal(false);
+                  setTransferringStudent(null);
+                }} 
+                className="text-slate-400 hover:text-brand-black dark:hover:text-white transition-colors"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            <div className="space-y-5">
+              <div className="p-4 bg-slate-50 dark:bg-slate-800/80 rounded-2xl border border-slate-100 dark:border-slate-700">
+                <p className="text-xs uppercase font-bold text-slate-400 dark:text-slate-500 mb-1">Aluno selecionado</p>
+                <p className="font-bold text-brand-blue-dark dark:text-slate-100 text-base">{transferringStudent.name}</p>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Turma Atual: <span className="font-semibold text-brand-blue dark:text-brand-yellow">
+                    {classes.find(c => c.id === transferringStudent.class_id)?.name || 'Turma atual'}
+                  </span> (Nº {transferringStudent.roll_number})
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-xs font-bold uppercase text-slate-400 dark:text-slate-500">Destino (Nova Turma)</label>
+                <select 
+                  value={targetClassId}
+                  onChange={(e) => setTargetClassId(e.target.value)}
+                  className="w-full p-3.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold text-brand-blue-dark dark:text-white outline-none"
+                >
+                  <option value="">Selecione a turma de destino...</option>
+                  {classes
+                    .filter(c => c.id !== transferringStudent.class_id)
+                    .map(c => (
+                      <option key={c.id} value={c.id}>
+                        {c.name} ({c.school_year})
+                      </option>
+                    ))
+                  }
+                </select>
+                {classes.filter(c => c.id !== transferringStudent.class_id).length === 0 && (
+                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                    Você precisa ter pelo menos outra turma cadastrada para transferir este aluno.
+                  </p>
+                )}
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={() => {
+                    setShowTransferModal(false);
+                    setTransferringStudent(null);
+                  }}
+                  className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-sm"
+                >
+                  Cancelar
+                </button>
+                <button 
+                  onClick={handleConfirmTransferStudent}
+                  disabled={isTransferring || !targetClassId}
+                  className="flex-1 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-lg transition-colors flex items-center justify-center gap-2 text-sm disabled:opacity-50"
+                >
+                  {isTransferring ? <Loader2 className="animate-spin" size={16} /> : <UserCheck size={16} />}
+                  Transferir Aluno
+                </button>
+              </div>
             </div>
           </motion.div>
         </div>
@@ -830,7 +1193,7 @@ export default function ClassesView() {
                 <div className="mt-6 flex gap-4">
                   <button 
                     onClick={() => setShowUploadModal(false)}
-                    className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors transition-colors"
+                    className="flex-1 py-3 border border-slate-200 dark:border-slate-700 rounded-xl font-bold text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors"
                   >
                     Cancelar
                   </button>

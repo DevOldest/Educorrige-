@@ -15,7 +15,8 @@ import {
   CheckSquare,
   FileSpreadsheet,
   Download,
-  Printer
+  Printer,
+  X
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { supabase } from '../lib/supabase';
@@ -131,8 +132,9 @@ export default function ManagementView() {
     return Math.round(Math.min(10, sum) * 10) / 10;
   };
 
-  const handleGenerateUnitClosing = async () => {
-    if (!selectedClassId || !selectedUnitId || !supabase) return;
+  const handleGenerateUnitClosing = async (unitIdToUse?: string) => {
+    const unitId = unitIdToUse || selectedUnitId;
+    if (!selectedClassId || !unitId || !supabase) return;
     
     setIsGeneratingClosing(true);
     try {
@@ -150,17 +152,23 @@ export default function ManagementView() {
       const { data: unitGrades } = await supabase
         .from('grades')
         .select('*')
-        .eq('unit_id', selectedUnitId)
+        .eq('unit_id', unitId)
         .in('student_id', studentIds);
 
       // 3. Compile data
       const report = studentsList.map(student => {
         const grade = unitGrades?.find(g => g.student_id === student.id);
+        const listTotal = (grade?.list1_score || 0) + (grade?.list2_score || 0) + (grade?.list3_score || 0);
         const avg = grade ? (grade.unit_average || calculateUnitAverage(grade)) : 0;
         return {
           id: student.id,
           name: student.name,
           rollNumber: student.roll_number,
+          listTotal: listTotal,
+          examScore: grade?.exam_score || 0,
+          notebookScore: grade?.notebook_score || 0,
+          ankiScore: grade?.anki_score || 0,
+          recoveryScore: grade?.recovery_score !== null && grade?.recovery_score !== undefined ? grade.recovery_score : null,
           average: avg,
           status: avg >= 5 ? 'Aprovado' : 'Recuperação',
           details: grade || null
@@ -182,35 +190,59 @@ export default function ManagementView() {
     const doc = new jsPDF();
     const className = classes.find(c => c.id === selectedClassId)?.name || 'Turma';
     const unitName = units.find(u => u.id === selectedUnitId)?.name || 'Unidade';
+    const schoolYear = classes.find(c => c.id === selectedClassId)?.school_year || new Date().getFullYear();
 
-    doc.setFontSize(18);
-    doc.setTextColor(10, 37, 64);
-    doc.text(`Fechamento de Unidade - ${unitName}`, 105, 20, { align: 'center' });
+    // Header styling
+    doc.setFillColor(10, 37, 64);
+    doc.rect(0, 0, 210, 30, 'F');
+
+    doc.setFontSize(16);
+    doc.setTextColor(255, 255, 255);
+    doc.text(`RELATÓRIO DA TURMA - ${unitName.toUpperCase()}`, 105, 14, { align: 'center' });
     
-    doc.setFontSize(12);
-    doc.text(`Turma: ${className}`, 20, 30);
-    doc.text(`Data: ${new Date().toLocaleDateString()}`, 190, 30, { align: 'right' });
+    doc.setFontSize(10);
+    doc.setTextColor(226, 232, 240);
+    doc.text(`Turma: ${className} | Ano Letivo: ${schoolYear} | Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 105, 22, { align: 'center' });
 
+    // Table Data with full breakdown
     const tableData = unitClosingData.map(item => [
       item.rollNumber,
       item.name,
+      item.listTotal > 0 ? item.listTotal.toFixed(1) : '-',
+      item.examScore > 0 ? item.examScore.toFixed(1) : '-',
+      item.notebookScore > 0 ? item.notebookScore.toFixed(1) : '-',
+      item.ankiScore > 0 ? item.ankiScore.toFixed(1) : '-',
+      item.recoveryScore !== null ? Number(item.recoveryScore).toFixed(1) : '-',
       item.average.toFixed(1),
       item.status
     ]);
 
+    const totalStudents = unitClosingData.length;
+    const approvedCount = unitClosingData.filter(i => i.average >= 5).length;
+    const recoveryCount = totalStudents - approvedCount;
+    const classAvg = totalStudents > 0 
+      ? (unitClosingData.reduce((acc, curr) => acc + curr.average, 0) / totalStudents).toFixed(1) 
+      : '0.0';
+
     autoTable(doc, {
-      startY: 40,
-      head: [['Nº', 'Aluno', 'Média', 'Situação']],
+      startY: 38,
+      head: [['Nº', 'Aluno', 'Listas (3.0)', 'Prova (4.0)', 'Caderno (1.5)', 'Anki (1.5)', 'Recup.', 'Média', 'Situação']],
       body: tableData,
-      headStyles: { fillColor: [10, 37, 64] },
+      headStyles: { fillColor: [10, 37, 64], fontSize: 9, halign: 'center' },
+      bodyStyles: { fontSize: 8.5 },
       columnStyles: {
-        0: { cellWidth: 15 },
+        0: { cellWidth: 10, halign: 'center' },
         1: { cellWidth: 'auto' },
-        2: { cellWidth: 30, halign: 'center' },
-        3: { cellWidth: 40, halign: 'center' }
+        2: { cellWidth: 18, halign: 'center' },
+        3: { cellWidth: 18, halign: 'center' },
+        4: { cellWidth: 18, halign: 'center' },
+        5: { cellWidth: 18, halign: 'center' },
+        6: { cellWidth: 15, halign: 'center' },
+        7: { cellWidth: 16, halign: 'center', fontStyle: 'bold' },
+        8: { cellWidth: 24, halign: 'center', fontStyle: 'bold' }
       },
       didParseCell: (data) => {
-        if (data.section === 'body' && data.column.index === 3) {
+        if (data.section === 'body' && data.column.index === 8) {
           if (data.cell.text[0] === 'Recuperação') {
             data.cell.styles.textColor = [220, 38, 38];
           } else {
@@ -220,7 +252,16 @@ export default function ManagementView() {
       }
     });
 
-    doc.save(`Fechamento_${className}_${unitName}.pdf`);
+    // Summary Box
+    // @ts-ignore
+    const finalY = (doc as any).lastAutoTable?.finalY || 150;
+    if (finalY < 260) {
+      doc.setFontSize(9);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Estatísticas da ${unitName}: Total de Alunos: ${totalStudents} | Média da Turma: ${classAvg} | Aprovados: ${approvedCount} | Em Recuperação: ${recoveryCount}`, 14, finalY + 12);
+    }
+
+    doc.save(`Relatorio_${className.replace(/\s+/g, '_')}_${unitName.replace(/\s+/g, '_')}.pdf`);
   };
 
   const handleGenerateAllClassesClosing = async () => {
@@ -391,49 +432,90 @@ export default function ManagementView() {
       />
 
       {/* Selection Header */}
-      <div className="bg-white dark:bg-slate-900 p-8 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 grid grid-cols-1 md:grid-cols-3 gap-6 items-end transition-colors">
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
-          <select 
-            value={selectedClassId}
-            onChange={(e) => setSelectedClassId(e.target.value)}
-            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
-          >
-            <option value="">Selecionar Turma</option>
-            {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
+      <div className="bg-white dark:bg-slate-900 p-6 sm:p-8 rounded-3xl shadow-sm border border-slate-100 dark:border-slate-800 transition-colors space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-4">
+          <div>
+            <h4 className="text-lg font-bold text-brand-blue-dark dark:text-brand-yellow flex items-center gap-2">
+              <GraduationCap size={20} className="text-brand-gold" />
+              Gestão de Notas e Fechamento
+            </h4>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Selecione a turma e a unidade de referência para lançamentos e relatórios.
+            </p>
+          </div>
+          {selectedUnitId && (
+            <span className="self-start sm:self-auto bg-brand-blue/10 dark:bg-brand-blue/20 text-brand-blue dark:text-brand-yellow font-bold text-xs px-3 py-1.5 rounded-full">
+              Unidade Ativa: {units.find(u => u.id === selectedUnitId)?.name || '1ª Unidade'}
+            </span>
+          )}
         </div>
 
-        <div className="space-y-2">
-          <label className="text-xs font-bold uppercase text-slate-400">Selecionar Aluno</label>
-          <select 
-            value={selectedStudentId}
-            onChange={(e) => setSelectedStudentId(e.target.value)}
-            className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white"
-            disabled={!selectedClassId}
-          >
-            <option value="">Selecionar Aluno</option>
-            {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
-          </select>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 items-end">
+          {/* Turma */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase text-slate-400">1. Turma</label>
+            <select 
+              value={selectedClassId}
+              onChange={(e) => {
+                setSelectedClassId(e.target.value);
+                setSelectedStudentId('');
+              }}
+              className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-yellow font-medium dark:text-white outline-none text-sm"
+            >
+              <option value="">Selecionar Turma</option>
+              {classes.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+            </select>
+          </div>
+
+          {/* Unidade Referente */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase text-slate-400">2. Unidade Referente</label>
+            <select 
+              value={selectedUnitId}
+              onChange={(e) => setSelectedUnitId(e.target.value)}
+              className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-yellow font-bold text-brand-blue dark:text-brand-yellow outline-none text-sm"
+            >
+              {units.map(u => <option key={u.id} value={u.id}>{u.name}</option>)}
+            </select>
+          </div>
+
+          {/* Aluno */}
+          <div className="space-y-1.5">
+            <label className="text-xs font-bold uppercase text-slate-400">3. Aluno Individual</label>
+            <select 
+              value={selectedStudentId}
+              onChange={(e) => setSelectedStudentId(e.target.value)}
+              className="w-full p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-brand-yellow font-medium dark:text-white outline-none text-sm"
+              disabled={!selectedClassId}
+            >
+              <option value="">Todos / Selecionar Aluno</option>
+              {students.map(s => <option key={s.id} value={s.id}>{s.roll_number}. {s.name}</option>)}
+            </select>
+          </div>
+
+          {/* Report Buttons */}
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleGenerateUnitClosing()}
+              disabled={!selectedClassId || !selectedUnitId || isGeneratingClosing}
+              className="flex-1 flex items-center justify-center gap-1.5 bg-brand-gold text-white p-3 rounded-xl font-bold hover:opacity-90 transition-all disabled:opacity-50 h-[46px] text-xs shadow-md"
+              title={`Gerar relatório da turma selecionada para ${units.find(u => u.id === selectedUnitId)?.name || 'a unidade'}`}
+            >
+              {isGeneratingClosing ? <Loader2 className="animate-spin" size={16} /> : <FileSpreadsheet size={16} />}
+              <span className="truncate">Relatório Turma ({units.find(u => u.id === selectedUnitId)?.name || 'Unidade'})</span>
+            </button>
+
+            <button
+              onClick={handleGenerateAllClassesClosing}
+              disabled={!selectedUnitId || isGeneratingAllClosing || classes.length === 0}
+              className="p-3 bg-emerald-600 text-white rounded-xl font-bold hover:bg-emerald-700 transition-all disabled:opacity-50 h-[46px] text-xs shadow-md shrink-0 flex items-center gap-1"
+              title={`Gerar PDF de todas as turmas para ${units.find(u => u.id === selectedUnitId)?.name || 'a unidade'}`}
+            >
+              {isGeneratingAllClosing ? <Loader2 className="animate-spin" size={16} /> : <Printer size={16} />}
+              <span className="hidden xl:inline">Todas</span>
+            </button>
+          </div>
         </div>
-
-        <button
-          onClick={handleGenerateUnitClosing}
-          disabled={!selectedClassId || !selectedUnitId || isGeneratingClosing}
-          className="flex items-center justify-center gap-2 bg-brand-gold text-white p-3 rounded-xl font-bold hover:opacity-90 transition-all disabled:opacity-50 h-[48px] text-xs"
-        >
-          {isGeneratingClosing ? <Loader2 className="animate-spin" size={18} /> : <FileSpreadsheet size={18} />}
-          Relatório Turma
-        </button>
-
-        <button
-          onClick={handleGenerateAllClassesClosing}
-          disabled={!selectedUnitId || isGeneratingAllClosing || classes.length === 0}
-          className="flex items-center justify-center gap-2 bg-emerald-600 text-white p-3 rounded-xl font-bold hover:bg-emerald-700 transition-all disabled:opacity-50 h-[48px] text-xs"
-        >
-          {isGeneratingAllClosing ? <Loader2 className="animate-spin" size={18} /> : <Printer size={18} />}
-          Relatório de Todas as Turmas
-        </button>
       </div>
 
       {selectedStudentId ? (
@@ -524,50 +606,121 @@ export default function ManagementView() {
               initial={{ opacity: 0, scale: 0.95 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.95 }}
-              className="bg-white dark:bg-slate-900 w-full max-w-4xl max-h-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-colors border dark:border-slate-800"
+              className="bg-white dark:bg-slate-900 w-full max-w-5xl max-h-[90vh] rounded-3xl shadow-2xl overflow-hidden flex flex-col transition-colors border dark:border-slate-800"
             >
               <div className="p-6 border-b border-slate-100 dark:border-slate-800 flex justify-between items-center bg-brand-blue-dark dark:bg-brand-black text-white transition-colors">
                 <div>
-                  <h3 className="text-xl font-bold">Fechamento de Unidade</h3>
-                  <p className="text-brand-gray dark:text-slate-400 text-sm">
-                    {classes.find(c => c.id === selectedClassId)?.name} - {units.find(u => u.id === selectedUnitId)?.name}
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-xl font-bold">Relatório e Fechamento da Turma</h3>
+                    <span className="bg-brand-yellow/20 text-brand-yellow text-xs font-bold px-2.5 py-0.5 rounded-full">
+                      {units.find(u => u.id === selectedUnitId)?.name}
+                    </span>
+                  </div>
+                  <p className="text-brand-gray dark:text-slate-400 text-sm mt-0.5">
+                    {classes.find(c => c.id === selectedClassId)?.name} • Ano Letivo: {classes.find(c => c.id === selectedClassId)?.school_year || new Date().getFullYear()}
                   </p>
                 </div>
                 <button 
                   onClick={() => setShowClosingModal(false)}
-                  className="p-2 hover:bg-white/10 rounded-full transition-all"
+                  className="p-2 hover:bg-white/10 rounded-full transition-all text-slate-400 hover:text-white"
                 >
-                  <Users className="rotate-90" />
+                  <X size={24} />
                 </button>
+              </div>
+
+              {/* Unit Switcher Tabs inside Modal */}
+              <div className="bg-slate-50 dark:bg-slate-800/60 p-3 border-b border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-500 uppercase">Alternar Unidade:</span>
+                  <div className="flex gap-1.5">
+                    {units.map(u => (
+                      <button
+                        key={u.id}
+                        onClick={() => {
+                          setSelectedUnitId(u.id);
+                          handleGenerateUnitClosing(u.id);
+                        }}
+                        className={cn(
+                          "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                          selectedUnitId === u.id 
+                            ? "bg-brand-blue text-white shadow-sm" 
+                            : "bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-700"
+                        )}
+                      >
+                        {u.name}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Quick Stats Pill */}
+                {unitClosingData.length > 0 && (
+                  <div className="flex items-center gap-3 text-xs">
+                    <span className="text-slate-500 font-medium">
+                      Alunos: <strong className="text-brand-blue-dark dark:text-white">{unitClosingData.length}</strong>
+                    </span>
+                    <span className="text-slate-500 font-medium">
+                      Média: <strong className="text-brand-blue-dark dark:text-white">
+                        {(unitClosingData.reduce((a, b) => a + b.average, 0) / unitClosingData.length).toFixed(1)}
+                      </strong>
+                    </span>
+                    <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                      {unitClosingData.filter(i => i.average >= 5).length} Aprovados
+                    </span>
+                    <span className="text-red-500 font-bold">
+                      {unitClosingData.filter(i => i.average < 5).length} Recup.
+                    </span>
+                  </div>
+                )}
               </div>
 
               <div className="flex-1 overflow-y-auto p-6 scrollbar-hide">
                 <div className="overflow-x-auto">
                   <table className="w-full text-left border-collapse">
                     <thead>
-                      <tr className="border-b border-slate-100 dark:border-slate-800 text-xs uppercase font-bold text-slate-400 dark:text-slate-500 transition-colors">
-                        <th className="py-4 px-2">Nº</th>
-                        <th className="py-4 px-2">Aluno</th>
-                        <th className="py-4 px-2 text-center">Média</th>
-                        <th className="py-4 px-2 text-center">Situação</th>
+                      <tr className="border-b border-slate-100 dark:border-slate-800 text-[11px] uppercase font-bold text-slate-400 dark:text-slate-500">
+                        <th className="py-3 px-2">Nº</th>
+                        <th className="py-3 px-2">Aluno</th>
+                        <th className="py-3 px-2 text-center">Listas (3.0)</th>
+                        <th className="py-3 px-2 text-center">Prova (4.0)</th>
+                        <th className="py-3 px-2 text-center">Caderno (1.5)</th>
+                        <th className="py-3 px-2 text-center">Anki (1.5)</th>
+                        <th className="py-3 px-2 text-center">Recup.</th>
+                        <th className="py-3 px-2 text-center">Média Final</th>
+                        <th className="py-3 px-2 text-center">Situação</th>
                       </tr>
                     </thead>
                     <tbody>
                       {unitClosingData.map((item) => (
-                        <tr key={item.id} className="border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors transition-colors">
-                          <td className="py-4 px-2 font-bold text-slate-400 dark:text-slate-600">{item.rollNumber}</td>
-                          <td className="py-4 px-2 font-bold text-brand-blue-dark dark:text-brand-yellow">{item.name}</td>
-                          <td className="py-4 px-2 text-center font-black">
+                        <tr key={item.id} className="border-b border-slate-50 dark:border-slate-800/50 hover:bg-slate-50 dark:hover:bg-slate-800/30 transition-colors text-sm">
+                          <td className="py-3 px-2 font-bold text-slate-400 dark:text-slate-600">{item.rollNumber}</td>
+                          <td className="py-3 px-2 font-bold text-brand-blue-dark dark:text-brand-yellow">{item.name}</td>
+                          <td className="py-3 px-2 text-center text-slate-600 dark:text-slate-400">
+                            {item.listTotal > 0 ? item.listTotal.toFixed(1) : '-'}
+                          </td>
+                          <td className="py-3 px-2 text-center text-slate-600 dark:text-slate-400">
+                            {item.examScore > 0 ? item.examScore.toFixed(1) : '-'}
+                          </td>
+                          <td className="py-3 px-2 text-center text-slate-600 dark:text-slate-400">
+                            {item.notebookScore > 0 ? item.notebookScore.toFixed(1) : '-'}
+                          </td>
+                          <td className="py-3 px-2 text-center text-slate-600 dark:text-slate-400">
+                            {item.ankiScore > 0 ? item.ankiScore.toFixed(1) : '-'}
+                          </td>
+                          <td className="py-3 px-2 text-center font-medium text-amber-600">
+                            {item.recoveryScore !== null ? Number(item.recoveryScore).toFixed(1) : '-'}
+                          </td>
+                          <td className="py-3 px-2 text-center font-black">
                             <span className={cn(
-                              "px-3 py-1 rounded-lg",
-                              item.average >= 5 ? "text-emerald-600 bg-emerald-50 dark:bg-emerald-950/20" : "text-red-500 bg-red-50 dark:bg-red-950/20"
+                              "px-2.5 py-1 rounded-lg text-xs",
+                              item.average >= 5 ? "text-emerald-700 bg-emerald-100/70 dark:bg-emerald-950/40 dark:text-emerald-400" : "text-red-700 bg-red-100/70 dark:bg-red-950/40 dark:text-red-400"
                             )}>
                               {item.average.toFixed(1)}
                             </span>
                           </td>
-                          <td className="py-4 px-2 text-center">
+                          <td className="py-3 px-2 text-center">
                             <span className={cn(
-                              "text-[10px] font-black uppercase px-3 py-1 rounded-full",
+                              "text-[10px] font-black uppercase px-2.5 py-1 rounded-full inline-block",
                               item.status === 'Aprovado' ? "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400" : "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400"
                             )}>
                               {item.status}
@@ -580,17 +733,17 @@ export default function ManagementView() {
                 </div>
               </div>
 
-              <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex gap-4 justify-between transition-colors">
+              <div className="p-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 flex gap-4 justify-between items-center transition-colors">
                 <button 
                   onClick={exportClosingToPDF}
-                  className="flex items-center gap-2 px-6 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-md transition-all"
+                  className="flex items-center gap-2 px-6 py-3 bg-brand-blue text-white rounded-xl font-bold hover:bg-brand-blue-dark shadow-md transition-all text-sm"
                 >
                   <Printer size={18} />
-                  Imprimir PDF
+                  Baixar / Imprimir PDF ({units.find(u => u.id === selectedUnitId)?.name})
                 </button>
                 <button 
                   onClick={() => setShowClosingModal(false)}
-                  className="px-8 py-3 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-all transition-colors"
+                  className="px-8 py-3 bg-slate-200 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold hover:bg-slate-300 dark:hover:bg-slate-700 transition-all text-sm"
                 >
                   Fechar
                 </button>
