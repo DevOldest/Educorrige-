@@ -18,7 +18,8 @@ import {
   Loader2,
   LogOut,
   Moon,
-  Sun
+  Sun,
+  Award
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -33,15 +34,44 @@ import ReportsView from './views/ReportsView';
 import ManagementView from './views/ManagementView';
 import NotebookChecksView from './views/NotebookChecksView';
 import SystemTestsView from './views/SystemTestsView';
+import EnemSimuladoView from './views/EnemSimuladoView';
 import Login from './components/Login';
 
-type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'reports' | 'management' | 'notebook-checks' | 'tests';
+type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'notebook-checks' | 'enem' | 'reports' | 'management' | 'tests';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [session, setSession] = useState<any>(null);
+  const [session, setSession] = useState<any>(() => {
+    if (typeof window !== 'undefined') {
+      const demo = localStorage.getItem('local_demo_session');
+      if (demo) {
+        try {
+          return JSON.parse(demo);
+        } catch (e) {
+          return null;
+        }
+      }
+    }
+    return null;
+  });
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  
+  // Sessão de Corretor Convidado (via código de acesso)
+  const [reviewerSession, setReviewerSession] = useState<{ reviewerName: string } | null>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('enem_reviewer_session');
+      if (stored) {
+        try {
+          return JSON.parse(stored);
+        } catch (e) {
+          return null;
+        }
+      }
+    }
+    return null;
+  });
+
   const [darkMode, setDarkMode] = useState(() => {
     if (typeof window !== 'undefined') {
       return localStorage.getItem('theme') === 'dark' || 
@@ -64,13 +94,22 @@ export default function App() {
 
   useEffect(() => {
     if (isSupabaseConfigured && supabase) {
-      supabase.auth.getSession().then(({ data: { session } }) => {
-        setSession(session);
-        setIsAuthLoading(false);
-      });
+      supabase.auth.getSession()
+        .then(({ data: { session } }) => {
+          if (session) {
+            setSession(session);
+          }
+          setIsAuthLoading(false);
+        })
+        .catch(err => {
+          console.warn('Falha na conexão com Supabase Auth (possível offline):', err);
+          setIsAuthLoading(false);
+        });
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        setSession(session);
+        if (session) {
+          setSession(session);
+        }
       });
 
       seedUnits();
@@ -86,26 +125,103 @@ export default function App() {
   async function seedUnits() {
     if (!supabase) return;
 
-    const { data: existingUnits } = await supabase.from('units').select('*');
-    if (existingUnits && existingUnits.length === 0) {
-      await supabase.from('units').insert([
-        { name: 'Unidade 1' },
-        { name: 'Unidade 2' },
-        { name: 'Unidade 3' }
-      ]);
+    try {
+      const { data: existingUnits } = await supabase.from('units').select('*');
+      if (existingUnits && existingUnits.length === 0) {
+        await supabase.from('units').insert([
+          { name: 'Unidade 1' },
+          { name: 'Unidade 2' },
+          { name: 'Unidade 3' }
+        ]);
+      }
+    } catch (e) {
+      console.warn('Não foi possível verificar unidades iniciais (offline):', e);
     }
   }
 
+  const handleAdminLogout = async () => {
+    localStorage.removeItem('local_demo_session');
+    setSession(null);
+    try {
+      if (supabase) {
+        await supabase.auth.signOut();
+      }
+    } catch (e) {
+      console.warn('Erro ao sair do Supabase:', e);
+    }
+  };
+
+  const handleReviewerLogin = (name: string) => {
+    const revObj = { reviewerName: name };
+    setReviewerSession(revObj);
+    localStorage.setItem('enem_reviewer_session', JSON.stringify(revObj));
+  };
+
+  const handleLogoutReviewer = () => {
+    setReviewerSession(null);
+    localStorage.removeItem('enem_reviewer_session');
+  };
+
   if (isAuthLoading) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center">
         <Loader2 className="animate-spin text-brand-blue" size={40} />
       </div>
     );
   }
 
+  // Se o professor entrou como Corretor Convidado via Código de Acesso
+  if (reviewerSession) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col transition-colors duration-300">
+        <header className="sticky top-0 z-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 p-4 sm:px-8 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-2xl bg-brand-yellow flex items-center justify-center shadow-md">
+              <Award className="text-brand-blue-dark" size={22} />
+            </div>
+            <div>
+              <h1 className="text-base sm:text-lg font-serif font-bold text-brand-blue-dark dark:text-white leading-tight">
+                Simulado ENEM
+              </h1>
+              <p className="text-xs text-slate-400">
+                Corretor: <strong className="text-brand-blue dark:text-brand-yellow">{reviewerSession.reviewerName}</strong>
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button 
+              onClick={() => setDarkMode(!darkMode)}
+              className="p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-500 dark:text-brand-yellow hover:bg-slate-100 dark:hover:bg-slate-750 transition-all flex items-center gap-2"
+              title={darkMode ? "Modo Claro" : "Modo Noturno"}
+            >
+              {darkMode ? <Sun size={18} /> : <Moon size={18} />}
+            </button>
+
+            <button
+              onClick={handleLogoutReviewer}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-rose-50 hover:bg-rose-100 text-rose-700 dark:bg-rose-950/40 dark:text-rose-400 dark:hover:bg-rose-950/60 font-semibold text-xs transition-all border border-rose-200 dark:border-rose-900"
+            >
+              <LogOut size={16} />
+              <span className="hidden sm:inline">Sair do Portal</span>
+            </button>
+          </div>
+        </header>
+
+        <main className="flex-1 p-4 sm:p-8 max-w-7xl mx-auto w-full">
+          <EnemSimuladoView 
+            isReviewerMode={true} 
+            reviewerName={reviewerSession.reviewerName} 
+            onExitReviewerMode={handleLogoutReviewer} 
+          />
+        </main>
+      </div>
+    );
+  }
+
+  // Se não estiver logado com e-mail/senha e nem for corretor
   if (!session) {
-    return <Login onLogin={() => {}} />;
+    return <Login onLogin={() => {}} onReviewerLogin={handleReviewerLogin} />;
   }
 
   const navItems = [
@@ -114,6 +230,7 @@ export default function App() {
     { id: 'answer-keys', label: 'Gabaritos', icon: FileText },
     { id: 'grading', label: 'Correção', icon: CheckSquare },
     { id: 'notebook-checks', label: 'Vistos', icon: BookOpen },
+    { id: 'enem', label: 'Simulado ENEM', icon: Award },
     { id: 'reports', label: 'Relatórios', icon: BarChart3 },
     { id: 'management', label: 'Gestão', icon: GraduationCap },
     { id: 'tests', label: 'Testes', icon: AlertTriangle },
@@ -214,7 +331,7 @@ export default function App() {
           </div>
           <div className="p-4 border-t border-white/10">
             <button 
-              onClick={() => supabase?.auth.signOut()}
+              onClick={handleAdminLogout}
               className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-slate-400 hover:bg-white/5 hover:text-white transition-all"
             >
               <LogOut size={20} />
@@ -278,9 +395,10 @@ export default function App() {
               {activeView === 'classes' && <ClassesView />}
               {activeView === 'answer-keys' && <AnswerKeysView />}
               {activeView === 'grading' && <GradingView />}
+              {activeView === 'notebook-checks' && <NotebookChecksView />}
+              {activeView === 'enem' && <EnemSimuladoView isReviewerMode={false} />}
               {activeView === 'reports' && <ReportsView />}
               {activeView === 'management' && <ManagementView />}
-              {activeView === 'notebook-checks' && <NotebookChecksView />}
               {activeView === 'tests' && <SystemTestsView />}
             </motion.div>
           </AnimatePresence>
