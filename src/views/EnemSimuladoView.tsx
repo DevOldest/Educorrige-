@@ -1463,72 +1463,90 @@ export default function EnemSimuladoView({
       {verifyingSubmission && auditStats && (
         <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-2 sm:p-4 md:p-6 overflow-y-auto">
           <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-5xl my-auto flex flex-col max-h-[92vh] overflow-hidden">
-            {/* Cabeçalho do Modal */}
-            <div className="p-5 sm:p-6 border-b border-slate-100 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-800/40 flex items-start justify-between gap-4">
-              <div className="space-y-1">
+            {/* Cabeçalho do Modal - Clean & Direto */}
+            <div className="p-4 sm:p-5 border-b border-slate-100 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/40 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-10 h-10 rounded-2xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400 flex items-center justify-center shrink-0 font-bold border border-amber-200 dark:border-amber-800">
+                  <Eye size={20} />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <h3 className="text-lg sm:text-xl font-bold text-slate-900 dark:text-white truncate">
+                      {verifyingSubmission.student_name}
+                    </h3>
+                    {verifyingSubmission.roll_number && (
+                      <span className="text-xs px-2 py-0.5 rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-medium">
+                        Nº {verifyingSubmission.roll_number}
+                      </span>
+                    )}
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-medium border border-blue-200 dark:border-blue-800">
+                      {classes.find(c => c.id === verifyingSubmission.class_id)?.name || '3º Ano'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
+                    Corretor: <span className="font-semibold text-slate-700 dark:text-slate-300">{verifyingSubmission.reviewer_name || 'Desconhecido'}</span>
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 shrink-0">
+                <div className="text-right hidden sm:block">
+                  <div className="text-[11px] text-slate-400 uppercase font-semibold">Nota Atual</div>
+                  <div className="text-lg font-black text-slate-900 dark:text-white leading-none">
+                    {auditStats.score.toFixed(1)} <span className="text-xs font-normal text-slate-400">pts</span>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={handleCloseAuditModal}
+                  className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                  title="Fechar"
+                >
+                  <X size={20} />
+                </button>
+              </div>
+            </div>
+
+            {/* Placar Rápido: Certo vs Errado */}
+            <div className="px-4 sm:px-6 py-2.5 bg-white dark:bg-slate-900 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between gap-4 text-xs">
+              <div className="flex items-center gap-4 sm:gap-6">
+                {/* Certos */}
                 <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase tracking-wider bg-amber-100 dark:bg-amber-950/70 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
-                    <CheckSquare size={13} />
-                    Verificação & Comparação de Gabarito
+                  <span className="w-6 h-6 rounded-lg bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-400 flex items-center justify-center font-bold">
+                    <Check size={14} />
                   </span>
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    {classes.find(c => c.id === verifyingSubmission.class_id)?.name || '3º Ano'}
-                  </span>
-                </div>
-                <h3 className="text-xl sm:text-2xl font-serif font-bold text-slate-900 dark:text-white">
-                  {verifyingSubmission.roll_number ? `Nº ${verifyingSubmission.roll_number} — ` : ''}
-                  {verifyingSubmission.student_name}
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Corretor que realizou a correção: <strong className="text-slate-700 dark:text-slate-300">{verifyingSubmission.reviewer_name || 'Desconhecido'}</strong>
-                </p>
-              </div>
-
-              <button
-                type="button"
-                onClick={handleCloseAuditModal}
-                className="p-2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-xl hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                title="Fechar sem salvar"
-              >
-                <X size={22} />
-              </button>
-            </div>
-
-            {/* Faixa de Estatísticas e Pontuação em Tempo Real */}
-            <div className="bg-gradient-to-r from-blue-50/80 via-indigo-50/70 to-slate-50 dark:from-slate-800/80 dark:via-slate-800/60 dark:to-slate-800/80 px-5 py-3.5 border-b border-slate-200 dark:border-slate-700/80 flex flex-wrap items-center justify-between gap-3 text-xs">
-              <div className="flex flex-wrap items-center gap-3 sm:gap-6">
-                <div>
-                  <span className="text-slate-500 dark:text-slate-400 font-medium block text-[11px]">Total de Acertos</span>
-                  <span className="text-base font-bold text-slate-900 dark:text-white">
-                    {auditStats.totalCorrect} <span className="text-xs font-normal text-slate-500">/ 45</span>
-                  </span>
+                  <div>
+                    <span className="font-black text-emerald-600 dark:text-emerald-400 text-sm">{auditStats.totalCorrect}</span>
+                    <span className="text-slate-400 text-xs ml-1">certas</span>
+                  </div>
                 </div>
 
-                <div>
-                  <span className="text-slate-500 dark:text-slate-400 font-medium block text-[11px]">Nota Recalculada</span>
-                  <span className={`inline-block px-2.5 py-0.5 rounded-full font-bold text-sm border ${getScoreBadgeColor(auditStats.score)}`}>
-                    {auditStats.score.toFixed(1)} pts
+                {/* Errados */}
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-lg bg-rose-100 dark:bg-rose-950 text-rose-700 dark:text-rose-400 flex items-center justify-center font-bold">
+                    <X size={14} />
                   </span>
+                  <div>
+                    <span className="font-black text-rose-600 dark:text-rose-400 text-sm">{auditStats.totalWrong + auditStats.totalBlank + auditStats.totalMultiple}</span>
+                    <span className="text-slate-400 text-xs ml-1">erradas</span>
+                  </div>
                 </div>
 
-                <div className="h-7 w-px bg-slate-200 dark:bg-slate-700 hidden sm:block" />
-
-                <div className="flex items-center gap-3.5 text-slate-600 dark:text-slate-300 text-xs">
-                  <span>Erros: <strong className="text-rose-600 font-bold">{auditStats.totalWrong}</strong></span>
-                  <span>Em Branco: <strong className="text-slate-500 font-bold">{auditStats.totalBlank}</strong></span>
-                  <span>Rasura/Dupla: <strong className="text-amber-600 font-bold">{auditStats.totalMultiple}</strong></span>
+                {/* Nota em destaque */}
+                <div className="sm:hidden font-bold text-slate-800 dark:text-slate-200">
+                  {auditStats.score.toFixed(1)} pts
                 </div>
               </div>
 
-              <div className="text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
-                <Info size={14} className="text-brand-blue dark:text-brand-yellow shrink-0" />
-                <span>Clique em qualquer letra (A–E) para alterar a alternativa marcada.</span>
+              <div className="text-[11px] text-slate-400 hidden md:block">
+                Selecione a letra para corrigir ou clique no gabarito caso divirja.
               </div>
             </div>
 
-            {/* Matriz das 45 questões (3 colunas de 15) */}
-            <div className="flex-1 overflow-y-auto p-4 sm:p-6">
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 sm:gap-6">
+            {/* Matriz Clean: 45 Questões Simples e Visuais (Certo e Errado) */}
+            <div className="flex-1 overflow-y-auto p-3 sm:p-5 bg-slate-50/50 dark:bg-slate-950/40">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
                 {[0, 1, 2].map(colIndex => {
                   const startQ = colIndex * 15 + 1;
                   const endQ = startQ + 14;
@@ -1536,11 +1554,11 @@ export default function EnemSimuladoView({
                   return (
                     <div 
                       key={colIndex} 
-                      className="bg-slate-50/70 dark:bg-slate-800/40 p-3.5 rounded-2xl border border-slate-200/80 dark:border-slate-700/80 space-y-2.5"
+                      className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-1.5"
                     >
-                      <div className="flex items-center justify-between pb-2 border-b border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-500 dark:text-slate-400">
+                      <div className="flex items-center justify-between pb-1.5 mb-1 border-b border-slate-100 dark:border-slate-800 text-[11px] font-bold text-slate-400 uppercase tracking-wider">
                         <span>Questões {startQ} a {endQ}</span>
-                        <span>Oficial vs Aluno</span>
+                        <span>Gab. | Aluno</span>
                       </div>
 
                       {Array.from({ length: 15 }, (_, i) => {
@@ -1552,60 +1570,50 @@ export default function EnemSimuladoView({
                         return (
                           <div 
                             key={qNum} 
-                            className={`p-2 rounded-xl border transition-all flex flex-col gap-1.5 ${
+                            className={`px-2.5 py-1.5 rounded-xl border flex items-center justify-between gap-2 transition-all ${
                               isCorrect 
-                                ? 'bg-emerald-50/40 dark:bg-emerald-950/20 border-emerald-200/60 dark:border-emerald-800/40' 
-                                : studentAns === 'BLANK' 
-                                  ? 'bg-white dark:bg-slate-800/50 border-slate-200 dark:border-slate-700/60'
-                                  : 'bg-rose-50/30 dark:bg-rose-950/20 border-rose-200/60 dark:border-rose-800/40'
+                                ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60' 
+                                : 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/60'
                             }`}
                           >
-                            <div className="flex items-center justify-between text-xs">
-                              <div className="flex items-center gap-1.5 font-bold">
-                                <span className="text-slate-700 dark:text-slate-200">
-                                  Q{qNum.toString().padStart(2, '0')}
-                                </span>
-                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300 border border-blue-200 dark:border-blue-800 font-mono" title="Gabarito Oficial">
-                                  Gabarito: <strong>{officialAns}</strong>
-                                </span>
-                              </div>
+                            {/* Número da questão e gabarito oficial */}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="w-5 text-[11px] font-bold text-slate-500 dark:text-slate-400">
+                                {qNum.toString().padStart(2, '0')}
+                              </span>
+                              
+                              <span className="w-6 h-6 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs flex items-center justify-center font-mono border border-slate-200 dark:border-slate-700" title={`Gabarito oficial: ${officialAns}`}>
+                                {officialAns}
+                              </span>
 
-                              <div>
-                                {isCorrect ? (
-                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-emerald-700 dark:text-emerald-400">
-                                    <Check size={12} /> Certo
-                                  </span>
-                                ) : studentAns === 'BLANK' ? (
-                                  <span className="text-[10px] font-semibold text-slate-400">
-                                    Em branco
-                                  </span>
-                                ) : studentAns === 'DUPLA' ? (
-                                  <span className="text-[10px] font-bold text-amber-600 dark:text-amber-400">
-                                    Rasura/Dupla
-                                  </span>
-                                ) : (
-                                  <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-rose-600 dark:text-rose-400">
-                                    <X size={12} /> Errado
-                                  </span>
-                                )}
-                              </div>
+                              {/* Indicador visual Certo / Errado */}
+                              {isCorrect ? (
+                                <span className="w-5 h-5 rounded-full bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-xs" title="Acertou">
+                                  <Check size={12} strokeWidth={3} />
+                                </span>
+                              ) : (
+                                <span className="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-xs" title="Errou">
+                                  <X size={12} strokeWidth={3} />
+                                </span>
+                              )}
                             </div>
 
-                            {/* Alternativas A-E + Branco + Dupla */}
-                            <div className="flex items-center gap-1">
+                            {/* Alternativas A-E selecionáveis de forma limpa */}
+                            <div className="flex items-center gap-0.5 sm:gap-1">
                               {(['A', 'B', 'C', 'D', 'E'] as EnemAnswerOption[]).map(opt => {
                                 const isSelected = studentAns === opt;
-                                const isTargetOfficial = officialAns === opt;
+                                const isOfficial = officialAns === opt;
 
-                                let btnStyle = 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 hover:border-brand-blue';
+                                let btnStyle = 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800';
+
                                 if (isSelected) {
                                   if (isCorrect) {
-                                    btnStyle = 'bg-emerald-600 text-white font-bold ring-2 ring-emerald-300 shadow-sm';
+                                    btnStyle = 'bg-emerald-600 text-white font-black shadow-xs ring-1 ring-emerald-600';
                                   } else {
-                                    btnStyle = 'bg-rose-600 text-white font-bold ring-2 ring-rose-300 shadow-sm';
+                                    btnStyle = 'bg-rose-600 text-white font-black shadow-xs ring-1 ring-rose-600';
                                   }
-                                } else if (isTargetOfficial && !isCorrect) {
-                                  btnStyle = 'bg-white dark:bg-slate-800 text-emerald-700 dark:text-emerald-400 border border-emerald-300 dark:border-emerald-700/80 font-semibold';
+                                } else if (isOfficial && !isCorrect) {
+                                  btnStyle = 'text-emerald-600 dark:text-emerald-400 font-bold bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-300 dark:border-emerald-800';
                                 }
 
                                 return (
@@ -1613,40 +1621,31 @@ export default function EnemSimuladoView({
                                     key={opt}
                                     type="button"
                                     onClick={() => setAuditAnswers(prev => ({ ...prev, [qNum]: opt }))}
-                                    className={`flex-1 h-7 rounded-lg text-xs font-semibold transition-all flex items-center justify-center ${btnStyle}`}
-                                    title={`Marcar opção ${opt} para o aluno na questão ${qNum}`}
+                                    className={`w-6 h-6 sm:w-7 sm:h-7 rounded-lg text-xs font-semibold flex items-center justify-center transition-all ${btnStyle}`}
+                                    title={`Marcar opção ${opt} para a questão ${qNum}`}
                                   >
                                     {opt}
                                   </button>
                                 );
                               })}
 
-                              {/* Botão Em Branco */}
+                              {/* Botão Branco / Rasura unificado e discreto */}
                               <button
                                 type="button"
-                                onClick={() => setAuditAnswers(prev => ({ ...prev, [qNum]: 'BLANK' }))}
-                                className={`px-1.5 h-7 rounded-lg text-[10px] font-bold transition-all ${
+                                onClick={() => {
+                                  const nextVal = studentAns === 'BLANK' ? 'DUPLA' : studentAns === 'DUPLA' ? 'A' : 'BLANK';
+                                  setAuditAnswers(prev => ({ ...prev, [qNum]: nextVal as any }));
+                                }}
+                                className={`w-6 h-6 rounded-lg text-[10px] font-bold flex items-center justify-center transition-all ml-0.5 ${
                                   studentAns === 'BLANK'
-                                    ? 'bg-slate-600 text-white shadow-sm'
-                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700 hover:bg-slate-200'
+                                    ? 'bg-slate-700 text-white'
+                                    : studentAns === 'DUPLA'
+                                      ? 'bg-amber-600 text-white'
+                                      : 'text-slate-300 hover:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
                                 }`}
-                                title="Marcar como em branco"
+                                title={studentAns === 'BLANK' ? 'Em branco' : studentAns === 'DUPLA' ? 'Rasura / Dupla' : 'Deixar em branco'}
                               >
-                                —
-                              </button>
-
-                              {/* Botão Dupla / Rasura */}
-                              <button
-                                type="button"
-                                onClick={() => setAuditAnswers(prev => ({ ...prev, [qNum]: 'DUPLA' }))}
-                                className={`px-1.5 h-7 rounded-lg text-[10px] font-bold transition-all ${
-                                  studentAns === 'DUPLA'
-                                    ? 'bg-amber-600 text-white shadow-sm'
-                                    : 'bg-slate-100 dark:bg-slate-800 text-slate-500 border border-slate-200 dark:border-slate-700 hover:bg-slate-200'
-                                }`}
-                                title="Marcar como rasura / dupla assinalação"
-                              >
-                                ×
+                                {studentAns === 'BLANK' ? '—' : studentAns === 'DUPLA' ? '×' : '•'}
                               </button>
                             </div>
                           </div>
@@ -1659,17 +1658,17 @@ export default function EnemSimuladoView({
             </div>
 
             {/* Rodapé do Modal com Ações */}
-            <div className="p-4 sm:p-5 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-slate-800/40 flex flex-col sm:flex-row items-center justify-between gap-3">
-              <div className="text-xs text-slate-600 dark:text-slate-400 text-center sm:text-left">
-                Ao salvar, a nota do aluno no Simulado ENEM será recalculada e atualizada na base de dados.
+            <div className="p-3 sm:p-4 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-center justify-between gap-3">
+              <div className="text-xs text-slate-500 dark:text-slate-400">
+                Acertos: <strong className="text-emerald-600">{auditStats.totalCorrect}</strong> / 45 &bull; Nota: <strong className="text-slate-900 dark:text-white">{auditStats.score.toFixed(1)}</strong>
               </div>
 
-              <div className="flex items-center gap-3 w-full sm:w-auto">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handleCloseAuditModal}
                   disabled={isSavingAudit}
-                  className="flex-1 sm:flex-initial px-5 py-2.5 rounded-xl border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold text-xs transition-colors"
+                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold text-xs transition-colors"
                 >
                   Cancelar
                 </button>
@@ -1678,17 +1677,17 @@ export default function EnemSimuladoView({
                   type="button"
                   onClick={handleSaveAudit}
                   disabled={isSavingAudit}
-                  className="flex-1 sm:flex-initial px-6 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all disabled:opacity-50"
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-50"
                 >
                   {isSavingAudit ? (
                     <>
-                      <Loader2 size={16} className="animate-spin" />
+                      <Loader2 size={15} className="animate-spin" />
                       Salvando...
                     </>
                   ) : (
                     <>
-                      <Save size={16} />
-                      Salvar Alterações e Recalcular Nota
+                      <Save size={15} />
+                      Salvar Correção
                     </>
                   )}
                 </button>
