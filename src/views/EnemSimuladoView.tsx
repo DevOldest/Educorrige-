@@ -1533,6 +1533,22 @@ export default function EnemSimuladoView({
                   </div>
                 </div>
 
+                {/* Indicadores discretos caso existam brancas ou duplas */}
+                {(auditStats.totalBlank > 0 || auditStats.totalMultiple > 0) && (
+                  <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400 border-l border-slate-200 dark:border-slate-800 pl-3">
+                    {auditStats.totalMultiple > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 border border-amber-200 dark:border-amber-800/60 font-medium">
+                        {auditStats.totalMultiple} dupla(s)
+                      </span>
+                    )}
+                    {auditStats.totalBlank > 0 && (
+                      <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-500 font-medium">
+                        {auditStats.totalBlank} em branco
+                      </span>
+                    )}
+                  </div>
+                )}
+
                 {/* Nota em destaque */}
                 <div className="sm:hidden font-bold text-slate-800 dark:text-slate-200">
                   {auditStats.score.toFixed(1)} pts
@@ -1566,6 +1582,8 @@ export default function EnemSimuladoView({
                         const officialAns = simulation.official_answers[qNum] || 'A';
                         const studentAns = auditAnswers[qNum] || 'BLANK';
                         const isCorrect = isEnemQuestionCorrect(studentAns, officialAns);
+                        const isMultiple = studentAns === 'DUPLA';
+                        const isBlank = studentAns === 'BLANK';
 
                         return (
                           <div 
@@ -1573,7 +1591,11 @@ export default function EnemSimuladoView({
                             className={`px-2.5 py-1.5 rounded-xl border flex items-center justify-between gap-2 transition-all ${
                               isCorrect 
                                 ? 'bg-emerald-50/50 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-800/60' 
-                                : 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/60'
+                                : isMultiple
+                                  ? 'bg-amber-50/40 dark:bg-amber-950/20 border-amber-200/80 dark:border-amber-800/50'
+                                  : isBlank
+                                    ? 'bg-slate-50/60 dark:bg-slate-850/30 border-slate-200 dark:border-slate-800'
+                                    : 'bg-rose-50/50 dark:bg-rose-950/20 border-rose-200 dark:border-rose-800/60'
                             }`}
                           >
                             {/* Número da questão e gabarito oficial */}
@@ -1594,6 +1616,24 @@ export default function EnemSimuladoView({
                               ) : (
                                 <span className="w-5 h-5 rounded-full bg-rose-500 text-white flex items-center justify-center shrink-0 shadow-xs" title="Errou">
                                   <X size={12} strokeWidth={3} />
+                                </span>
+                              )}
+
+                              {/* Tag discreta para Dupla ou Em Branco */}
+                              {isMultiple && (
+                                <span 
+                                  className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-800 tracking-tight"
+                                  title="Aluno assinalou duas ou mais alternativas (duplicada/rasura)"
+                                >
+                                  dupla
+                                </span>
+                              )}
+                              {isBlank && (
+                                <span 
+                                  className="text-[9px] font-semibold px-1 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-400 tracking-tight"
+                                  title="Questão deixada em branco"
+                                >
+                                  branco
                                 </span>
                               )}
                             </div>
@@ -1638,12 +1678,12 @@ export default function EnemSimuladoView({
                                 }}
                                 className={`w-6 h-6 rounded-lg text-[10px] font-bold flex items-center justify-center transition-all ml-0.5 ${
                                   studentAns === 'BLANK'
-                                    ? 'bg-slate-700 text-white'
+                                    ? 'bg-slate-700 text-white shadow-xs'
                                     : studentAns === 'DUPLA'
-                                      ? 'bg-amber-600 text-white'
+                                      ? 'bg-amber-600 text-white shadow-xs ring-1 ring-amber-400'
                                       : 'text-slate-300 hover:text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
                                 }`}
-                                title={studentAns === 'BLANK' ? 'Em branco' : studentAns === 'DUPLA' ? 'Rasura / Dupla' : 'Deixar em branco'}
+                                title={studentAns === 'BLANK' ? 'Em branco' : studentAns === 'DUPLA' ? 'Duplicada / Rasura' : 'Deixar em branco'}
                               >
                                 {studentAns === 'BLANK' ? '—' : studentAns === 'DUPLA' ? '×' : '•'}
                               </button>
