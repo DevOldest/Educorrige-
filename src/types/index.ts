@@ -108,7 +108,7 @@ export interface Grade {
   created_at: string;
 }
 
-export type EnemAnswerOption = 'A' | 'B' | 'C' | 'D' | 'E' | 'BLANK' | 'ANULADA';
+export type EnemAnswerOption = 'A' | 'B' | 'C' | 'D' | 'E' | 'BLANK' | 'DUPLA' | 'ANULADA';
 
 export interface EnemSimulation {
   id: string;
@@ -131,6 +131,8 @@ export interface EnemSubmission {
   answers: Record<number, EnemAnswerOption>;
   total_correct: number;
   score_points: number; // 1.0, 2.0, 3.0 ou 4.0
+  blank_count?: number;
+  multiple_count?: number;
   created_at: string;
 }
 
