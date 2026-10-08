@@ -107,3 +107,35 @@ export interface Grade {
   unit_average: number;
   created_at: string;
 }
+
+export type EnemAnswerOption = 'A' | 'B' | 'C' | 'D' | 'E' | 'BLANK' | 'ANULADA';
+
+export interface EnemSimulation {
+  id: string;
+  title: string;
+  area: string; // Ex: "Ciências da Natureza e suas Tecnologias"
+  total_questions: number; // 45
+  official_answers: Record<number, EnemAnswerOption>; // 1: 'A', 2: 'C', ...
+  access_code: string; // ex: "ENEM2026"
+  created_at?: string;
+}
+
+export interface EnemSubmission {
+  id: string;
+  simulation_id: string;
+  student_id: string;
+  student_name: string;
+  roll_number?: number;
+  class_id: string;
+  reviewer_name: string;
+  answers: Record<number, EnemAnswerOption>;
+  total_correct: number;
+  score_points: number; // 1.0, 2.0, 3.0 ou 4.0
+  created_at: string;
+}
+
+export interface ReviewerSession {
+  reviewerName: string;
+  accessCode: string;
+  isReviewerOnly: boolean;
+}
