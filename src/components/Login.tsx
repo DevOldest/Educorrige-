@@ -20,7 +20,12 @@ export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
   const [isNetworkError, setIsNetworkError] = useState(false);
 
   // Login Corretor via Código
-  const [reviewerName, setReviewerName] = useState('');
+  const [reviewerName, setReviewerName] = useState(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('last_reviewer_name') || '';
+    }
+    return '';
+  });
   const [accessCode, setAccessCode] = useState('');
   const [reviewerError, setReviewerError] = useState<string | null>(null);
 
@@ -91,6 +96,9 @@ export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
     }
 
     // Código válido! Entrar no modo corretor
+    try {
+      localStorage.setItem('last_reviewer_name', reviewerName.trim());
+    } catch (e) {}
     onReviewerLogin(reviewerName.trim());
   };
 
