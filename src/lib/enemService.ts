@@ -16,6 +16,68 @@ export function calculateEnemScore(correctCount: number): number {
   return 0.0;
 }
 
+// Regra de validação estrita da questão:
+// 1. Não sinalizada / Em branco ('BLANK'): SEMPRE INCORRETA (0 pontos).
+// 2. Duas alternativas marcadas, mais de uma ou todas marcadas / rasura ('DUPLA' ou 'ANULADA'): SEMPRE INCORRETA (0 pontos).
+// 3. Questão anulada pela banca/professor no gabarito oficial ('ANULADA'): apenas pontua se o aluno assinalou uma alternativa válida (A..E).
+// 4. Apenas pontua se for uma única alternativa assinalada (A..E) exatamente igual ao gabarito oficial.
+export function isEnemQuestionCorrect(
+  studentAns: EnemAnswerOption | string | undefined,
+  officialAns: EnemAnswerOption | string | undefined
+): boolean {
+  if (!studentAns || studentAns === 'BLANK') return false;
+  if (studentAns === 'DUPLA' || studentAns === 'ANULADA') return false;
+
+  if (officialAns === 'ANULADA') {
+    return ['A', 'B', 'C', 'D', 'E'].includes(studentAns);
+  }
+
+  return studentAns === officialAns;
+}
+
+export interface EnemCorrectionStats {
+  totalCorrect: number;
+  totalBlank: number;
+  totalMultiple: number;
+  totalWrong: number;
+  totalQuestions: number;
+  score: number;
+}
+
+export function calculateEnemStatistics(
+  answers: Record<number, EnemAnswerOption>,
+  officialAnswers: Record<number, EnemAnswerOption>
+): EnemCorrectionStats {
+  let totalCorrect = 0;
+  let totalBlank = 0;
+  let totalMultiple = 0;
+  let totalWrong = 0;
+
+  for (let q = 1; q <= 45; q++) {
+    const studentAns = answers[q] || 'BLANK';
+    const officialAns = officialAnswers[q] || 'A';
+
+    if (studentAns === 'BLANK') {
+      totalBlank++;
+    } else if (studentAns === 'DUPLA' || studentAns === 'ANULADA') {
+      totalMultiple++;
+    } else if (isEnemQuestionCorrect(studentAns, officialAns)) {
+      totalCorrect++;
+    } else {
+      totalWrong++;
+    }
+  }
+
+  return {
+    totalCorrect,
+    totalBlank,
+    totalMultiple,
+    totalWrong,
+    totalQuestions: 45,
+    score: calculateEnemScore(totalCorrect)
+  };
+}
+
 export function getScoreBadgeColor(score: number): string {
   if (score >= 4.0) return 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-400';
   if (score >= 3.0) return 'bg-blue-100 text-blue-800 border-blue-300 dark:bg-blue-950/40 dark:text-blue-400';
@@ -246,11 +308,11 @@ export async function analyzeEnemBubbleSheet(imageBase64: string): Promise<Recor
     throw new Error('Chave da API de IA não configurada.');
   }
 
-  const prompt = `Você é um leitor ótico de alta precisão (OMR) para Cartões-Resposta de Simulado ENEM contendo exatamente 45 questões (numeradas de 1 a 45).
-Cada questão tem alternativas marcadas com bolinhas: A, B, C, D, E.
+  const prompt = `Você é um leitor óptico de altíssima precisão (OMR) para Cartões-Resposta de Simulado ENEM contendo exatamente 45 questões (numeradas de 1 a 45).
+Cada questão tem opções de alternativas em bolinhas: A, B, C, D, E.
 
-Analise cuidadosamente a imagem deste cartão de respostas ou folha do aluno.
-Para cada uma das questões de 1 a 45, identifique a opção assinalada pelo estudante.
+Analise com extremo rigor a imagem deste cartão de respostas do aluno.
+Para cada uma das questões de 1 a 45, identifique com precisão a marcação do estudante seguindo ESTAS REGRAS OFICIAIS DO ENEM:
 
 REGRAS:
 1. Retorne ESTRITAMENTE um JSON válido sem marcações markdown extras, no formato:
@@ -258,13 +320,16 @@ REGRAS:
   "answers": {
     "1": "A",
     "2": "C",
-    "3": "B",
+    "3": "DUPLA",
+    "4": "BLANK",
     ...
     "45": "D"
   }
 }
-2. Valores aceitos para cada questão: "A", "B", "C", "D", "E". Se a questão estiver em branco ou não visível, coloque "BLANK". Se tiver dupla marcação ou rasura impossível de definir, coloque "ANULADA".
-3. Identifique o máximo de questões possíveis de 1 a 45.`;
+2. QUESTÕES NÃO SINALIZADAS: Se a questão não estiver preenchida (em branco, nenhuma alternativa marcada), coloque "BLANK".
+3. DUAS OU MAIS MARCAÇÕES / TODAS MARCADAS: Se o aluno marcou duas alternativas (ex: A e B), marcou três ou mais, marcou todas as alternativas ou cometeu rasura com mais de uma bolinha preenchida, coloque "DUPLA".
+4. MARCAÇÃO ÚNICA: Se o aluno marcou claramente apenas uma alternativa, coloque a respectiva letra maiúscula: "A", "B", "C", "D" ou "E".
+5. Preencha todas as 45 questões (de 1 a 45).`;
 
   try {
     const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
@@ -297,9 +362,11 @@ REGRAS:
 
     const rawAnswers = parsed.answers || parsed;
     for (let q = 1; q <= 45; q++) {
-      const val = rawAnswers[q] || rawAnswers[String(q)];
-      if (['A', 'B', 'C', 'D', 'E', 'BLANK', 'ANULADA'].includes(val)) {
+      const val = String(rawAnswers[q] || rawAnswers[String(q)] || 'BLANK').trim().toUpperCase();
+      if (['A', 'B', 'C', 'D', 'E'].includes(val)) {
         answers[q] = val as EnemAnswerOption;
+      } else if (val === 'DUPLA' || val === 'ANULADA' || val === 'MULTIPLE' || val === 'RASURA') {
+        answers[q] = 'DUPLA';
       } else {
         answers[q] = 'BLANK';
       }
