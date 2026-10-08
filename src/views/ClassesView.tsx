@@ -100,7 +100,12 @@ export default function ClassesView() {
       .select('*, students(count)')
       .order('name', { ascending: true });
     
-    if (data) setClasses(data);
+    if (data) {
+      setClasses(data);
+      try {
+        localStorage.setItem('cached_app_classes', JSON.stringify(data));
+      } catch (e) {}
+    }
     setIsLoading(false);
   }
 

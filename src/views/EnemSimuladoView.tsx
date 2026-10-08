@@ -22,9 +22,14 @@ import {
   Eye,
   LogOut,
   HelpCircle,
-  Download
+  Download,
+  Lock,
+  ShieldCheck,
+  Info
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabase';
 import { 
   EnemAnswerOption, 
@@ -44,6 +49,8 @@ import {
   saveStoredSubmission, 
   deleteStoredSubmission, 
   analyzeEnemBubbleSheet,
+  calculateEnemStatistics,
+  isEnemQuestionCorrect,
   DEFAULT_SIMULATION
 } from '../lib/enemService';
 
@@ -137,10 +144,13 @@ export default function EnemSimuladoView({
     }
   }, [selectedStudentId, simulation.id, submissions]);
 
-  // Função utilitária para filtrar estritamente turmas do 3º ano
+  // Função utilitária para filtrar estritamente turmas do 3º ano do Ensino Médio
   const isThirdYearClass = (c: Class): boolean => {
-    if (c.school_year === 3) return true;
-    const name = (c.name || '').toLowerCase().trim();
+    if (!c) return false;
+    if (Number(c.school_year) === 3) return true;
+    if ((c as any).grade_level && String((c as any).grade_level).includes('3')) return true;
+    const rawName = (c.name || '').trim();
+    const name = rawName.toLowerCase();
     if (
       name.includes('3º') ||
       name.includes('3°') ||
@@ -149,11 +159,24 @@ export default function EnemSimuladoView({
       name.includes('3a') ||
       name.includes('terceiro') ||
       name.includes('3 ano') ||
-      name.includes('3ano')
+      name.includes('3ano') ||
+      name.includes('3-ano') ||
+      name.includes('3_ano') ||
+      name.includes('3 em') ||
+      name.includes('3em') ||
+      name.includes('3º em') ||
+      name.includes('3° em') ||
+      name.includes('3ª série') ||
+      name.includes('3a série') ||
+      name.includes('3ª serie') ||
+      name.includes('3a serie') ||
+      name.includes('3 serie') ||
+      name.includes('3serie')
     ) {
       return true;
     }
-    if (/^3[\s\-_A-Za-z0-9]/.test(name) || name === '3') {
+    // Começa com 3 (ex: "3A", "3B", "3C", "3D", "3-A", "3 01", "301", "3°A", "3ºC")
+    if (/^3[a-zA-Z\s\-_0-9º°ª]/.test(rawName) || rawName === '3') {
       return true;
     }
     return false;
@@ -161,69 +184,140 @@ export default function EnemSimuladoView({
 
   async function fetchClasses() {
     setIsLoadingClasses(true);
+    let rawList: Class[] = [];
+
+    // 1. Buscar direto do Supabase
     try {
       if (supabase) {
         const { data, error } = await supabase.from('classes').select('*').order('name');
-        if (!error && data) {
-          // Filtrar estritamente turmas do 3º ano para o Simulado ENEM
-          const thirdYearClasses = data.filter(isThirdYearClass);
-          setClasses(thirdYearClasses);
-          if (thirdYearClasses.length > 0) {
-            setSelectedClassId(thirdYearClasses[0].id);
-          }
+        if (!error && data && data.length > 0) {
+          rawList = data;
+          try {
+            localStorage.setItem('cached_app_classes', JSON.stringify(data));
+          } catch (e) {}
         }
       }
     } catch (err) {
-      console.error('Erro ao buscar turmas:', err);
-    } finally {
-      setIsLoadingClasses(false);
+      console.warn('Erro ao buscar turmas no Supabase (tentando fontes locais):', err);
     }
+
+    // 2. Se vazio, verificar caches salvos no navegador pelo administrador
+    if (rawList.length === 0) {
+      const cacheKeys = ['cached_app_classes', 'educorrige_classes', 'app_classes', 'classes'];
+      for (const k of cacheKeys) {
+        try {
+          const cached = localStorage.getItem(k);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              rawList = parsed;
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    // 3. Filtrar turmas do 3º ano
+    let filtered = rawList.filter(isThirdYearClass);
+
+    // Ordenar de forma natural (ex: 3°A, 3°B, 3ºC, 3ºD)
+    filtered.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { numeric: true }));
+
+    // Se existirem turmas cadastradas mas nenhuma com "3º" no título, disponibilizar todas para não travar
+    if (filtered.length === 0 && rawList.length > 0) {
+      filtered = rawList;
+    }
+
+    // Se o banco ainda estiver vazio neste ambiente local
+    if (filtered.length === 0) {
+      filtered = [
+        { id: '3-ano-a', name: '3º Ano A - Ensino Médio', school_year: 3, school_id: 'default', user_id: 'admin', created_at: new Date().toISOString() },
+        { id: '3-ano-b', name: '3º Ano B - Ensino Médio', school_year: 3, school_id: 'default', user_id: 'admin', created_at: new Date().toISOString() },
+        { id: '3-ano-c', name: '3º Ano C - Ensino Médio', school_year: 3, school_id: 'default', user_id: 'admin', created_at: new Date().toISOString() }
+      ];
+    }
+
+    setClasses(filtered);
+    if (filtered.length > 0) {
+      setSelectedClassId(prev => prev && filtered.some(c => c.id === prev) ? prev : filtered[0].id);
+    }
+
+    setIsLoadingClasses(false);
   }
 
   async function fetchStudents(classId: string) {
+    if (!classId) {
+      setStudents([]);
+      setSelectedStudentId('');
+      return;
+    }
     setIsLoadingStudents(true);
+    let studentList: Student[] = [];
+
+    // 1. Tentar buscar do Supabase
     try {
       if (supabase) {
         const { data, error } = await supabase
           .from('students')
           .select('*')
           .eq('class_id', classId)
-          .order('name');
-        if (!error && data) {
-          setStudents(data);
-          if (data.length > 0) {
-            setSelectedStudentId(data[0].id);
-          } else {
-            setSelectedStudentId('');
-          }
+          .order('roll_number', { ascending: true })
+          .order('name', { ascending: true });
+        if (!error && data && data.length > 0) {
+          studentList = data;
+          try {
+            localStorage.setItem(`cached_students_${classId}`, JSON.stringify(data));
+          } catch (e) {}
         }
       }
     } catch (err) {
-      console.error('Erro ao buscar alunos:', err);
-    } finally {
-      setIsLoadingStudents(false);
+      console.warn('Erro ao buscar alunos no Supabase:', err);
     }
+
+    // 2. Fallback de cache local
+    if (studentList.length === 0) {
+      const studentKeys = [`cached_students_${classId}`, `students_${classId}`];
+      for (const k of studentKeys) {
+        try {
+          const cached = localStorage.getItem(k);
+          if (cached) {
+            const parsed = JSON.parse(cached);
+            if (Array.isArray(parsed) && parsed.length > 0) {
+              studentList = parsed;
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+    }
+
+    // Ordenar estudantes
+    studentList.sort((a, b) => {
+      if (a.roll_number && b.roll_number) return a.roll_number - b.roll_number;
+      if (a.roll_number) return -1;
+      if (b.roll_number) return 1;
+      return a.name.localeCompare(b.name, 'pt-BR');
+    });
+
+    setStudents(studentList);
+    if (studentList.length > 0) {
+      // Priorizar o primeiro aluno ainda não corrigido
+      const firstUncorrected = studentList.find(s => 
+        !submissions.some(sub => sub.simulation_id === simulation.id && sub.student_id === s.id)
+      );
+      setSelectedStudentId(firstUncorrected ? firstUncorrected.id : studentList[0].id);
+    } else {
+      setSelectedStudentId('');
+    }
+
+    setIsLoadingStudents(false);
   }
 
-  // Estatísticas calculadas em tempo real para a correção atual
-  const correctCount = Object.entries(currentAnswers).reduce((acc, [qNum, ans]) => {
-    const num = Number(qNum);
-    const official = simulation.official_answers[num];
-    if (official === 'ANULADA' || (ans !== 'BLANK' && ans !== 'ANULADA' && ans === official)) {
-      return acc + 1;
-    }
-    return acc;
-  }, 0);
-
-  const calculatedScore = calculateEnemScore(correctCount);
-
-  // Alterar uma resposta individual na matriz
-  const handleAnswerSelect = (questionNum: number, option: EnemAnswerOption) => {
-    setCurrentAnswers(prev => ({
-      ...prev,
-      [questionNum]: prev[questionNum] === option ? 'BLANK' : option
-    }));
-  };
+  // Estatísticas calculadas em tempo real para a correção atual seguindo regras do ENEM:
+  const currentStats = calculateEnemStatistics(currentAnswers, simulation.official_answers);
+  const correctCount = currentStats.totalCorrect;
+  const calculatedScore = currentStats.score;
 
   // Upload de imagem do cartão
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -291,13 +385,14 @@ export default function EnemSimuladoView({
     try {
       const aiAnswers = await analyzeEnemBubbleSheet(capturedImage);
       setCurrentAnswers(aiAnswers);
+      const stats = calculateEnemStatistics(aiAnswers, simulation.official_answers);
       setStatusMessage({
-        text: 'Cartão lido com sucesso pela IA! Verifique as marcações abaixo antes de salvar.',
+        text: `Cartão lido e corrigido pela IA com sucesso! ${stats.totalCorrect} de 45 acertos (${stats.score.toFixed(1)} pts). Clique abaixo para confirmar e salvar a nota.`,
         type: 'success'
       });
     } catch (err: any) {
       setStatusMessage({
-        text: err.message || 'Não foi possível ler com precisão. Você pode marcar as bolinhas manualmente.',
+        text: err.message || 'Não foi possível ler as marcações na imagem com precisão. Verifique a iluminação e tente uma nova foto.',
         type: 'error'
       });
     } finally {
@@ -326,8 +421,10 @@ export default function EnemSimuladoView({
       class_id: selectedClassId,
       reviewer_name: reviewerName,
       answers: currentAnswers,
-      total_correct: correctCount,
-      score_points: calculatedScore,
+      total_correct: currentStats.totalCorrect,
+      score_points: currentStats.score,
+      blank_count: currentStats.totalBlank,
+      multiple_count: currentStats.totalMultiple,
       created_at: new Date().toISOString()
     };
 
@@ -336,14 +433,16 @@ export default function EnemSimuladoView({
     setIsSaving(false);
 
     setStatusMessage({
-      text: `Correção de "${studentObj.name}" salva com sucesso! (${correctCount}/45 acertos = ${calculatedScore.toFixed(1)} pts)`,
+      text: `Nota de "${studentObj.name}" salva com sucesso! (${correctCount}/45 acertos = ${calculatedScore.toFixed(1)} pts)`,
       type: 'success'
     });
 
-    // Avançar automaticamente para o próximo aluno da turma se houver
-    const currentIndex = students.findIndex(s => s.id === selectedStudentId);
-    if (currentIndex >= 0 && currentIndex < students.length - 1) {
-      setSelectedStudentId(students[currentIndex + 1].id);
+    // Avançar automaticamente para o próximo aluno pendente da turma
+    const nextUncorrected = students.find(s => 
+      s.id !== selectedStudentId && !updated.some(sub => sub.simulation_id === simulation.id && sub.student_id === s.id)
+    );
+    if (nextUncorrected) {
+      setSelectedStudentId(nextUncorrected.id);
       setCapturedImage(null);
     }
   };
@@ -380,6 +479,118 @@ export default function EnemSimuladoView({
     ? thirdYearSubmissions 
     : thirdYearSubmissions.filter(s => s.class_id === filterClassId);
 
+  // Exportação profissional de Relatório em PDF para o Administrador
+  const exportSimuladoPDF = (targetClassId?: string) => {
+    const listToExport = targetClassId && targetClassId !== 'all'
+      ? thirdYearSubmissions.filter(s => s.class_id === targetClassId)
+      : filteredSubmissions;
+
+    if (listToExport.length === 0) {
+      setStatusMessage({
+        text: 'Nenhum resultado corrigido encontrado para exportar o relatório em PDF.',
+        type: 'info'
+      });
+      return;
+    }
+
+    try {
+      const doc = new jsPDF();
+      const targetClassName = targetClassId && targetClassId !== 'all'
+        ? (classes.find(c => c.id === targetClassId)?.name || 'Turma Selecionada')
+        : (filterClassId === 'all'
+            ? 'Todas as Turmas do 3º Ano'
+            : (classes.find(c => c.id === filterClassId)?.name || 'Turma Selecionada'));
+
+      // Cabeçalho institucional do documento
+      doc.setFillColor(10, 37, 64);
+      doc.rect(0, 0, 210, 32, 'F');
+
+      doc.setFontSize(16);
+      doc.setTextColor(255, 255, 255);
+      doc.text('RELATÓRIO DE RESULTADOS DO SIMULADO ENEM', 105, 14, { align: 'center' });
+
+      doc.setFontSize(10);
+      doc.setTextColor(226, 232, 240);
+      doc.text(`${simulation.title} | Turma: ${targetClassName} | Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 105, 23, { align: 'center' });
+
+      // Estatísticas gerais
+      const totalCorrigidos = listToExport.length;
+      const mediaAcertos = (listToExport.reduce((acc, s) => acc + s.total_correct, 0) / totalCorrigidos).toFixed(1);
+      const mediaNota = (listToExport.reduce((acc, s) => acc + s.score_points, 0) / totalCorrigidos).toFixed(2);
+      const maiorNota = Math.max(...listToExport.map(s => s.score_points)).toFixed(1);
+
+      // Card de resumo
+      doc.setFillColor(248, 250, 252);
+      doc.setDrawColor(226, 232, 240);
+      doc.roundedRect(14, 38, 182, 18, 3, 3, 'FD');
+
+      doc.setFontSize(9);
+      doc.setTextColor(71, 85, 105);
+      doc.text(`Alunos Corrigidos: ${totalCorrigidos}`, 20, 49);
+      doc.text(`Média de Acertos: ${mediaAcertos} / 45`, 70, 49);
+      doc.text(`Média Geral: ${mediaNota} pts`, 122, 49);
+      doc.text(`Maior Nota: ${maiorNota} pts`, 166, 49);
+
+      // Tabela ordenada por nota decrescente
+      const sortedList = [...listToExport].sort((a, b) => b.score_points - a.score_points);
+
+      const tableData = sortedList.map((item, index) => {
+        const cls = classes.find(c => c.id === item.class_id)?.name || item.class_name || '-';
+        const dateStr = item.created_at ? new Date(item.created_at).toLocaleDateString('pt-BR') : '-';
+        return [
+          `${index + 1}º`,
+          item.student_name,
+          cls,
+          `${item.total_correct} / 45`,
+          `${item.score_points.toFixed(1)} pts`,
+          item.reviewer_name || 'Admin',
+          dateStr
+        ];
+      });
+
+      autoTable(doc, {
+        startY: 62,
+        head: [['Class.', 'Aluno', 'Turma', 'Acertos', 'Nota', 'Corretor', 'Data']],
+        body: tableData,
+        headStyles: { fillColor: [10, 37, 64], fontSize: 9, halign: 'center' },
+        bodyStyles: { fontSize: 8.5 },
+        columnStyles: {
+          0: { cellWidth: 15, halign: 'center' },
+          1: { cellWidth: 'auto' },
+          2: { cellWidth: 25, halign: 'center' },
+          3: { cellWidth: 22, halign: 'center' },
+          4: { cellWidth: 22, halign: 'center' },
+          5: { cellWidth: 35 },
+          6: { cellWidth: 22, halign: 'center' }
+        },
+        didDrawPage: () => {
+          doc.setFontSize(8);
+          doc.setTextColor(148, 163, 184);
+          doc.text(
+            `Página ${doc.internal.pages.length - 1} | Sistema de Gestão Escolar - Simulado ENEM`,
+            105,
+            doc.internal.pageSize.height - 10,
+            { align: 'center' }
+          );
+        }
+      });
+
+      const safeClassName = targetClassName.replace(/[^a-zA-Z0-9]/g, '_');
+      doc.save(`Relatorio_Simulado_ENEM_${safeClassName}_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.pdf`);
+
+      setStatusMessage({
+        text: `Relatório em PDF baixado com sucesso (${targetClassName})!`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      console.error('Erro ao gerar PDF:', err);
+      setStatusMessage({
+        text: 'Não foi possível gerar o arquivo PDF. Tente novamente.',
+        type: 'error'
+      });
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Barra de Notificação de Status */}
@@ -411,17 +622,15 @@ export default function EnemSimuladoView({
             <span className="px-3 py-1 bg-brand-yellow/20 text-brand-blue-dark dark:text-brand-yellow text-xs font-bold rounded-full uppercase tracking-wider">
               {simulation.title}
             </span>
-            <span className="text-xs text-slate-400 dark:text-slate-500">45 Questões</span>
           </div>
           <h1 className="text-2xl sm:text-3xl font-serif font-bold text-brand-blue-dark dark:text-white">
             {isReviewerMode ? 'Portal do Corretor' : 'Gestão do Simulado ENEM'}
           </h1>
-          <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-            {isReviewerMode 
-              ? `Conectado como: ${reviewerName} • Pontuação automática por faixas de acertos.`
-              : 'Correção ótica com IA, gabarito oficial de 45 questões e pontuação por faixas.'
-            }
-          </p>
+          {isReviewerMode && (
+            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+              Conectado como: {reviewerName}
+            </p>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -513,85 +722,123 @@ export default function EnemSimuladoView({
 
       {/* ABA 1: TELA DE CORREÇÃO (Disponível para Administrador e para o Corretor) */}
       {(isReviewerMode || activeTab === 'grading') && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Coluna 1: Seleção de Turma, Aluno e Imagem */}
-          <div className="lg:col-span-1 space-y-6">
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-4">
-              <h2 className="text-lg font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
-                <Users size={20} className="text-brand-blue dark:text-brand-yellow" />
-                Dados do Aluno
-              </h2>
-
-              <div>
-                <label className="text-xs font-bold uppercase text-slate-400 block mb-1">
-                  Turma (Apenas 3º Ano)
-                </label>
-                <select
-                  value={selectedClassId}
-                  onChange={(e) => setSelectedClassId(e.target.value)}
-                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm font-medium text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-brand-yellow"
-                >
-                  {classes.length === 0 ? (
-                    <option value="">Nenhuma turma do 3º ano encontrada...</option>
-                  ) : (
-                    <>
-                      <option value="">Selecione a turma do 3º ano...</option>
-                      {classes.map(c => (
-                        <option key={c.id} value={c.id}>{c.name}</option>
-                      ))}
-                    </>
-                  )}
-                </select>
-                {classes.length === 0 && (
-                  <p className="text-[11px] text-amber-600 dark:text-amber-400 mt-1">
-                    Cadastre uma turma contendo "3º Ano" na aba Turmas para realizar o simulado.
-                  </p>
+        <div className="space-y-8">
+          {/* Topo: Painel de Correção em 2 Colunas */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {/* Coluna 1: Seleção de Turma do 3º Ano e Aluno */}
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <h2 className="text-lg font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
+                  <Users size={20} className="text-brand-blue dark:text-brand-yellow" />
+                  1. Dados do Aluno
+                </h2>
+                {isReviewerMode && (
+                  <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
+                    {submissions.filter(s => s.reviewer_name === reviewerName).length} corrigidos por você
+                  </span>
                 )}
               </div>
 
               <div>
-                <label className="text-xs font-bold uppercase text-slate-400 block mb-1">
-                  Aluno {students.length > 0 && `(${students.length})`}
+                <div className="flex items-center justify-between mb-1.5">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    Turma (Apenas 3º Ano)
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => fetchClasses()}
+                    className="text-[11px] text-brand-blue dark:text-brand-yellow hover:underline flex items-center gap-1 font-semibold"
+                    title="Recarregar turmas cadastradas"
+                  >
+                    <RefreshCw size={11} className={isLoadingClasses ? "animate-spin" : ""} />
+                    Atualizar Turmas
+                  </button>
+                </div>
+                <select
+                  value={selectedClassId}
+                  onChange={(e) => setSelectedClassId(e.target.value)}
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm font-semibold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-brand-yellow shadow-sm"
+                >
+                  {classes.length === 0 ? (
+                    <option value="">Carregando turmas do 3º ano...</option>
+                  ) : (
+                    <>
+                      <option value="">Selecione a turma do 3º ano...</option>
+                      {classes.map(c => (
+                        <option key={c.id} value={c.id}>
+                          {c.name}
+                        </option>
+                      ))}
+                    </>
+                  )}
+                </select>
+              </div>
+
+              <div>
+                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block mb-1.5">
+                  Aluno da Turma {students.length > 0 && `(${students.length} alunos)`}
                 </label>
                 <select
                   value={selectedStudentId}
                   onChange={(e) => setSelectedStudentId(e.target.value)}
                   disabled={!selectedClassId || students.length === 0}
-                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm font-medium text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-brand-yellow disabled:opacity-50"
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-brand-yellow shadow-sm disabled:opacity-50"
                 >
-                  <option value="">Selecione o aluno...</option>
+                  <option value="">
+                    {isLoadingStudents ? 'Carregando lista de alunos...' : 'Selecione o aluno para correção...'}
+                  </option>
                   {students.map(s => {
-                    const isAlreadyCorrected = submissions.some(
-                      sub => sub.simulation_id === simulation.id && sub.student_id === s.id
+                    const sub = submissions.find(
+                      item => item.simulation_id === simulation.id && item.student_id === s.id
                     );
                     return (
                       <option key={s.id} value={s.id}>
-                        {s.roll_number ? `Nº ${s.roll_number} - ` : ''}{s.name} {isAlreadyCorrected ? '✓ (Corrigido)' : ''}
+                        {s.roll_number ? `Nº ${s.roll_number} - ` : ''}{s.name} {sub ? `✓ [Nota: ${sub.score_points.toFixed(1)} pts]` : '• (Pendente)'}
                       </option>
                     );
                   })}
                 </select>
               </div>
 
-              {selectedStudentObj && (
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl text-xs space-y-1 text-slate-600 dark:text-slate-300">
-                  <div className="font-semibold text-slate-800 dark:text-white">{selectedStudentObj.name}</div>
-                  <div>Turma: {selectedClassObj?.name}</div>
-                  {selectedStudentObj.roll_number && <div>Número: {selectedStudentObj.roll_number}</div>}
+              {selectedStudentObj ? (
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-100 dark:border-slate-800 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-slate-900 dark:text-white">
+                      {selectedStudentObj.roll_number ? `Nº ${selectedStudentObj.roll_number} - ` : ''}{selectedStudentObj.name}
+                    </span>
+                    {submissions.some(sub => sub.simulation_id === simulation.id && sub.student_id === selectedStudentObj.id) ? (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200">
+                        Já Corrigido
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200">
+                        Aguardando Correção
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-slate-500 dark:text-slate-400">
+                    Turma: <strong className="text-slate-700 dark:text-slate-200">{selectedClassObj?.name}</strong>
+                  </div>
+                </div>
+              ) : (
+                <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-xs text-amber-800 dark:text-amber-300">
+                  Selecione uma turma e um aluno para iniciar a leitura do cartão-resposta.
                 </div>
               )}
             </div>
 
-            {/* Captura / Foto do Cartão-Resposta */}
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-4">
-              <h2 className="text-lg font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
-                <Camera size={20} className="text-brand-blue dark:text-brand-yellow" />
-                Cartão-Resposta
-              </h2>
+            {/* Coluna 2: Captura do Cartão-Resposta e Correção com IA */}
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
+              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+                <h2 className="text-lg font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
+                  <Camera size={20} className="text-brand-blue dark:text-brand-yellow" />
+                  2. Cartão-Resposta & Leitura IA
+                </h2>
+              </div>
 
               {capturedImage ? (
                 <div className="space-y-3">
-                  <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black aspect-[3/4] max-h-60 flex items-center justify-center">
+                  <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black aspect-[4/3] max-h-56 flex items-center justify-center">
                     <img src={capturedImage} alt="Cartão resposta" className="w-full h-full object-contain" />
                     <button
                       onClick={() => setCapturedImage(null)}
@@ -610,62 +857,55 @@ export default function EnemSimuladoView({
                     {isAnalyzingImage ? (
                       <>
                         <Loader2 className="animate-spin" size={18} />
-                        Lendo bolinhas com IA...
+                        Lendo bolinhas e calculando pontuação...
                       </>
                     ) : (
                       <>
                         <Sparkles size={18} className="text-brand-yellow" />
-                        Reconhecer Bolinhas via IA
+                        Reconhecer e Corrigir via IA
                       </>
                     )}
                   </button>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <button
-                    onClick={startCamera}
-                    className="w-full py-3 px-4 bg-brand-blue text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-blue-dark transition-all shadow-sm"
-                  >
-                    <Camera size={18} />
-                    Tirar Foto do Cartão
-                  </button>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <button
+                      onClick={startCamera}
+                      className="py-3 px-4 bg-brand-blue text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-blue-dark transition-all shadow-sm"
+                    >
+                      <Camera size={18} />
+                      Tirar Foto
+                    </button>
 
-                  <label className="w-full py-3 px-4 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-brand-blue text-slate-600 dark:text-slate-300 rounded-xl font-medium flex items-center justify-center gap-2 cursor-pointer transition-all">
-                    <Upload size={18} />
-                    Carregar Foto da Galeria
-                    <input 
-                      type="file" 
-                      accept="image/*" 
-                      className="hidden" 
-                      onChange={handleImageUpload} 
-                    />
-                  </label>
-
-                  <p className="text-xs text-slate-400 text-center">
-                    Dica: Você também pode preencher as 45 questões diretamente na matriz ao lado sem foto.
-                  </p>
-                </div>
-              )}
-            </div>
-
-            {/* Painel do Placar em Tempo Real */}
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-4">
-              <div className="flex items-center justify-between">
-                <span className="text-xs font-bold uppercase text-slate-400">Total de Acertos</span>
-                <span className="text-xs px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 font-bold text-slate-600 dark:text-slate-300">
-                  {correctCount} / 45
-                </span>
-              </div>
-
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-100 dark:border-slate-700 flex items-center justify-between">
-                <div>
-                  <span className="text-xs text-slate-400 uppercase font-semibold">Pontuação Final</span>
-                  <div className="text-3xl font-extrabold text-brand-blue-dark dark:text-white">
-                    {calculatedScore.toFixed(1)} <span className="text-sm font-normal text-slate-400">pts</span>
+                    <label className="py-3 px-4 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-brand-blue text-slate-700 dark:text-slate-300 rounded-xl font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all">
+                      <Upload size={18} />
+                      Carregar Foto
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden" 
+                        onChange={handleImageUpload} 
+                      />
+                    </label>
                   </div>
                 </div>
-                <div className={`px-4 py-2 rounded-xl text-sm font-bold border ${getScoreBadgeColor(calculatedScore)}`}>
-                  {calculatedScore === 0 ? 'Sem pontuação' : `Faixa ${calculatedScore.toFixed(1)}`}
+              )}
+
+              {/* Placar Direto do Simulado (Sem indicação de brancos ou duplas) */}
+              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700 flex items-center justify-between">
+                <div>
+                  <span className="text-[11px] uppercase font-bold text-slate-400 block">Total de Acertos</span>
+                  <div className="text-2xl font-black text-brand-blue-dark dark:text-white">
+                    {currentStats.totalCorrect} <span className="text-sm font-medium text-slate-400">/ 45 questões</span>
+                  </div>
+                </div>
+
+                <div className="text-right">
+                  <span className="text-[11px] uppercase font-bold text-slate-400 block">Nota do Simulado</span>
+                  <div className={`inline-block px-3.5 py-1.5 rounded-xl text-base font-extrabold border ${getScoreBadgeColor(calculatedScore)}`}>
+                    {calculatedScore.toFixed(1)} pts
+                  </div>
                 </div>
               </div>
 
@@ -675,189 +915,132 @@ export default function EnemSimuladoView({
                 className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-50"
               >
                 {isSaving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
-                Confirmar e Salvar Nota
+                Confirmar e Salvar Nota do Aluno
               </button>
             </div>
           </div>
 
-          {/* Coluna 2 e 3: A Matriz das 45 Questões */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-2">
-                <div>
-                  <h2 className="text-lg font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
-                    <FileText size={20} className="text-brand-blue dark:text-brand-yellow" />
-                    Cartão de Marcação (45 Questões)
-                  </h2>
-                  <p className="text-xs text-slate-400">
-                    Clique nas alternativas para marcar ou desmarcar. O gabarito oficial confere em tempo real.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-3 text-xs">
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-full bg-emerald-500"></span>
-                    <span className="text-slate-500">Acerto</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-full bg-rose-500"></span>
-                    <span className="text-slate-500">Erro</span>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className="w-3 h-3 rounded-full bg-slate-300 dark:bg-slate-700"></span>
-                    <span className="text-slate-500">Em Branco</span>
-                  </div>
-                </div>
+          {/* Fim da Aba: Relação Completa dos Alunos Corrigidos nesta Turma */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-3">
+              <div>
+                <h3 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
+                  <Users size={22} className="text-brand-blue dark:text-brand-yellow" />
+                  Alunos corrigidos nesta turma ({submissions.filter(s => s.class_id === selectedClassId).length} de {students.length})
+                </h3>
               </div>
 
-              {/* Grid de 3 colunas de 15 questões cada */}
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-4">
-                {[0, 1, 2].map((colIndex) => {
-                  const startQ = colIndex * 15 + 1;
-                  const endQ = startQ + 14;
-
-                  return (
-                    <div key={colIndex} className="space-y-2 bg-slate-50/50 dark:bg-slate-800/30 p-3 rounded-2xl border border-slate-100 dark:border-slate-800">
-                      <div className="text-center font-bold text-xs text-slate-400 border-b border-slate-200 dark:border-slate-700 pb-1 mb-2">
-                        Questões {startQ} a {endQ}
-                      </div>
-
-                      {Array.from({ length: 15 }, (_, i) => {
-                        const qNum = startQ + i;
-                        const studentAns = currentAnswers[qNum] || 'BLANK';
-                        const officialAns = simulation.official_answers[qNum] || 'A';
-                        const isAnulada = officialAns === 'ANULADA';
-                        const isCorrect = isAnulada || (studentAns !== 'BLANK' && studentAns !== 'ANULADA' && studentAns === officialAns);
-                        const isWrong = studentAns !== 'BLANK' && !isCorrect;
-
-                        return (
-                          <div 
-                            key={qNum} 
-                            className={`flex items-center justify-between p-1.5 rounded-xl transition-all ${
-                              studentAns === 'BLANK'
-                                ? 'hover:bg-slate-100 dark:hover:bg-slate-750'
-                                : isCorrect
-                                ? 'bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40'
-                                : 'bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800/40'
-                            }`}
-                          >
-                            <div className="flex items-center gap-1.5 min-w-[42px]">
-                              <span className="text-xs font-bold text-slate-500 dark:text-slate-400">
-                                {qNum.toString().padStart(2, '0')}
-                              </span>
-                              {studentAns !== 'BLANK' && (
-                                isCorrect 
-                                  ? <Check size={12} className="text-emerald-600 font-bold" />
-                                  : <XCircle size={12} className="text-rose-600 font-bold" />
-                              )}
-                            </div>
-
-                            {/* Bolinhas A, B, C, D, E */}
-                            <div className="flex items-center gap-1">
-                              {(['A', 'B', 'C', 'D', 'E'] as EnemAnswerOption[]).map((opt) => {
-                                const isSelected = studentAns === opt;
-                                const isOfficialGabarito = officialAns === opt;
-
-                                return (
-                                  <button
-                                    key={opt}
-                                    type="button"
-                                    onClick={() => handleAnswerSelect(qNum, opt)}
-                                    className={`w-7 h-7 rounded-full text-xs font-bold flex items-center justify-center transition-all ${
-                                      isSelected
-                                        ? isCorrect
-                                          ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-300'
-                                          : 'bg-rose-600 text-white shadow-sm ring-2 ring-rose-300'
-                                        : isOfficialGabarito && isWrong
-                                        ? 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border border-dashed border-amber-400'
-                                        : 'bg-white dark:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-600 hover:border-brand-blue'
-                                    }`}
-                                  >
-                                    {opt}
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  );
-                })}
-              </div>
+              {!isReviewerMode && (
+                <button
+                  onClick={() => exportSimuladoPDF(selectedClassId)}
+                  disabled={submissions.filter(s => s.class_id === selectedClassId).length === 0}
+                  className="py-2.5 px-4 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-40"
+                  title="Gerar e baixar relatório em PDF desta turma"
+                >
+                  <Download size={14} />
+                  Baixar / Imprimir PDF da Turma
+                </button>
+              )}
             </div>
 
-            {/* Lista dos já corrigidos da turma selecionada */}
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800">
-              <h3 className="text-sm font-serif font-bold text-brand-blue-dark dark:text-white mb-3 flex items-center justify-between">
-                <span>Alunos corrigidos nesta turma ({submissions.filter(s => s.class_id === selectedClassId).length})</span>
-                <span className="text-xs font-normal text-slate-400">Salvos no sistema</span>
-              </h3>
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs sm:text-sm">
+                <thead>
+                  <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-xs">
+                    <th className="py-3 px-3">Nº Chamada</th>
+                    <th className="py-3 px-3">Aluno</th>
+                    <th className="py-3 px-3 text-center">Status</th>
+                    <th className="py-3 px-3 text-center">Total de Acertos</th>
+                    <th className="py-3 px-3 text-center">Nota do Simulado</th>
+                    <th className="py-3 px-3">Corretor Responsável</th>
+                    <th className="py-3 px-3 text-right">Ação</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                  {students.map((student) => {
+                    const sub = submissions.find(
+                      item => item.simulation_id === simulation.id && item.student_id === student.id
+                    );
 
-              <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs">
-                  <thead>
-                    <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase">
-                      <th className="py-2">Aluno</th>
-                      <th className="py-2 text-center">Acertos</th>
-                      <th className="py-2 text-center">Nota</th>
-                      <th className="py-2">Corretor</th>
-                      <th className="py-2 text-right">Ação</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {submissions.filter(s => s.class_id === selectedClassId).map((sub) => (
-                      <tr key={sub.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                        <td className="py-2.5 font-medium text-slate-800 dark:text-slate-200">
-                          {sub.roll_number ? `Nº ${sub.roll_number} - ` : ''}{sub.student_name}
+                    return (
+                      <tr 
+                        key={student.id} 
+                        className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
+                          selectedStudentId === student.id ? 'bg-amber-50/60 dark:bg-amber-950/20' : ''
+                        }`}
+                      >
+                        <td className="py-3 px-3 font-semibold text-slate-500">
+                          {student.roll_number ? `Nº ${student.roll_number}` : '-'}
                         </td>
-                        <td className="py-2.5 text-center font-bold text-slate-700 dark:text-slate-300">
-                          {sub.total_correct} / 45
+                        <td className="py-3 px-3 font-medium text-slate-800 dark:text-slate-200">
+                          {student.name}
                         </td>
-                        <td className="py-2.5 text-center">
-                          <span className={`px-2.5 py-0.5 rounded-full font-bold border ${getScoreBadgeColor(sub.score_points)}`}>
-                            {sub.score_points.toFixed(1)}
-                          </span>
+                        <td className="py-3 px-3 text-center">
+                          {sub ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200">
+                              ✓ Corrigido
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                              ⏳ Pendente
+                            </span>
+                          )}
                         </td>
-                        <td className="py-2.5 text-slate-500">
-                          {sub.reviewer_name}
+                        <td className="py-3 px-3 text-center font-bold text-slate-700 dark:text-slate-300">
+                          {sub ? `${sub.total_correct} / 45` : '-'}
                         </td>
-                        <td className="py-2.5 text-right">
-                          <button
-                            onClick={() => {
-                              setSelectedStudentId(sub.student_id);
-                              setCurrentAnswers(sub.answers);
-                            }}
-                            className="text-brand-blue dark:text-brand-yellow hover:underline mr-2"
-                          >
-                            Editar
-                          </button>
-                          {!isReviewerMode && (
+                        <td className="py-3 px-3 text-center">
+                          {sub ? (
+                            <span className={`px-2.5 py-0.5 rounded-full font-bold border text-xs ${getScoreBadgeColor(sub.score_points)}`}>
+                              {sub.score_points.toFixed(1)} pts
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="py-3 px-3 text-slate-600 dark:text-slate-400 font-medium text-xs">
+                          {sub?.reviewer_name || '-'}
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          {sub ? (
+                            !isReviewerMode && (
+                              <button
+                                onClick={async () => {
+                                  if (confirm(`Deseja excluir a nota do simulado de ${sub.student_name}?`)) {
+                                    const updated = await deleteStoredSubmission(sub.id);
+                                    setSubmissions(updated);
+                                  }
+                                }}
+                                className="text-rose-600 hover:text-rose-700 p-1.5 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                                title="Excluir nota do simulado"
+                              >
+                                <Trash2 size={16} className="inline" />
+                              </button>
+                            )
+                          ) : (
                             <button
-                              onClick={async () => {
-                                if (confirm(`Deseja excluir a correção de ${sub.student_name}?`)) {
-                                  const updated = await deleteStoredSubmission(sub.id);
-                                  setSubmissions(updated);
-                                }
+                              onClick={() => {
+                                setSelectedStudentId(student.id);
+                                window.scrollTo({ top: 0, behavior: 'smooth' });
                               }}
-                              className="text-rose-600 hover:text-rose-700"
+                              className="px-2.5 py-1 text-xs font-semibold text-brand-blue hover:text-brand-blue-dark dark:text-brand-yellow hover:underline"
                             >
-                              <Trash2 size={14} className="inline" />
+                              Corrigir este aluno →
                             </button>
                           )}
                         </td>
                       </tr>
-                    ))}
-                    {submissions.filter(s => s.class_id === selectedClassId).length === 0 && (
-                      <tr>
-                        <td colSpan={5} className="py-4 text-center text-slate-400">
-                          Nenhum aluno desta turma corrigido ainda.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                    );
+                  })}
+                  {students.length === 0 && (
+                    <tr>
+                      <td colSpan={7} className="py-8 text-center text-slate-400">
+                        {selectedClassId ? 'Nenhum aluno encontrado para a turma selecionada.' : 'Selecione uma turma para carregar a lista de alunos.'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -976,11 +1159,13 @@ export default function EnemSimuladoView({
               </select>
 
               <button
-                onClick={() => window.print()}
-                className="py-2.5 px-4 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 hover:bg-slate-200 rounded-xl font-bold text-xs flex items-center gap-2 transition-all"
+                onClick={() => exportSimuladoPDF(filterClassId)}
+                disabled={filteredSubmissions.length === 0}
+                className="py-2.5 px-4 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-50"
+                title="Gerar e baixar relatório em PDF"
               >
                 <Download size={14} />
-                Imprimir / PDF
+                Baixar / Imprimir PDF
               </button>
             </div>
           </div>
@@ -1027,7 +1212,7 @@ export default function EnemSimuladoView({
                 <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-xs">
                   <th className="py-3 px-2">Aluno</th>
                   <th className="py-3 px-2">Turma</th>
-                  <th className="py-3 px-2 text-center">Acertos Brutos</th>
+                  <th className="py-3 px-2 text-center">Acertos</th>
                   <th className="py-3 px-2 text-center">Nota no Simulado</th>
                   <th className="py-3 px-2">Corretor Responsável</th>
                   <th className="py-3 px-2 text-right">Data/Hora</th>
