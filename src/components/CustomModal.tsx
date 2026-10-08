@@ -64,23 +64,24 @@ export default function CustomModal({
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.9, y: 20 }}
             className={cn(
-              "relative bg-white w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border p-6 text-center",
-              colors[type]
+              "relative bg-white dark:bg-slate-900 w-full max-w-md rounded-3xl shadow-2xl overflow-hidden border p-6 text-center transition-colors",
+              colors[type],
+              type === 'confirm' && "dark:border-brand-yellow/10 dark:bg-brand-yellow/5"
             )}
           >
             <div className="flex justify-center mb-4">
               {icons[type]}
             </div>
             
-            <h3 className="text-xl font-serif font-bold text-brand-blue-dark mb-2">{title}</h3>
-            <p className="text-slate-600 mb-8 leading-relaxed">{message}</p>
+            <h3 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-brand-yellow mb-2 transition-colors">{title}</h3>
+            <p className="text-slate-600 dark:text-slate-400 mb-8 leading-relaxed transition-colors">{message}</p>
             
             <div className="flex items-center gap-3">
               {type === 'confirm' ? (
                 <>
                   <button
                     onClick={onClose}
-                    className="flex-1 px-6 py-3 bg-slate-100 text-slate-600 rounded-xl font-bold hover:bg-slate-200 transition-all"
+                    className="flex-1 px-6 py-3 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
                   >
                     {cancelText}
                   </button>
@@ -91,7 +92,8 @@ export default function CustomModal({
                     }}
                     className={cn(
                       "flex-1 px-6 py-3 text-white rounded-xl font-bold shadow-lg transition-all",
-                      buttonColors[type]
+                      buttonColors[type],
+                      type === 'confirm' && "dark:bg-brand-blue dark:hover:bg-brand-blue/90"
                     )}
                   >
                     {confirmText}
