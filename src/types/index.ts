@@ -141,3 +141,29 @@ export interface ReviewerSession {
   accessCode: string;
   isReviewerOnly: boolean;
 }
+
+export type WeeklyMessageStatus = 'rascunho' | 'agendado' | 'enviado' | 'falha';
+
+export interface WeeklyStudyMessage {
+  id: string;
+  semana_numero: number;
+  data_envio: string; // YYYY-MM-DD
+  horario_envio: string; // HH:mm
+  mensagem_texto: string;
+  status: WeeklyMessageStatus;
+  campaign_title?: string;
+  whatsapp_group_jid?: string;
+  sent_at?: string | null;
+  last_error?: string | null;
+  created_at?: string;
+}
+
+export interface ExtractedCampaign {
+  campaign_title: string;
+  messages: Array<{
+    semana_numero: number;
+    data_envio: string;
+    horario_envio: string;
+    mensagem_texto: string;
+  }>;
+}
