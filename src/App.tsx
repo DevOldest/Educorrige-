@@ -19,7 +19,8 @@ import {
   LogOut,
   Moon,
   Sun,
-  Award
+  Award,
+  MessageSquare
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -35,9 +36,10 @@ import ManagementView from './views/ManagementView';
 import NotebookChecksView from './views/NotebookChecksView';
 import SystemTestsView from './views/SystemTestsView';
 import EnemSimuladoView from './views/EnemSimuladoView';
+import WhatsappAutomationView from './views/WhatsappAutomationView';
 import Login from './components/Login';
 
-type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'notebook-checks' | 'enem' | 'reports' | 'management' | 'tests';
+type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'notebook-checks' | 'enem' | 'whatsapp' | 'reports' | 'management' | 'tests';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('dashboard');
@@ -231,6 +233,7 @@ export default function App() {
     { id: 'grading', label: 'Correção', icon: CheckSquare },
     { id: 'notebook-checks', label: 'Vistos', icon: BookOpen },
     { id: 'enem', label: 'Simulado ENEM', icon: Award },
+    { id: 'whatsapp', label: 'Estudo WhatsApp', icon: MessageSquare },
     { id: 'reports', label: 'Relatórios', icon: BarChart3 },
     { id: 'management', label: 'Gestão', icon: GraduationCap },
     { id: 'tests', label: 'Testes', icon: AlertTriangle },
@@ -397,6 +400,7 @@ export default function App() {
               {activeView === 'grading' && <GradingView />}
               {activeView === 'notebook-checks' && <NotebookChecksView />}
               {activeView === 'enem' && <EnemSimuladoView isReviewerMode={false} />}
+              {activeView === 'whatsapp' && <WhatsappAutomationView />}
               {activeView === 'reports' && <ReportsView />}
               {activeView === 'management' && <ManagementView />}
               {activeView === 'tests' && <SystemTestsView />}
