@@ -233,7 +233,7 @@ export default function App() {
     { id: 'grading', label: 'Correção', icon: CheckSquare },
     { id: 'notebook-checks', label: 'Vistos', icon: BookOpen },
     { id: 'enem', label: 'Simulado ENEM', icon: Award },
-    { id: 'whatsapp', label: 'Estudo WhatsApp', icon: MessageSquare },
+    { id: 'whatsapp', label: 'WhatsApp & Líderes', icon: MessageSquare },
     { id: 'reports', label: 'Relatórios', icon: BarChart3 },
     { id: 'management', label: 'Gestão', icon: GraduationCap },
     { id: 'tests', label: 'Testes', icon: AlertTriangle },
