@@ -18,6 +18,8 @@ export interface Class {
   name: string;
   school_year: number;
   user_id: string;
+  leader_name?: string;
+  leader_phone?: string;
   created_at: string;
 }
 
@@ -26,6 +28,9 @@ export interface Student {
   class_id: string;
   name: string;
   roll_number: number;
+  guardian_name?: string;
+  guardian_phone?: string;
+  phone?: string;
   created_at: string;
 }
 
