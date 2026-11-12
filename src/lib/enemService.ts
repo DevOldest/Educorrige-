@@ -106,28 +106,70 @@ export const DEFAULT_SIMULATION: EnemSimulation = {
   }, {} as Record<number, EnemAnswerOption>)
 };
 
-// Obter simulado configurado (com sincronização Supabase)
-export function getStoredSimulation(): EnemSimulation {
+// Obter ID determinístico do Simulado por usuário/corretor
+export function getSimulationIdForUser(reviewerName?: string): string {
+  if (!reviewerName || !reviewerName.trim() || reviewerName.toLowerCase() === 'administrador' || reviewerName.toLowerCase() === 'admin') {
+    return DEFAULT_SIMULATION.id;
+  }
+  const clean = reviewerName.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
+  return `sim-enem-${clean}`;
+}
+
+// Obter simulado configurado (com suporte a gabarito individual por corretor)
+export function getStoredSimulation(reviewerName?: string): EnemSimulation {
+  const targetId = getSimulationIdForUser(reviewerName);
+  const storageKey = `${LOCAL_STORAGE_SIM_KEY}_${targetId}`;
+
   try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_SIM_KEY);
+    const raw = localStorage.getItem(storageKey);
     if (raw) {
       return JSON.parse(raw);
+    }
+    // Para o admin, tenta ler também a chave legada
+    if (targetId === DEFAULT_SIMULATION.id) {
+      const legacyRaw = localStorage.getItem(LOCAL_STORAGE_SIM_KEY);
+      if (legacyRaw) {
+        return JSON.parse(legacyRaw);
+      }
     }
   } catch (e) {
     console.error('Erro ao ler simulado local:', e);
   }
-  return DEFAULT_SIMULATION;
+
+  // Se for corretor e ainda não tiver gabarito próprio salvo, inicializa com cópia do gabarito mestre
+  let baseAnswers = { ...DEFAULT_SIMULATION.official_answers };
+  try {
+    const masterRaw = localStorage.getItem(`${LOCAL_STORAGE_SIM_KEY}_${DEFAULT_SIMULATION.id}`) || localStorage.getItem(LOCAL_STORAGE_SIM_KEY);
+    if (masterRaw) {
+      const parsedMaster = JSON.parse(masterRaw);
+      if (parsedMaster.official_answers) {
+        baseAnswers = { ...parsedMaster.official_answers };
+      }
+    }
+  } catch (e) {
+    // fallback
+  }
+
+  return {
+    ...DEFAULT_SIMULATION,
+    id: targetId,
+    title: reviewerName && reviewerName.toLowerCase() !== 'administrador' 
+      ? `Gabarito de ${reviewerName}` 
+      : DEFAULT_SIMULATION.title,
+    official_answers: baseAnswers
+  };
 }
 
-export async function fetchRemoteSimulation(): Promise<EnemSimulation> {
-  const local = getStoredSimulation();
+export async function fetchRemoteSimulation(reviewerName?: string): Promise<EnemSimulation> {
+  const targetId = getSimulationIdForUser(reviewerName);
+  const local = getStoredSimulation(reviewerName);
   if (!supabase) return local;
 
   try {
     const { data, error } = await supabase
       .from('enem_simulations')
       .select('*')
-      .eq('id', DEFAULT_SIMULATION.id)
+      .eq('id', targetId)
       .maybeSingle();
 
     if (!error && data) {
@@ -140,7 +182,7 @@ export async function fetchRemoteSimulation(): Promise<EnemSimulation> {
         official_answers: data.official_answers || local.official_answers,
         created_at: data.created_at
       };
-      saveStoredSimulationLocal(merged);
+      saveStoredSimulationLocal(merged, reviewerName);
       return merged;
     }
   } catch (e) {
@@ -151,17 +193,31 @@ export async function fetchRemoteSimulation(): Promise<EnemSimulation> {
 }
 
 // Salvar simulado configurado localmente
-function saveStoredSimulationLocal(sim: EnemSimulation): void {
+function saveStoredSimulationLocal(sim: EnemSimulation, reviewerName?: string): void {
+  const targetId = getSimulationIdForUser(reviewerName);
+  const storageKey = `${LOCAL_STORAGE_SIM_KEY}_${targetId}`;
   try {
-    localStorage.setItem(LOCAL_STORAGE_SIM_KEY, JSON.stringify(sim));
+    localStorage.setItem(storageKey, JSON.stringify(sim));
+    if (targetId === DEFAULT_SIMULATION.id) {
+      localStorage.setItem(LOCAL_STORAGE_SIM_KEY, JSON.stringify(sim));
+    }
   } catch (e) {
     console.error('Erro ao salvar simulado local:', e);
   }
 }
 
-// Salvar simulado no Supabase e no Cache local
-export async function saveStoredSimulation(sim: EnemSimulation): Promise<void> {
-  saveStoredSimulationLocal(sim);
+// Salvar simulado no Supabase e no Cache local (individual por corretor)
+export async function saveStoredSimulation(sim: EnemSimulation, reviewerName?: string): Promise<void> {
+  const targetId = getSimulationIdForUser(reviewerName);
+  const toSave: EnemSimulation = {
+    ...sim,
+    id: targetId,
+    title: reviewerName && reviewerName.toLowerCase() !== 'administrador'
+      ? `Gabarito de ${reviewerName}`
+      : sim.title
+  };
+
+  saveStoredSimulationLocal(toSave, reviewerName);
 
   if (!supabase) return;
 
@@ -169,12 +225,12 @@ export async function saveStoredSimulation(sim: EnemSimulation): Promise<void> {
     await supabase
       .from('enem_simulations')
       .upsert({
-        id: sim.id,
-        title: sim.title,
-        area: sim.area,
-        total_questions: sim.total_questions,
-        access_code: sim.access_code,
-        official_answers: sim.official_answers,
+        id: toSave.id,
+        title: toSave.title,
+        area: toSave.area,
+        total_questions: toSave.total_questions,
+        access_code: toSave.access_code,
+        official_answers: toSave.official_answers,
         updated_at: new Date().toISOString()
       }, { onConflict: 'id' });
   } catch (e) {
@@ -196,16 +252,21 @@ export function getStoredSubmissions(): EnemSubmission[] {
 }
 
 // Buscar submissões no Supabase com sincronização
-export async function fetchRemoteSubmissions(simulationId: string): Promise<EnemSubmission[]> {
+export async function fetchRemoteSubmissions(simulationId?: string, reviewerName?: string): Promise<EnemSubmission[]> {
   const local = getStoredSubmissions();
   if (!supabase) return local;
 
   try {
-    const { data, error } = await supabase
-      .from('enem_submissions')
-      .select('*')
-      .eq('simulation_id', simulationId)
-      .order('created_at', { ascending: false });
+    let query = supabase.from('enem_submissions').select('*');
+
+    if (reviewerName && reviewerName.toLowerCase() !== 'administrador') {
+      const targetSimId = getSimulationIdForUser(reviewerName);
+      query = query.or(`reviewer_name.eq."${reviewerName}",simulation_id.eq."${targetSimId}"`);
+    } else if (simulationId) {
+      query = query.eq('simulation_id', simulationId);
+    }
+
+    const { data, error } = await query.order('created_at', { ascending: false });
 
     if (!error && data) {
       const formatted: EnemSubmission[] = data.map((d: any) => ({
@@ -219,6 +280,8 @@ export async function fetchRemoteSubmissions(simulationId: string): Promise<Enem
         answers: d.answers || {},
         total_correct: Number(d.total_correct || 0),
         score_points: Number(d.score_points || 0),
+        blank_count: d.blank_count,
+        multiple_count: d.multiple_count,
         created_at: d.created_at
       }));
 
