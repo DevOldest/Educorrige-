@@ -56,6 +56,7 @@ import {
   isEnemQuestionCorrect,
   DEFAULT_SIMULATION
 } from '../lib/enemService';
+import { compressImageForAI } from '../lib/imageOptimizer';
 
 interface EnemSimuladoViewProps {
   isReviewerMode?: boolean;
@@ -327,15 +328,20 @@ export default function EnemSimuladoView({
   const correctCount = currentStats.totalCorrect;
   const calculatedScore = currentStats.score;
 
-  // Upload de imagem do cartão
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Upload de imagem do cartão com compressão instantânea para a IA
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setCapturedImage(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+      try {
+        const compressed = await compressImageForAI(file, 1600, 0.82);
+        setCapturedImage(`data:${compressed.mimeType};base64,${compressed.base64}`);
+      } catch (err) {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          setCapturedImage(reader.result as string);
+        };
+        reader.readAsDataURL(file);
+      }
     }
   };
 

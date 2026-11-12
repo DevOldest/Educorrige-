@@ -36,6 +36,7 @@ import { supabase } from '../lib/supabase';
 import { ai, GEMINI_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
+import { compressImageForAI, formatBytes } from '../lib/imageOptimizer';
 
 interface SlotItem {
   id: string;
@@ -519,32 +520,37 @@ export default function GradingView() {
 
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-      // 2. Processar slots ativos em ordem sequencial estrita (do 1º ao último)
-      for (let i = 0; i < activeSlotsWithOrder.length; i++) {
-        const { slot, slotVisualIndex } = activeSlotsWithOrder[i];
-        
+      // Fila concorrente controlada para alta velocidade em Tier 1
+      // 2 workers em paralelo dobram a velocidade de correção sem sobrecarregar a cota
+      const CONCURRENCY = 2;
+      let currentIndex = 0;
+      let completedCount = 0;
+
+      const processSlotItem = async (item: { slot: SlotItem; slotVisualIndex: number }) => {
+        const { slot, slotVisualIndex } = item;
         const studentNames = slot.studentIds
           .map((id: string) => students.find(s => s.id === id)?.name)
           .filter(Boolean)
           .join(', ');
 
         setCurrentProgress({
-          currentStep: i + 1,
+          currentStep: completedCount + 1,
           totalSteps: activeSlotsWithOrder.length,
           studentName: studentNames || `Slot #${slotVisualIndex}`,
           slotIndex: slotVisualIndex
         });
 
         updateSlot(slot.id, { status: 'processing', error: null });
-        
+
         const tryProcessing = async (attempt: number = 0): Promise<void> => {
           try {
+            // Compressão instantânea no navegador antes do envio (reduz ~95% de payload e tokens de imagem)
             const imageParts = await Promise.all(slot.files.map(async (file: File) => {
-              const base64 = await fileToBase64(file);
+              const compressed = await compressImageForAI(file, 1600, 0.82);
               return {
                 inlineData: {
-                  mimeType: file.type || 'image/jpeg',
-                  data: base64
+                  mimeType: compressed.mimeType,
+                  data: compressed.base64
                 }
               };
             }));
@@ -589,7 +595,11 @@ export default function GradingView() {
 
             const response = await ai.models.generateContent({
               model: GEMINI_MODEL,
-              contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }]
+              contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }],
+              config: {
+                temperature: 0.1,
+                responseMimeType: 'application/json'
+              }
             });
 
             const responseText = response.text || '';
@@ -597,7 +607,7 @@ export default function GradingView() {
             
             if (jsonMatch) {
               const parsedResult = JSON.parse(jsonMatch[0]);
-              updateSlot(slot.id, { result: parsedResult, status: 'done' });
+              updateSlot(slot.id, { result: parsedResult, status: 'done', error: null });
               
               // SALVAMENTO AUTOMÁTICO IMEDIATO DO SLOT APÓS CORREÇÃO
               await saveSingleSlot({ ...slot, result: parsedResult });
@@ -605,10 +615,12 @@ export default function GradingView() {
               throw new Error('Retorno da IA em formato inválido');
             }
           } catch (err: any) {
-            const isQuotaError = err.message?.includes('503') || err.message?.includes('429');
-            if (isQuotaError && attempt < 3) {
-              const waitTime = Math.pow(2, attempt + 1) * 1000;
-              updateSlot(slot.id, { error: `Limite momentâneo da IA. Retentando em ${waitTime/1000}s...` });
+            const isQuotaError = err.message?.includes('503') || err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
+            if (isQuotaError && attempt < 4) {
+              // Backoff exponencial com jitter aleatório para desincronizar múltiplos corretores simultâneos
+              const jitter = Math.floor(Math.random() * 800);
+              const waitTime = Math.pow(1.6, attempt + 1) * 750 + jitter;
+              updateSlot(slot.id, { error: `Fila de IA ocupada. Retentando em ${(waitTime/1000).toFixed(1)}s...` });
               await delay(waitTime);
               return tryProcessing(attempt + 1);
             }
@@ -618,11 +630,29 @@ export default function GradingView() {
 
         try {
           await tryProcessing();
-          await delay(600); // Intervalo de segurança e controle térmico entre requisições
+          completedCount++;
+          setCurrentProgress({
+            currentStep: completedCount,
+            totalSteps: activeSlotsWithOrder.length,
+            studentName: studentNames || `Slot #${slotVisualIndex}`,
+            slotIndex: slotVisualIndex
+          });
+          await delay(100); // Leve intervalo de 100ms para respiração do event loop
         } catch (err: any) {
           updateSlot(slot.id, { status: 'error', error: err.message || 'Falha ao processar' });
         }
-      }
+      };
+
+      // Disparador de workers paralelos
+      const workerCount = Math.min(CONCURRENCY, activeSlotsWithOrder.length);
+      const workers = Array.from({ length: workerCount }, async () => {
+        while (currentIndex < activeSlotsWithOrder.length) {
+          const itemToProcess = activeSlotsWithOrder[currentIndex++];
+          await processSlotItem(itemToProcess);
+        }
+      });
+
+      await Promise.all(workers);
 
       setModal({
         isOpen: true,
@@ -788,12 +818,17 @@ export default function GradingView() {
   }
 
   async function fileToBase64(file: File): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.readAsDataURL(file);
-      reader.onload = () => resolve((reader.result as string).split(',')[1]);
-      reader.onerror = error => reject(error);
-    });
+    try {
+      const res = await compressImageForAI(file, 1600, 0.82);
+      return res.base64;
+    } catch {
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = () => resolve((reader.result as string).split(',')[1]);
+        reader.onerror = error => reject(error);
+      });
+    }
   }
 
   const exportToPDF = (slot: any) => {
@@ -984,11 +1019,12 @@ export default function GradingView() {
             <div className="flex items-center gap-3">
               <Loader2 className="animate-spin text-brand-yellow" size={24} />
               <div>
-                <p className="text-xs font-bold uppercase text-brand-yellow tracking-wider">
-                  Corrigindo em Sequência Estrita (1º ao Último)
+                <p className="text-xs font-bold uppercase text-brand-yellow tracking-wider flex items-center gap-1.5">
+                  <Sparkles size={14} />
+                  Processamento Acelerado (Compressão Ativa + Gemini 3.8 Flash)
                 </p>
                 <p className="text-base font-black">
-                  Passo {currentProgress.currentStep} de {currentProgress.totalSteps}: {currentProgress.studentName}
+                  Progresso: {currentProgress.currentStep} de {currentProgress.totalSteps} atividades concluídas
                 </p>
               </div>
             </div>

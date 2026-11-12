@@ -15,83 +15,304 @@ import {
   Settings, 
   FileText, 
   Sparkles, 
-  Radio, 
-  Code, 
-  X,
+  ChevronRight, 
+  GraduationCap, 
+  Users, 
+  Phone, 
+  UserCheck, 
+  Edit3, 
   ExternalLink,
-  ChevronRight,
+  BookOpen,
+  Award,
   Filter,
-  CheckCheck
+  Eye,
+  CheckCheck,
+  ChevronDown
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { supabase } from '../lib/supabase';
 import { 
+  Class, 
+  Student, 
+  Grade, 
   WeeklyStudyMessage, 
-  WeeklyMessageStatus, 
-  ExtractedCampaign 
+  ExtractedCampaign, 
+  WeeklyMessageStatus 
 } from '../types';
 import { 
+  cleanPhoneNumber, 
+  formatPhoneDisplay, 
+  generateWhatsAppUrl, 
+  openWhatsAppChat, 
+  getClassLeader, 
+  saveClassLeader, 
+  getStudentGuardian, 
+  saveStudentGuardian, 
+  recordMessageSent, 
+  getMessageSentDate, 
+  formatLeaderStudyMessage, 
+  formatStudentReportMessage, 
+  formatGeneralNoticeMessage, 
   extractStudyScheduleFromPdf, 
   fetchWeeklyStudyMessages, 
   saveWeeklyStudyMessages, 
   updateWeeklyStudyMessage, 
-  deleteWeeklyStudyMessage, 
-  dispatchWhatsAppMessage,
-  getSavedWhatsAppConfig,
-  saveWhatsAppConfig,
-  WhatsAppConfig,
-  SQL_SCHEMA_SNIPPET 
+  deleteWeeklyStudyMessage 
 } from '../lib/whatsappService';
+import CustomModal from '../components/CustomModal';
+
+type ActiveTab = 'lideres' | 'boletins' | 'gestao_lideres';
 
 export default function WhatsappAutomationView() {
-  // Configurações do WhatsApp / Evolution API
-  const [config, setConfig] = useState<WhatsAppConfig>(getSavedWhatsAppConfig());
-  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-  const [isSqlModalOpen, setIsSqlModalOpen] = useState(false);
-  const [copiedSql, setCopiedSql] = useState(false);
+  const [activeTab, setActiveTab] = useState<ActiveTab>('lideres');
 
-  // Estados de Upload & Extração com IA
-  const [isDragging, setIsDragging] = useState(false);
+  // Dados do sistema (Turmas, Alunos, Notas)
+  const [classes, setClasses] = useState<Class[]>([]);
+  const [selectedClassId, setSelectedClassId] = useState<string>('');
+  const [students, setStudents] = useState<Student[]>([]);
+  const [grades, setGrades] = useState<Record<string, Grade[]>>({}); // student_id -> grades[]
+  const [isLoadingClasses, setIsLoadingClasses] = useState(true);
+  const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+
+  // Modal genérico
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    type: 'info' | 'success' | 'warning' | 'error' | 'confirm';
+    onConfirm?: () => void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    type: 'info'
+  });
+
+  // Modal de Preview de Mensagem
+  const [previewModal, setPreviewModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    recipientName: string;
+    recipientPhone: string;
+    messageText: string;
+    trackingKey?: string;
+  } | null>(null);
+
+  // Modal para Editar Líder da Turma
+  const [editLeaderModal, setEditLeaderModal] = useState<{
+    isOpen: boolean;
+    classId: string;
+    className: string;
+    leaderName: string;
+    leaderPhone: string;
+  } | null>(null);
+
+  // Estados de Envio / Feedback
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+  const [refreshTrigger, setRefreshTrigger] = useState(0);
+
+  // ==========================================
+  // ESTADOS DA ABA 1: LÍDERES & ESTUDO ESPAÇADO
+  // ==========================================
   const [isProcessingPdf, setIsProcessingPdf] = useState(false);
   const [extractError, setExtractError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [scheduleSource, setScheduleSource] = useState<'pdf' | 'manual' | 'modelos'>('pdf');
 
-  // Rascunho extraído dinamicamente da IA
-  const [draftCampaignTitle, setDraftCampaignTitle] = useState<string>('');
-  const [draftMessages, setDraftMessages] = useState<Array<Omit<WeeklyStudyMessage, 'id' | 'created_at'>>>([]);
+  const [campaignTitle, setCampaignTitle] = useState('Cronograma de Estudos - Química');
+  const [draftWeeks, setDraftWeeks] = useState<Array<{
+    semana_numero: number;
+    data_envio: string;
+    horario_envio: string;
+    mensagem_texto: string;
+    status: WeeklyMessageStatus;
+  }>>([
+    {
+      semana_numero: 1,
+      data_envio: new Date().toISOString().split('T')[0],
+      horario_envio: '08:00',
+      mensagem_texto: `*Semana 1 - Estrutura Atômica e Tabela Periódica*\n• Questão 1: Qual é a diferença fundamental entre número atômico (Z) e número de massa (A)?\n• Resolução: Z representa o total de prótons no núcleo; A representa a soma de prótons e nêutrons (A = Z + N).\n• Cartão Anki/AlgoApp: Frente: "Definição de Isótopos" / Verso: "Átomos com o mesmo número atômico (Z) e diferentes números de massa (A)".`,
+      status: 'agendado'
+    }
+  ]);
+  const [savedCronograma, setSavedCronograma] = useState<WeeklyStudyMessage[]>([]);
   const [isSavingSchedule, setIsSavingSchedule] = useState(false);
-  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
 
-  // Mensagens salvas no Cronograma (Supabase / Local)
-  const [savedMessages, setSavedMessages] = useState<WeeklyStudyMessage[]>([]);
-  const [storageSource, setStorageSource] = useState<'supabase' | 'local'>('local');
-  const [isLoadingMessages, setIsLoadingMessages] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<'todos' | WeeklyMessageStatus>('todos');
+  // ==========================================
+  // ESTADOS DA ABA 2: BOLETIM & PAIS
+  // ==========================================
+  const [selectedUnit, setSelectedUnit] = useState<number>(1);
+  const [reportTemplate, setReportTemplate] = useState<'completo' | 'alerta' | 'parabens' | 'custom'>('completo');
+  const [customTeacherNote, setCustomTeacherNote] = useState('');
+  const [studentPhones, setStudentPhones] = useState<Record<string, string>>({});
+  const [savingPhoneId, setSavingPhoneId] = useState<string | null>(null);
 
-  // Controle de disparos individuais
-  const [dispatchingId, setDispatchingId] = useState<string | null>(null);
-  const [actionFeedback, setActionFeedback] = useState<{ id: string; success: boolean; text: string } | null>(null);
-
-  // Carregar dados ao montar
+  // Carregar turmas no início
   useEffect(() => {
-    loadSavedMessages();
+    loadClasses();
+    loadSavedCronograma();
   }, []);
 
-  async function loadSavedMessages() {
-    setIsLoadingMessages(true);
+  // Quando seleciona turma, carregar alunos e notas
+  useEffect(() => {
+    if (selectedClassId) {
+      loadStudentsAndGrades(selectedClassId);
+    } else {
+      setStudents([]);
+    }
+  }, [selectedClassId]);
+
+  async function loadClasses() {
+    setIsLoadingClasses(true);
     try {
-      const res = await fetchWeeklyStudyMessages();
-      setSavedMessages(res.data);
-      setStorageSource(res.source);
+      if (supabase) {
+        const { data, error } = await supabase.from('classes').select('*').order('name');
+        if (!error && data) {
+          setClasses(data as Class[]);
+          if (data.length > 0 && !selectedClassId) {
+            setSelectedClassId(data[0].id);
+          }
+        }
+      }
     } catch (e) {
-      console.error('Erro ao carregar mensagens:', e);
+      console.warn('Erro ao carregar turmas:', e);
     } finally {
-      setIsLoadingMessages(false);
+      setIsLoadingClasses(false);
     }
   }
 
-  // Manipulação de Upload do PDF
-  const handlePdfFile = async (file: File) => {
+  async function loadSavedCronograma() {
+    try {
+      const res = await fetchWeeklyStudyMessages();
+      setSavedCronograma(res.data);
+    } catch (e) {
+      console.warn('Erro ao carregar cronograma:', e);
+    }
+  }
+
+  async function loadStudentsAndGrades(classId: string) {
+    setIsLoadingStudents(true);
+    try {
+      if (supabase) {
+        // Carrega alunos
+        const { data: stdData, error: stdErr } = await supabase
+          .from('students')
+          .select('*')
+          .eq('class_id', classId)
+          .order('roll_number', { ascending: true });
+
+        if (!stdErr && stdData) {
+          setStudents(stdData as Student[]);
+          
+          // Preenche telefones locais
+          const phoneMap: Record<string, string> = {};
+          stdData.forEach((st: Student) => {
+            const guardian = getStudentGuardian(st.id, {
+              guardian_name: st.guardian_name,
+              guardian_phone: st.guardian_phone || st.phone
+            });
+            if (guardian.guardianPhone) {
+              phoneMap[st.id] = guardian.guardianPhone;
+            }
+          });
+          setStudentPhones(phoneMap);
+
+          // Carrega notas dos alunos
+          const studentIds = stdData.map(s => s.id);
+          if (studentIds.length > 0) {
+            const { data: grData, error: grErr } = await supabase
+              .from('grades')
+              .select('*')
+              .in('student_id', studentIds);
+
+            if (!grErr && grData) {
+              const grouped: Record<string, Grade[]> = {};
+              grData.forEach((g: Grade) => {
+                if (!grouped[g.student_id]) grouped[g.student_id] = [];
+                grouped[g.student_id].push(g);
+              });
+              setGrades(grouped);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Erro ao buscar alunos e notas:', e);
+    } finally {
+      setIsLoadingStudents(false);
+    }
+  }
+
+  // Obter líder atual da turma selecionada
+  const currentClass = classes.find(c => c.id === selectedClassId);
+  const currentLeader = selectedClassId 
+    ? getClassLeader(selectedClassId, {
+        leader_name: currentClass?.leader_name,
+        leader_phone: currentClass?.leader_phone
+      })
+    : { leaderName: '', leaderPhone: '' };
+
+  // Copiar texto para o Clipboard com animação
+  const copyToClipboard = (text: string, key: string) => {
+    navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2500);
+  };
+
+  // Abrir chat do WhatsApp e registrar como enviado
+  const handleSendWhatsApp = (phone: string, text: string, trackingKey?: string) => {
+    if (!phone || cleanPhoneNumber(phone).length < 10) {
+      setModal({
+        isOpen: true,
+        title: 'Número Inválido',
+        message: 'Por favor, informe um número de telefone WhatsApp válido com DDD (ex: 11 98765-4321).',
+        type: 'warning'
+      });
+      return;
+    }
+
+    const opened = openWhatsAppChat(phone, text);
+    if (opened && trackingKey) {
+      recordMessageSent(trackingKey);
+      setRefreshTrigger(prev => prev + 1);
+    }
+  };
+
+  // Salvar Líder de Turma
+  const handleSaveLeader = async () => {
+    if (!editLeaderModal) return;
+    await saveClassLeader(
+      editLeaderModal.classId,
+      editLeaderModal.leaderName,
+      editLeaderModal.leaderPhone
+    );
+    setEditLeaderModal(null);
+    setRefreshTrigger(prev => prev + 1);
+    setModal({
+      isOpen: true,
+      title: 'Líder Salvo com Sucesso',
+      message: 'Os dados do líder foram atualizados e já estão prontos para envio.',
+      type: 'success'
+    });
+  };
+
+  // Salvar telefone do responsável pelo aluno inline
+  const handleSaveGuardianPhone = async (studentId: string, phone: string) => {
+    setSavingPhoneId(studentId);
+    try {
+      const guardian = getStudentGuardian(studentId);
+      await saveStudentGuardian(studentId, guardian.guardianName || 'Responsável', phone);
+      setStudentPhones(prev => ({ ...prev, [studentId]: phone }));
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setSavingPhoneId(null);
+    }
+  };
+
+  // Processamento do PDF via Gemini
+  const handlePdfUpload = async (file: File) => {
     if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
       setExtractError('Por favor, selecione um arquivo em formato PDF.');
       return;
@@ -102,8 +323,8 @@ export default function WhatsappAutomationView() {
 
     try {
       const result: ExtractedCampaign = await extractStudyScheduleFromPdf(file);
-      setDraftCampaignTitle(result.campaign_title || file.name.replace('.pdf', ''));
-      setDraftMessages(
+      setCampaignTitle(result.campaign_title || file.name.replace('.pdf', ''));
+      setDraftWeeks(
         result.messages.map(m => ({
           semana_numero: m.semana_numero,
           data_envio: m.data_envio,
@@ -112,821 +333,1062 @@ export default function WhatsappAutomationView() {
           status: 'agendado'
         }))
       );
+      setModal({
+        isOpen: true,
+        title: 'Cronograma Extraído com Sucesso!',
+        message: `Identificamos ${result.messages.length} semanas de estudo no seu PDF. Revise os textos e clique em enviar para o líder quando quiser!`,
+        type: 'success'
+      });
     } catch (err: any) {
       console.error(err);
-      setExtractError(err.message || 'Erro ao processar PDF com a IA.');
+      setExtractError(err.message || 'Falha ao processar PDF.');
     } finally {
       setIsProcessingPdf(false);
     }
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(true);
-  };
+  // Adicionar semana de estudo manual
+  const handleAddManualWeek = () => {
+    const nextNum = draftWeeks.length + 1;
+    const lastDate = draftWeeks.length > 0 ? draftWeeks[draftWeeks.length - 1].data_envio : new Date().toISOString().split('T')[0];
+    const nextDate = new Date(new Date(lastDate).getTime() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-  const handleDragLeave = () => {
-    setIsDragging(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      handlePdfFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  // Edição dinâmica no Rascunho
-  const updateDraftItem = (index: number, field: keyof (typeof draftMessages)[0], value: any) => {
-    setDraftMessages(prev => {
-      const copy = [...prev];
-      copy[index] = { ...copy[index], [field]: value };
-      return copy;
-    });
-  };
-
-  const removeDraftItem = (index: number) => {
-    setDraftMessages(prev => prev.filter((_, idx) => idx !== index));
-  };
-
-  const addManualDraftItem = () => {
-    const nextWeek = draftMessages.length + 1;
-    const lastDate = draftMessages[draftMessages.length - 1]?.data_envio;
-    let nextDateStr = new Date().toISOString().split('T')[0];
-    if (lastDate) {
-      const d = new Date(lastDate);
-      d.setDate(d.getDate() + 7);
-      nextDateStr = d.toISOString().split('T')[0];
-    }
-
-    setDraftMessages(prev => [
+    setDraftWeeks(prev => [
       ...prev,
       {
-        semana_numero: nextWeek,
-        data_envio: nextDateStr,
+        semana_numero: nextNum,
+        data_envio: nextDate,
         horario_envio: '08:00',
-        mensagem_texto: `📚 *REVISÃO SEMANA ${nextWeek}* 🧪\n\n[Copie e cole este conteúdo diretamente no AlgoApp]\n- Tópico:\n- Resolução:`,
+        mensagem_texto: `*Semana ${nextNum} - Roteiro de Química*\n• Tópico principal:\n• Questão de fixação:\n• Bloco AlgoApp/Anki:`,
         status: 'agendado'
       }
     ]);
   };
 
-  // Salvar Cronograma no Banco
-  const handleSaveSchedule = async () => {
-    if (draftMessages.length === 0) return;
+  // Aplicar modelo pedagógico
+  const applyPresetTemplate = (type: 'quimica_geral' | 'organica' | 'enem') => {
+    if (type === 'quimica_geral') {
+      setCampaignTitle('Química Geral & Inorgânica - 1º Ano');
+      setDraftWeeks([
+        {
+          semana_numero: 1,
+          data_envio: new Date().toISOString().split('T')[0],
+          horario_envio: '08:00',
+          mensagem_texto: `*Semana 1 - Modelos Atômicos e Distribuição Eletrônica*\n1. Dalton: Esfera maciça e indivisível ("Bola de bilhar").\n2. Thomson: Descoberta do elétron, esfera positiva com cargas negativas ("Pudim de passas").\n3. Rutherford: Núcleo denso e positivo, eletrosfera vazia ("Sistema planetário").\n4. Bohr: Níveis quantizados de energia e saltos quânticos.\n\n*Cartão AlgoApp:* F: "Postulado de Bohr sobre fótons" / V: "Quando o elétron salta para uma camada mais externa absorve energia; ao retornar emite luz/fóton".`,
+          status: 'agendado'
+        },
+        {
+          semana_numero: 2,
+          data_envio: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          horario_envio: '08:00',
+          mensagem_texto: `*Semana 2 - Propriedades Periódicas*\n• Raio Atômico: Cresce para a esquerda e para baixo na tabela.\n• Eletronegatividade: Capacidade de atrair elétrons em uma ligação (F > O > N > Cl > Br > I > S > C > P > H).\n• Energia de Ionização: Energia necessária para retirar 1 elétron no estado gasoso.\n\n*Cartão AlgoApp:* F: "Elemento mais eletronegativo" / V: "Flúor (F)".`,
+          status: 'agendado'
+        },
+        {
+          semana_numero: 3,
+          data_envio: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          horario_envio: '08:00',
+          mensagem_texto: `*Semana 3 - Ligações Químicas*\n• Ligação Iônica: Metal + Ametal (transferência de elétrons, formação de retículo cristalino).\n• Ligação Covalente: Ametal + Ametal (compartilhamento de pares de elétrons).\n• Ligação Metálica: Metal + Metal ("mar de elétrons", alta condutibilidade térmica e elétrica).`,
+          status: 'agendado'
+        }
+      ]);
+    } else if (type === 'organica') {
+      setCampaignTitle('Química Orgânica - Funções e Nomenclatura');
+      setDraftWeeks([
+        {
+          semana_numero: 1,
+          data_envio: new Date().toISOString().split('T')[0],
+          horario_envio: '08:00',
+          mensagem_texto: `*Semana 1 - Funções Oxigenadas Essenciais*\n• Álcool: Hidroxila (-OH) ligada a carbono saturado (sufixo -OL).\n• Aldeído: Carbonila na extremidade da cadeia (sufixo -AL).\n• Cetona: Carbonila entre dois carbonos (sufixo -ONA).\n• Ácido Carboxílico: Carboxila (-COOH) na ponta (Ácido ... -ÓICO).`,
+          status: 'agendado'
+        },
+        {
+          semana_numero: 2,
+          data_envio: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+          horario_envio: '08:00',
+          mensagem_texto: `*Semana 2 - Funções Nitrogenadas e Isomeria*\n• Amina: Derivado da amônia (NH3) substituindo hidrogênios por radicais carbônicos.\n• Amida: Nitrogênio diretamente ligado a uma carbonila (-CO-NH2).\n• Isomeria Plana: Cadeia, Posição, Função, Compensação e Tautomeria.`,
+          status: 'agendado'
+        }
+      ]);
+    } else {
+      setCampaignTitle('Revisão Estratégica ENEM - Química');
+      setDraftWeeks([
+        {
+          semana_numero: 1,
+          data_envio: new Date().toISOString().split('T')[0],
+          horario_envio: '08:00',
+          mensagem_texto: `*Semana 1 - Estequiometria sem mistério (Top 1 ENEM)*\nPasso 1: Escrever e balancear a equação química completa.\nPasso 2: Identificar as substâncias citadas no enunciado.\nPasso 3: Relacionar grandezas (Massa molar, Mol = 6,02x10²³, Volume molar = 22,4 L na CNTP).\nPasso 4: Montar a regra de três considerando pureza e rendimento se houver!`,
+          status: 'agendado'
+        }
+      ]);
+    }
+  };
+
+  // Salvar no cronograma persistente
+  const handleSaveDraftToSchedule = async () => {
     setIsSavingSchedule(true);
     try {
-      const title = draftCampaignTitle.trim() || 'Cronograma de Estudos - WhatsApp';
-      await saveWeeklyStudyMessages(draftMessages, title, config.groupJid);
-      
-      // Limpa rascunho e recarrega
-      setDraftMessages([]);
-      setDraftCampaignTitle('');
-      await loadSavedMessages();
+      await saveWeeklyStudyMessages(draftWeeks, campaignTitle);
+      await loadSavedCronograma();
+      setModal({
+        isOpen: true,
+        title: 'Cronograma Salvo!',
+        message: 'As mensagens foram armazenadas com sucesso no seu banco de dados.',
+        type: 'success'
+      });
     } catch (e: any) {
-      alert(`Falha ao salvar cronograma: ${e.message}`);
+      setModal({
+        isOpen: true,
+        title: 'Erro ao Salvar',
+        message: e.message || 'Falha ao salvar cronograma.',
+        type: 'error'
+      });
     } finally {
       setIsSavingSchedule(false);
     }
   };
 
-  // Disparo manual/teste
-  const handleDispatchTest = async (message: WeeklyStudyMessage) => {
-    setDispatchingId(message.id);
-    setActionFeedback(null);
-    try {
-      const result = await dispatchWhatsAppMessage(message, config);
-      if (result.success) {
-        setActionFeedback({
-          id: message.id,
-          success: true,
-          text: config.simulateDispatch 
-            ? 'Disparo simulado com sucesso! Status atualizado para "Enviado".' 
-            : `Enviado com sucesso via Evolution API! (ID: ${result.messageId})`
-        });
-        await loadSavedMessages();
-      } else {
-        setActionFeedback({
-          id: message.id,
-          success: false,
-          text: result.error || 'Falha no disparo da mensagem.'
-        });
-        await loadSavedMessages();
-      }
-    } catch (e: any) {
-      setActionFeedback({
-        id: message.id,
-        success: false,
-        text: e.message || 'Erro inesperado no envio.'
-      });
-    } finally {
-      setDispatchingId(null);
-    }
+  // Remover semana salva
+  const handleDeleteSavedMessage = async (id: string) => {
+    await deleteWeeklyStudyMessage(id);
+    loadSavedCronograma();
   };
 
-  // Deletar item do cronograma
-  const handleDeleteSaved = async (id: string) => {
-    if (confirm('Tem certeza que deseja remover esta mensagem agendada?')) {
-      await deleteWeeklyStudyMessage(id);
-      await loadSavedMessages();
-    }
+  // ==========================================
+  // HELPERS DE BOLETIM E RESUMO DE NOTAS
+  // ==========================================
+  const getStudentGradeForUnit = (studentId: string, unitNum: number): Grade | undefined => {
+    const list = grades[studentId] || [];
+    return list.find(g => Number(g.unit) === Number(unitNum));
   };
 
-  // Copiar texto para colar no AlgoApp / WhatsApp
-  const handleCopyText = (text: string, index: number) => {
-    navigator.clipboard.writeText(text);
-    setCopiedIndex(index);
-    setTimeout(() => setCopiedIndex(null), 2000);
+  const getStudentAnnualAverage = (studentId: string): number | null => {
+    const list = grades[studentId] || [];
+    if (list.length === 0) return null;
+    const sum = list.reduce((acc, curr) => acc + (Number(curr.unit_average) || 0), 0);
+    return Number((sum / list.length).toFixed(1));
   };
-
-  const handleCopySql = () => {
-    navigator.clipboard.writeText(SQL_SCHEMA_SNIPPET);
-    setCopiedSql(true);
-    setTimeout(() => setCopiedSql(false), 2500);
-  };
-
-  // Salvar configurações
-  const handleSaveConfig = () => {
-    saveWhatsAppConfig(config);
-    setIsConfigModalOpen(false);
-  };
-
-  // Filtragem
-  const filteredMessages = savedMessages.filter(m => {
-    if (statusFilter === 'todos') return true;
-    return m.status === statusFilter;
-  });
 
   return (
-    <div className="space-y-8 pb-16">
-      {/* Cabeçalho Superior */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-6">
-        <div>
-          <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold shadow-sm">
-              <MessageSquare size={24} />
+    <div className="space-y-6">
+      {/* CABEÇALHO PRINCIPAL */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-200/80 dark:border-slate-800 relative overflow-hidden">
+        <div className="absolute top-0 right-0 -mt-10 -mr-10 w-72 h-72 bg-gradient-to-br from-emerald-500/10 to-teal-500/5 rounded-full blur-3xl pointer-events-none" />
+        
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+          <div>
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 text-xs font-bold uppercase tracking-wider mb-2 border border-emerald-200/60 dark:border-emerald-800">
+              <MessageSquare size={13} />
+              Comunicação Direta WhatsApp (100% Gratuito)
             </div>
-            <div>
-              <h1 className="text-2xl font-serif font-bold text-slate-800 dark:text-white flex items-center gap-2">
-                Automação de Estudos • WhatsApp
-                <span className="text-xs font-sans px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 font-semibold uppercase tracking-wider">
-                  Admin
-                </span>
-              </h1>
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                Extração inteligente de PDFs de estudo via Gemini e agendamento de mensagens para o AlgoApp.
-              </p>
-            </div>
+            <h1 className="text-2xl sm:text-3xl font-serif font-bold text-slate-900 dark:text-white tracking-tight">
+              WhatsApp & Líderes de Sala
+            </h1>
+            <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
+              Envie roteiros pedagógicos com blocos prontos para o <strong>AlgoApp</strong> para o líder da sala no privado, ou dispare <strong>boletins de notas</strong> com 1 clique para os responsáveis. Sem custos e sem risco de banimento.
+            </p>
           </div>
-        </div>
 
-        {/* Botões de Ação Global / Configuração */}
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            onClick={() => setIsSqlModalOpen(true)}
-            className="flex items-center gap-2 px-3.5 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-all border border-slate-300/60 dark:border-slate-700"
-            title="Ver SQL para criar tabela no Supabase"
-          >
-            <Code size={16} />
-            <span>SQL Supabase</span>
-          </button>
+          {/* Abas Principais */}
+          <div className="flex bg-slate-100 dark:bg-slate-800 p-1.5 rounded-2xl border border-slate-200 dark:border-slate-700 self-start md:self-center shrink-0">
+            <button
+              onClick={() => setActiveTab('lideres')}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all",
+                activeTab === 'lideres'
+                  ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              )}
+            >
+              <Users size={16} />
+              <span>Líderes (Estudo & AlgoApp)</span>
+            </button>
 
-          <button
-            onClick={() => setIsConfigModalOpen(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white hover:bg-slate-50 dark:bg-slate-900 dark:hover:bg-slate-800 text-brand-blue-dark dark:text-brand-yellow text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 shadow-sm"
-          >
-            <Settings size={16} />
-            <span>Configurar Grupo & API</span>
-          </button>
+            <button
+              onClick={() => setActiveTab('boletins')}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all",
+                activeTab === 'boletins'
+                  ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              )}
+            >
+              <GraduationCap size={16} />
+              <span>Boletins & Pais</span>
+            </button>
+
+            <button
+              onClick={() => setActiveTab('gestao_lideres')}
+              className={cn(
+                "flex items-center gap-2 px-4 py-2.5 rounded-xl font-bold text-xs transition-all",
+                activeTab === 'gestao_lideres'
+                  ? "bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 shadow-sm"
+                  : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white"
+              )}
+            >
+              <Phone size={16} />
+              <span>Contatos dos Líderes</span>
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Barra de Status do Grupo dos Líderes */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4 shadow-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <div className="w-3 h-3 rounded-full bg-emerald-500 animate-pulse" />
-          <div className="text-xs">
-            <span className="text-slate-400">Destino Configurado:</span>{' '}
-            <strong className="text-slate-700 dark:text-slate-200 font-mono">
-              {config.groupJid || 'Nenhum grupo configurado'}
-            </strong>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-slate-400">Modo de Disparo:</span>
-          {config.simulateDispatch ? (
-            <span className="px-2.5 py-1 rounded-full bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/40 font-medium">
-              Simulado / Teste Seguro
-            </span>
-          ) : (
-            <span className="px-2.5 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-900/40 font-medium flex items-center gap-1.5">
-              <Radio size={12} className="animate-pulse" />
-              Evolution API Ativa
-            </span>
-          )}
-          <span className="text-slate-300 dark:text-slate-700">|</span>
-          <span className="text-slate-400">Armazenamento:</span>
-          <span className="font-semibold text-slate-700 dark:text-slate-300">
-            {storageSource === 'supabase' ? 'Supabase DB' : 'Cache Local (Offline)'}
-          </span>
-        </div>
-      </div>
-
-      {/* ÁREA 1: Drag & Drop para Upload de PDF */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 shadow-sm">
-        <div className="max-w-2xl mx-auto text-center space-y-4">
-          <div className="inline-flex p-3 rounded-2xl bg-brand-yellow/20 text-brand-blue-dark dark:text-brand-yellow">
-            <Sparkles size={28} />
-          </div>
-          <h2 className="text-xl font-bold font-serif text-slate-800 dark:text-white">
-            Upload de Cronograma em PDF
-          </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400">
-            O Gemini lerá dinamicamente qualquer quantidade de semanas (2, 3, 5 ou mais semanas) e extrairá os textos prontos para o WhatsApp e AlgoApp.
-          </p>
-
-          <input
-            type="file"
-            ref={fileInputRef}
-            accept=".pdf,application/pdf"
-            className="hidden"
-            onChange={(e) => {
-              if (e.target.files && e.target.files[0]) {
-                handlePdfFile(e.target.files[0]);
-              }
-            }}
-          />
-
-          <div
-            onDragOver={handleDragOver}
-            onDragLeave={handleDragLeave}
-            onDrop={handleDrop}
-            onClick={() => !isProcessingPdf && fileInputRef.current?.click()}
-            className={cn(
-              "border-2 border-dashed rounded-3xl p-8 sm:p-12 transition-all cursor-pointer flex flex-col items-center justify-center gap-3",
-              isDragging
-                ? "border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/20 scale-[0.99]"
-                : "border-slate-300 dark:border-slate-700 hover:border-brand-yellow bg-slate-50/50 dark:bg-slate-850/40 hover:bg-slate-50 dark:hover:bg-slate-800/60",
-              isProcessingPdf && "pointer-events-none opacity-80"
-            )}
-          >
-            {isProcessingPdf ? (
-              <div className="flex flex-col items-center gap-3 py-4">
-                <RefreshCw size={36} className="animate-spin text-emerald-600 dark:text-emerald-400" />
-                <div className="space-y-1">
-                  <p className="font-semibold text-slate-800 dark:text-slate-100 text-sm">
-                    Analisando PDF com Gemini...
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    Detectando datas, tópicos e estruturando mensagens de repetição espaçada.
-                  </p>
-                </div>
+      {/* ========================================================================= */}
+      {/* ABA 1: LÍDERES DE SALA (ESTUDO ESPAÇADO & ALGOAPP) */}
+      {/* ========================================================================= */}
+      {activeTab === 'lideres' && (
+        <div className="space-y-6">
+          {/* Card Seletor de Turma & Líder Atual */}
+          <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+            <div className="flex items-center gap-4 w-full md:w-auto">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-50 dark:bg-emerald-950/50 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0 border border-emerald-100 dark:border-emerald-900">
+                <Users size={24} />
               </div>
-            ) : (
-              <>
-                <div className="w-14 h-14 rounded-full bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-600 dark:text-slate-300 shadow-inner">
-                  <Upload size={24} />
-                </div>
-                <div className="space-y-1">
-                  <p className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                    Arraste o PDF aqui ou <span className="text-emerald-600 dark:text-emerald-400 underline">clique para selecionar</span>
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    Suporta qualquer documento PDF com cronograma semanal de Química
-                  </p>
-                </div>
-              </>
-            )}
+              <div className="flex-1">
+                <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                  Turma de Destino:
+                </label>
+                <select
+                  value={selectedClassId}
+                  onChange={e => setSelectedClassId(e.target.value)}
+                  className="mt-1 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                >
+                  {classes.map(c => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* Informações do Líder */}
+            <div className="flex items-center gap-3 bg-slate-50 dark:bg-slate-800/80 p-3 rounded-2xl border border-slate-200 dark:border-slate-700/80 w-full md:w-auto">
+              <div className="w-9 h-9 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                <UserCheck size={18} />
+              </div>
+              <div>
+                <p className="text-xs text-slate-400 font-semibold">Líder Atual da Turma:</p>
+                <p className="text-sm font-bold text-slate-900 dark:text-white">
+                  {currentLeader.leaderName || 'Nenhum líder cadastrado'}
+                  {currentLeader.leaderPhone && (
+                    <span className="text-xs text-emerald-600 dark:text-emerald-400 font-medium ml-2">
+                      {formatPhoneDisplay(currentLeader.leaderPhone)}
+                    </span>
+                  )}
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  if (currentClass) {
+                    setEditLeaderModal({
+                      isOpen: true,
+                      classId: currentClass.id,
+                      className: currentClass.name,
+                      leaderName: currentLeader.leaderName,
+                      leaderPhone: currentLeader.leaderPhone
+                    });
+                  }
+                }}
+                className="ml-auto p-2 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl text-slate-500 hover:text-slate-900 dark:hover:text-white transition-all"
+                title="Editar Líder da Turma"
+              >
+                <Edit3 size={16} />
+              </button>
+            </div>
           </div>
 
-          {extractError && (
-            <div className="flex items-center gap-2 p-3.5 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-rose-700 dark:text-rose-400 text-xs text-left">
-              <AlertCircle size={18} className="shrink-0" />
-              <span>{extractError}</span>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* ÁREA 2: Painel Rascunho Dinâmico (Renderizado via .map) */}
-      <AnimatePresence>
-        {draftMessages.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -20 }}
-            className="bg-white dark:bg-slate-900 rounded-3xl border-2 border-emerald-500/30 dark:border-emerald-500/20 p-6 sm:p-8 shadow-xl space-y-6"
-          >
+          {/* Seletor de Modo de Criação das Mensagens */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
               <div>
-                <div className="flex items-center gap-2">
-                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-500" />
-                  <h3 className="text-lg font-serif font-bold text-slate-800 dark:text-white">
-                    Rascunho Extraído ({draftMessages.length} Semanas Identificadas)
-                  </h3>
-                </div>
-                <p className="text-xs text-slate-400 mt-1">
-                  Revise ou edite datas, horários e textos das mensagens antes de gravar o agendamento definitivo.
+                <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <BookOpen size={20} className="text-emerald-500" />
+                  Roteiro de Repetição Espaçada & AlgoApp
+                </h2>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Escolha como deseja alimentar as mensagens das semanas de estudo.
                 </p>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
                 <button
-                  type="button"
-                  onClick={addManualDraftItem}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 text-xs font-semibold transition-all"
-                >
-                  <Plus size={15} />
-                  <span>Adicionar Semana</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setDraftMessages([])}
-                  className="px-3 py-2 rounded-xl text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 text-xs font-medium transition-all"
-                >
-                  Descartar
-                </button>
-
-                <button
-                  type="button"
-                  onClick={handleSaveSchedule}
-                  disabled={isSavingSchedule}
-                  className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20 transition-all disabled:opacity-50"
-                >
-                  {isSavingSchedule ? (
-                    <>
-                      <RefreshCw size={16} className="animate-spin" />
-                      <span>Salvando...</span>
-                    </>
-                  ) : (
-                    <>
-                      <CheckCheck size={16} />
-                      <span>Salvar Cronograma</span>
-                    </>
+                  onClick={() => setScheduleSource('pdf')}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                    scheduleSource === 'pdf' ? "bg-white dark:bg-slate-900 text-emerald-600 shadow-sm" : "text-slate-500"
                   )}
+                >
+                  Subir PDF
+                </button>
+                <button
+                  onClick={() => setScheduleSource('manual')}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                    scheduleSource === 'manual' ? "bg-white dark:bg-slate-900 text-emerald-600 shadow-sm" : "text-slate-500"
+                  )}
+                >
+                  Digitar Semanas
+                </button>
+                <button
+                  onClick={() => setScheduleSource('modelos')}
+                  className={cn(
+                    "px-3 py-1.5 rounded-lg text-xs font-bold transition-all",
+                    scheduleSource === 'modelos' ? "bg-white dark:bg-slate-900 text-emerald-600 shadow-sm" : "text-slate-500"
+                  )}
+                >
+                  Modelos Prontos
                 </button>
               </div>
             </div>
 
-            {/* Campo do Título da Campanha */}
-            <div className="bg-slate-50 dark:bg-slate-850 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center gap-3">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider shrink-0">
-                Título do Cronograma:
+            {/* Opção 1: Upload de PDF */}
+            {scheduleSource === 'pdf' && (
+              <div className="space-y-4">
+                <div 
+                  onClick={() => fileInputRef.current?.click()}
+                  className={cn(
+                    "border-2 border-dashed rounded-2xl p-8 text-center cursor-pointer transition-all",
+                    "border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 bg-slate-50/50 dark:bg-slate-850"
+                  )}
+                >
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".pdf,application/pdf"
+                    className="hidden"
+                    onChange={e => {
+                      if (e.target.files && e.target.files[0]) {
+                        handlePdfUpload(e.target.files[0]);
+                      }
+                    }}
+                  />
+                  <div className="w-14 h-14 mx-auto rounded-2xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mb-3">
+                    {isProcessingPdf ? (
+                      <RefreshCw className="animate-spin" size={26} />
+                    ) : (
+                      <Upload size={26} />
+                    )}
+                  </div>
+                  <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+                    {isProcessingPdf ? "Extraindo semanas do PDF com Inteligência Artificial..." : "Clique para selecionar o PDF do Cronograma de Estudos"}
+                  </h3>
+                  <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+                    O sistema detecta dinamicamente a quantidade de semanas, datas sugeridas e formata o bloco pronto para copiar e colar no AlgoApp.
+                  </p>
+                </div>
+
+                {extractError && (
+                  <div className="p-4 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-2xl flex items-start gap-3">
+                    <AlertCircle className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" size={18} />
+                    <div className="text-xs text-amber-800 dark:text-amber-300">
+                      <p className="font-bold">Aviso na leitura do PDF:</p>
+                      <p>{extractError}</p>
+                      <p className="mt-1 font-semibold text-slate-600 dark:text-slate-400">
+                        👉 Dica: Você pode usar a aba <strong>"Digitar Semanas"</strong> ou <strong>"Modelos Prontos"</strong> logo acima para continuar 100% sem IA e sem depender de créditos!
+                      </p>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Opção 2: Modelos Prontos */}
+            {scheduleSource === 'modelos' && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <button
+                  onClick={() => applyPresetTemplate('quimica_geral')}
+                  className="p-5 text-left rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 hover:border-emerald-500 transition-all group"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 text-emerald-600 flex items-center justify-center mb-3">
+                    <BookOpen size={18} />
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-emerald-500">
+                    Química Geral (3 Semanas)
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Modelos Atômicos, Tabela Periódica e Ligações Químicas com perguntas para o AlgoApp.
+                  </p>
+                </button>
+
+                <button
+                  onClick={() => applyPresetTemplate('organica')}
+                  className="p-5 text-left rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 hover:border-emerald-500 transition-all group"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-teal-50 dark:bg-teal-950/50 text-teal-600 flex items-center justify-center mb-3">
+                    <Sparkles size={18} />
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-teal-500">
+                    Química Orgânica (2 Semanas)
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Funções Oxigenadas e Nitrogenadas + Isomeria plana com cards Anki.
+                  </p>
+                </button>
+
+                <button
+                  onClick={() => applyPresetTemplate('enem')}
+                  className="p-5 text-left rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50 dark:bg-slate-800/40 hover:border-emerald-500 transition-all group"
+                >
+                  <div className="w-9 h-9 rounded-xl bg-amber-50 dark:bg-amber-950/50 text-amber-600 flex items-center justify-center mb-3">
+                    <Award size={18} />
+                  </div>
+                  <h4 className="text-sm font-bold text-slate-900 dark:text-white group-hover:text-amber-500">
+                    Estratégia ENEM
+                  </h4>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    Passo a passo definitivo para resolver qualquer questão de cálculo estequiométrico.
+                  </p>
+                </button>
+              </div>
+            )}
+
+            {/* Título da Campanha / Roteiro */}
+            <div>
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                Título do Roteiro de Estudos:
               </label>
               <input
                 type="text"
-                value={draftCampaignTitle}
-                onChange={(e) => setDraftCampaignTitle(e.target.value)}
-                placeholder="Ex: Cronograma 3º Ano - 1º Bimestre"
-                className="flex-1 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-1.5 text-xs text-slate-800 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                value={campaignTitle}
+                onChange={e => setCampaignTitle(e.target.value)}
+                placeholder="Ex: Roteiro de Estudos de Química - 1º Bimestre"
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2.5 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
 
-            {/* Lista Dinâmica de Semanas via .map */}
-            <div className="space-y-4">
-              {draftMessages.map((item, index) => (
-                <div
-                  key={index}
-                  className="p-5 rounded-2xl bg-slate-50/70 dark:bg-slate-850/60 border border-slate-200/80 dark:border-slate-800 hover:border-emerald-500/40 transition-all space-y-4"
+            {/* Lista Dinâmica de Semanas */}
+            <div className="space-y-4 pt-2">
+              <div className="flex items-center justify-between">
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                  <span>Mensagens Programadas ({draftWeeks.length})</span>
+                </h3>
+
+                <button
+                  onClick={handleAddManualWeek}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 font-bold text-xs hover:bg-emerald-100 transition-all border border-emerald-200 dark:border-emerald-800"
                 >
-                  {/* Linha Superior: Semana, Data, Horário e Ações */}
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 font-bold text-xs border border-emerald-500/20">
-                        <span>Semana</span>
-                        <input
-                          type="number"
-                          value={item.semana_numero}
-                          onChange={(e) => updateDraftItem(index, 'semana_numero', parseInt(e.target.value) || (index + 1))}
-                          className="w-10 bg-transparent text-center font-bold focus:outline-none"
-                        />
-                      </div>
+                  <Plus size={14} />
+                  <span>Adicionar Semana</span>
+                </button>
+              </div>
 
-                      <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                        <Calendar size={14} className="text-slate-400" />
-                        <input
-                          type="date"
-                          value={item.data_envio}
-                          onChange={(e) => updateDraftItem(index, 'data_envio', e.target.value)}
-                          className="bg-transparent text-slate-700 dark:text-slate-200 focus:outline-none font-medium"
-                        />
-                      </div>
+              {draftWeeks.map((week, idx) => {
+                const trackingKey = `leader-${selectedClassId}-week-${week.semana_numero}`;
+                const sentDate = getMessageSentDate(trackingKey);
+                const fullMsg = formatLeaderStudyMessage({
+                  className: currentClass?.name || 'Turma',
+                  leaderName: currentLeader.leaderName,
+                  semanaNumero: week.semana_numero,
+                  dataEnvio: week.data_envio,
+                  horarioEnvio: week.horario_envio,
+                  studyText: week.mensagem_texto
+                });
 
-                      <div className="flex items-center gap-2 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs">
-                        <Clock size={14} className="text-slate-400" />
-                        <input
-                          type="time"
-                          value={item.horario_envio}
-                          onChange={(e) => updateDraftItem(index, 'horario_envio', e.target.value)}
-                          className="bg-transparent text-slate-700 dark:text-slate-200 focus:outline-none font-medium"
-                        />
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => handleCopyText(item.mensagem_texto, index)}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 text-xs transition-colors"
-                        title="Copiar texto para colar no AlgoApp / WhatsApp"
-                      >
-                        {copiedIndex === index ? (
-                          <>
-                            <Check size={13} className="text-emerald-500" />
-                            <span className="text-emerald-600 font-semibold">Copiado</span>
-                          </>
-                        ) : (
-                          <>
-                            <Copy size={13} />
-                            <span>Copiar</span>
-                          </>
+                return (
+                  <motion.div
+                    key={idx}
+                    layout
+                    className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-850 shadow-sm space-y-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-2">
+                        <span className="w-7 h-7 rounded-lg bg-emerald-500 text-white font-bold text-xs flex items-center justify-center">
+                          {week.semana_numero}
+                        </span>
+                        <span className="text-sm font-bold text-slate-900 dark:text-white">
+                          Semana {week.semana_numero}
+                        </span>
+                        {sentDate && (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-emerald-100 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 text-[10px] font-bold">
+                            <CheckCheck size={12} />
+                            Enviado em {new Date(sentDate).toLocaleDateString('pt-BR')}
+                          </span>
                         )}
-                      </button>
+                      </div>
 
+                      <div className="flex items-center gap-3">
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                          <Calendar size={14} />
+                          <input
+                            type="date"
+                            value={week.data_envio}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setDraftWeeks(prev => prev.map((w, i) => i === idx ? { ...w, data_envio: val } : w));
+                            }}
+                            className="bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-2 py-1 text-xs font-semibold text-slate-900 dark:text-white"
+                          />
+                        </div>
+
+                        <div className="flex items-center gap-1.5 text-xs text-slate-500">
+                          <Clock size={14} />
+                          <input
+                            type="time"
+                            value={week.horario_envio}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setDraftWeeks(prev => prev.map((w, i) => i === idx ? { ...w, horario_envio: val } : w));
+                            }}
+                            className="bg-slate-100 dark:bg-slate-800 border-none rounded-lg px-2 py-1 text-xs font-semibold text-slate-900 dark:text-white"
+                          />
+                        </div>
+
+                        {draftWeeks.length > 1 && (
+                          <button
+                            onClick={() => setDraftWeeks(prev => prev.filter((_, i) => i !== idx))}
+                            className="p-1.5 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-all"
+                            title="Remover Semana"
+                          >
+                            <Trash2 size={16} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Caixa de Texto editável */}
+                    <div>
+                      <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                        Conteúdo do Estudo / Bloco AlgoApp:
+                      </label>
+                      <textarea
+                        rows={5}
+                        value={week.mensagem_texto}
+                        onChange={e => {
+                          const val = e.target.value;
+                          setDraftWeeks(prev => prev.map((w, i) => i === idx ? { ...w, mensagem_texto: val } : w));
+                        }}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 leading-relaxed"
+                      />
+                    </div>
+
+                    {/* Barra de Ações Rápidas */}
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => copyToClipboard(week.mensagem_texto, `draft-raw-${idx}`)}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                        >
+                          {copiedKey === `draft-raw-${idx}` ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                          <span>Copiar só AlgoApp</span>
+                        </button>
+
+                        <button
+                          onClick={() => setPreviewModal({
+                            isOpen: true,
+                            title: `Visualização - Semana ${week.semana_numero}`,
+                            recipientName: currentLeader.leaderName || 'Líder da Turma',
+                            recipientPhone: currentLeader.leaderPhone,
+                            messageText: fullMsg,
+                            trackingKey
+                          })}
+                          className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold text-xs hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                        >
+                          <Eye size={14} />
+                          <span>Ver Mensagem Formatada</span>
+                        </button>
+                      </div>
+
+                      {/* Botão de Envio Direto ao WhatsApp do Líder */}
                       <button
-                        type="button"
-                        onClick={() => removeDraftItem(index)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                        title="Remover esta mensagem do rascunho"
+                        onClick={() => {
+                          if (!currentLeader.leaderPhone) {
+                            if (currentClass) {
+                              setEditLeaderModal({
+                                isOpen: true,
+                                classId: currentClass.id,
+                                className: currentClass.name,
+                                leaderName: currentLeader.leaderName,
+                                leaderPhone: ''
+                              });
+                            }
+                            return;
+                          }
+                          handleSendWhatsApp(currentLeader.leaderPhone, fullMsg, trackingKey);
+                        }}
+                        className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm hover:shadow transition-all"
                       >
-                        <Trash2 size={16} />
+                        <Send size={14} />
+                        <span>
+                          {currentLeader.leaderPhone ? `Enviar para o Líder (${currentLeader.leaderName || 'Líder'})` : 'Cadastrar Tel. do Líder & Enviar'}
+                        </span>
                       </button>
                     </div>
-                  </div>
-
-                  {/* Textarea da Mensagem para o WhatsApp/AlgoApp */}
-                  <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-[11px] text-slate-400 px-1">
-                      <span>Texto bruto para envio (WhatsApp & AlgoApp):</span>
-                      <span>{item.mensagem_texto.length} caracteres</span>
-                    </div>
-                    <textarea
-                      rows={4}
-                      value={item.mensagem_texto}
-                      onChange={(e) => updateDraftItem(index, 'mensagem_texto', e.target.value)}
-                      placeholder="Texto da mensagem..."
-                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-xs font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500 leading-relaxed resize-y"
-                    />
-                  </div>
-                </div>
-              ))}
+                  </motion.div>
+                );
+              })}
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      {/* ÁREA 3: Cronograma Salvo no Supabase / Fila de Agendamento */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 shadow-sm space-y-6">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
-          <div>
-            <div className="flex items-center gap-2">
-              <Calendar size={20} className="text-brand-yellow" />
-              <h2 className="text-lg font-serif font-bold text-slate-800 dark:text-white">
-                Fila de Agendamentos & Cronograma Salvo
-              </h2>
+            {/* Ação de Salvar no Banco / Cronograma */}
+            <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-slate-800">
+              <button
+                onClick={handleSaveDraftToSchedule}
+                disabled={isSavingSchedule}
+                className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-900 dark:bg-white text-white dark:text-slate-900 font-bold text-xs hover:opacity-90 transition-all shadow-sm disabled:opacity-50"
+              >
+                {isSavingSchedule ? <RefreshCw className="animate-spin" size={14} /> : <CheckCircle2 size={14} />}
+                <span>Salvar Cronograma na Aplicação</span>
+              </button>
             </div>
-            <p className="text-xs text-slate-400 mt-1">
-              Mensagens gravadas no banco de dados prontas para envio automático ou disparo manual de teste.
-            </p>
-          </div>
-
-          {/* Filtros de Status */}
-          <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl text-xs font-medium">
-            <button
-              onClick={() => setStatusFilter('todos')}
-              className={cn(
-                "px-3 py-1.5 rounded-lg transition-all",
-                statusFilter === 'todos'
-                  ? "bg-white dark:bg-slate-900 text-slate-800 dark:text-white shadow-xs font-bold"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
-              )}
-            >
-              Todos ({savedMessages.length})
-            </button>
-            <button
-              onClick={() => setStatusFilter('agendado')}
-              className={cn(
-                "px-3 py-1.5 rounded-lg transition-all",
-                statusFilter === 'agendado'
-                  ? "bg-white dark:bg-slate-900 text-sky-700 dark:text-sky-300 shadow-xs font-bold"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
-              )}
-            >
-              Agendados ({savedMessages.filter(m => m.status === 'agendado').length})
-            </button>
-            <button
-              onClick={() => setStatusFilter('enviado')}
-              className={cn(
-                "px-3 py-1.5 rounded-lg transition-all",
-                statusFilter === 'enviado'
-                  ? "bg-white dark:bg-slate-900 text-emerald-700 dark:text-emerald-300 shadow-xs font-bold"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
-              )}
-            >
-              Enviados ({savedMessages.filter(m => m.status === 'enviado').length})
-            </button>
-            <button
-              onClick={() => setStatusFilter('falha')}
-              className={cn(
-                "px-3 py-1.5 rounded-lg transition-all",
-                statusFilter === 'falha'
-                  ? "bg-white dark:bg-slate-900 text-rose-700 dark:text-rose-300 shadow-xs font-bold"
-                  : "text-slate-500 dark:text-slate-400 hover:text-slate-700"
-              )}
-            >
-              Falhas ({savedMessages.filter(m => m.status === 'falha').length})
-            </button>
           </div>
         </div>
+      )}
 
-        {/* Feedback de Ação */}
-        {actionFeedback && (
-          <div
-            className={cn(
-              "p-3.5 rounded-xl border text-xs flex items-center justify-between gap-3 animate-in fade-in duration-200",
-              actionFeedback.success
-                ? "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/50 text-emerald-800 dark:text-emerald-300"
-                : "bg-rose-50 dark:bg-rose-950/30 border-rose-200 dark:border-rose-900/50 text-rose-800 dark:text-rose-300"
-            )}
-          >
-            <div className="flex items-center gap-2">
-              {actionFeedback.success ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
-              <span>{actionFeedback.text}</span>
+      {/* ========================================================================= */}
+      {/* ABA 2: BOLETINS & COMUNICADOS PARA PAIS / RESPONSÁVEIS */}
+      {/* ========================================================================= */}
+      {activeTab === 'boletins' && (
+        <div className="space-y-6">
+          {/* Barra de Filtros e Seleção */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div className="flex flex-wrap items-center gap-4">
+                {/* Seletor de Turma */}
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Turma:
+                  </label>
+                  <select
+                    value={selectedClassId}
+                    onChange={e => setSelectedClassId(e.target.value)}
+                    className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    {classes.map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Seletor de Unidade */}
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Período / Unidade:
+                  </label>
+                  <select
+                    value={selectedUnit}
+                    onChange={e => setSelectedUnit(Number(e.target.value))}
+                    className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value={1}>1ª Unidade</option>
+                    <option value={2}>2ª Unidade</option>
+                    <option value={3}>3ª Unidade</option>
+                    <option value={4}>4ª Unidade</option>
+                  </select>
+                </div>
+
+                {/* Modelo de Mensagem */}
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Tipo de Comunicado:
+                  </label>
+                  <select
+                    value={reportTemplate}
+                    onChange={e => setReportTemplate(e.target.value as any)}
+                    className="bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-sm font-bold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                  >
+                    <option value="completo">Boletim Completo de Notas</option>
+                    <option value="alerta">Alerta de Desempenho / Recuperação</option>
+                    <option value="parabens">Felicitações por Alto Desempenho</option>
+                    <option value="custom">Aviso Personalizado do Professor</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="text-right">
+                <span className="text-xs font-semibold text-slate-400 block">Total de Alunos</span>
+                <span className="text-lg font-bold text-slate-900 dark:text-white">
+                  {students.length} matriculados
+                </span>
+              </div>
             </div>
-            <button
-              onClick={() => setActionFeedback(null)}
-              className="p-1 hover:opacity-70 transition-opacity"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        )}
 
-        {/* Lista de Mensagens Gravadas */}
-        {isLoadingMessages ? (
-          <div className="py-12 flex flex-col items-center justify-center gap-3 text-slate-400">
-            <RefreshCw size={28} className="animate-spin text-brand-blue" />
-            <p className="text-xs">Carregando mensagens agendadas...</p>
+            {/* Recado Personalizado Opcional */}
+            <div>
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                Recado Adicional do Professor (Anexado a todos os boletins):
+              </label>
+              <input
+                type="text"
+                value={customTeacherNote}
+                onChange={e => setCustomTeacherNote(e.target.value)}
+                placeholder="Ex: Lembrando que o prazo final para entrega dos cadernos da 2ª chamada é sexta-feira."
+                className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-4 py-2 text-xs text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+              />
+            </div>
           </div>
-        ) : filteredMessages.length === 0 ? (
-          <div className="py-14 text-center space-y-2 border-2 border-dashed border-slate-100 dark:border-slate-800 rounded-2xl">
-            <FileText size={32} className="mx-auto text-slate-300 dark:text-slate-700" />
-            <p className="text-sm font-semibold text-slate-600 dark:text-slate-400">
-              Nenhuma mensagem encontrada neste filtro
-            </p>
-            <p className="text-xs text-slate-400 max-w-sm mx-auto">
-              Faça upload de um PDF com o cronograma acima para extrair e agendar os disparos semanais.
-            </p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 gap-4">
-            {filteredMessages.map((msg, index) => {
-              const isDispatching = dispatchingId === msg.id;
 
-              return (
-                <div
-                  key={msg.id}
-                  className="p-5 rounded-2xl bg-white dark:bg-slate-850 border border-slate-200 dark:border-slate-800 hover:shadow-md transition-all space-y-3"
-                >
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex items-center gap-3">
-                      <span className="w-8 h-8 rounded-xl bg-brand-yellow/20 text-brand-blue-dark dark:text-brand-yellow font-bold text-xs flex items-center justify-center shadow-xs">
-                        S{msg.semana_numero}
+          {/* Lista de Alunos e Envio Individual */}
+          {isLoadingStudents ? (
+            <div className="p-12 text-center text-slate-400">
+              <RefreshCw className="animate-spin mx-auto mb-2" size={24} />
+              <p className="text-xs">Carregando alunos e notas da turma...</p>
+            </div>
+          ) : students.length === 0 ? (
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-12 text-center border border-slate-200 dark:border-slate-800">
+              <Users className="mx-auto text-slate-300 dark:text-slate-700 mb-3" size={40} />
+              <h3 className="text-sm font-bold text-slate-900 dark:text-white">Nenhum aluno cadastrado nesta turma</h3>
+              <p className="text-xs text-slate-400 mt-1">Acesse o menu "Turmas" para matricular alunos ou importar a lista.</p>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {students.map(student => {
+                const gradeData = getStudentGradeForUnit(student.id, selectedUnit);
+                const avg = gradeData?.unit_average ?? null;
+                const phone = studentPhones[student.id] || '';
+                const trackingKey = `bulletin-${student.id}-u${selectedUnit}`;
+                const sentDate = getMessageSentDate(trackingKey);
+
+                // Montar texto do boletim
+                const studentMsg = formatStudentReportMessage({
+                  studentName: student.name,
+                  className: currentClass?.name || 'Turma',
+                  periodName: `${selectedUnit}ª Unidade`,
+                  guardianName: student.guardian_name,
+                  grades: gradeData ? {
+                    notebookScore: gradeData.notebook_score,
+                    ankiScore: gradeData.anki_score,
+                    listsAverage: ((Number(gradeData.list1_score) || 0) + (Number(gradeData.list2_score) || 0) + (Number(gradeData.list3_score) || 0)) / 3,
+                    examScore: gradeData.exam_score,
+                    recoveryScore: gradeData.recovery_score,
+                    unitAverage: gradeData.unit_average
+                  } : undefined,
+                  customNote: customTeacherNote
+                });
+
+                return (
+                  <div
+                    key={student.id}
+                    className="bg-white dark:bg-slate-900 rounded-2xl p-4 sm:p-5 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4 transition-all hover:border-slate-300 dark:hover:border-slate-700"
+                  >
+                    {/* Aluno & Média */}
+                    <div className="flex items-center gap-3.5 min-w-[240px]">
+                      <span className="w-8 h-8 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold text-xs flex items-center justify-center shrink-0">
+                        {student.roll_number || '•'}
                       </span>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {student.name}
+                        </h4>
+                        <div className="flex items-center gap-2 mt-0.5">
+                          {avg !== null ? (
+                            <span className={cn(
+                              "text-xs font-bold px-2 py-0.5 rounded-lg",
+                              avg >= 6.0 
+                                ? "bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400" 
+                                : "bg-rose-50 dark:bg-rose-950/60 text-rose-700 dark:text-rose-400"
+                            )}>
+                              Média: {avg.toFixed(1)}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-slate-400">Sem nota lançada</span>
+                          )}
 
-                      <div className="space-y-0.5">
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs font-bold text-slate-800 dark:text-white">
-                            Semana {msg.semana_numero}
-                          </span>
-                          {msg.campaign_title && (
-                            <span className="text-[11px] text-slate-400 truncate max-w-xs">
-                              • {msg.campaign_title}
+                          {sentDate && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                              <CheckCheck size={13} />
+                              Enviado
                             </span>
                           )}
                         </div>
-
-                        <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
-                          <span className="flex items-center gap-1">
-                            <Calendar size={13} className="text-slate-400" />
-                            {msg.data_envio}
-                          </span>
-                          <span className="flex items-center gap-1">
-                            <Clock size={13} className="text-slate-400" />
-                            {msg.horario_envio}
-                          </span>
-                        </div>
                       </div>
                     </div>
 
-                    {/* Status Badge & Ações */}
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "px-2.5 py-1 rounded-full text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5",
-                          msg.status === 'enviado' && "bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300",
-                          msg.status === 'agendado' && "bg-sky-100 text-sky-800 dark:bg-sky-950/60 dark:text-sky-300",
-                          msg.status === 'falha' && "bg-rose-100 text-rose-800 dark:bg-rose-950/60 dark:text-rose-300",
-                          msg.status === 'rascunho' && "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
-                        )}
-                      >
-                        {msg.status === 'enviado' && <CheckCircle2 size={12} />}
-                        {msg.status === 'falha' && <AlertCircle size={12} />}
-                        {msg.status === 'agendado' && <Clock size={12} />}
-                        {msg.status}
-                      </span>
+                    {/* Campo de Telefone do Responsável com salvamento rápido */}
+                    <div className="flex items-center gap-2 w-full md:w-auto">
+                      <div className="relative flex-1 md:w-56">
+                        <Phone className="absolute left-3 top-2.5 text-slate-400" size={14} />
+                        <input
+                          type="text"
+                          value={phone}
+                          placeholder="WhatsApp do Responsável"
+                          onChange={e => {
+                            const val = e.target.value;
+                            setStudentPhones(prev => ({ ...prev, [student.id]: val }));
+                          }}
+                          onBlur={e => handleSaveGuardianPhone(student.id, e.target.value)}
+                          className="w-full pl-8 pr-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                        />
+                      </div>
+                      {savingPhoneId === student.id && (
+                        <RefreshCw className="animate-spin text-emerald-500" size={14} />
+                      )}
+                    </div>
 
-                      {/* Botão Disparar Agora (Teste) */}
+                    {/* Ações de Envio */}
+                    <div className="flex items-center gap-2 self-end md:self-center shrink-0">
                       <button
-                        type="button"
-                        onClick={() => handleDispatchTest(msg)}
-                        disabled={isDispatching}
-                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition-all disabled:opacity-50"
-                        title="Disparar esta mensagem agora no grupo para teste"
+                        onClick={() => copyToClipboard(studentMsg, `bulletin-${student.id}`)}
+                        className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                        title="Copiar Mensagem"
                       >
-                        {isDispatching ? (
-                          <RefreshCw size={13} className="animate-spin" />
-                        ) : (
-                          <Send size={13} />
-                        )}
-                        <span>Disparar Agora (Teste)</span>
+                        {copiedKey === `bulletin-${student.id}` ? <Check size={16} className="text-emerald-500" /> : <Copy size={16} />}
                       </button>
 
-                      {/* Botão Copiar */}
                       <button
-                        type="button"
-                        onClick={() => handleCopyText(msg.mensagem_texto, index + 1000)}
-                        className="p-1.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                        title="Copiar texto para colar no AlgoApp / WhatsApp"
+                        onClick={() => setPreviewModal({
+                          isOpen: true,
+                          title: `Boletim - ${student.name}`,
+                          recipientName: student.name,
+                          recipientPhone: phone,
+                          messageText: studentMsg,
+                          trackingKey
+                        })}
+                        className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                        title="Visualizar Boletim Formatado"
                       >
-                        <Copy size={15} />
+                        <Eye size={16} />
                       </button>
 
-                      {/* Botão Excluir */}
                       <button
-                        type="button"
-                        onClick={() => handleDeleteSaved(msg.id)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 rounded-lg hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
-                        title="Excluir mensagem agendada"
+                        onClick={() => handleSendWhatsApp(phone, studentMsg, trackingKey)}
+                        className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm hover:shadow transition-all"
                       >
-                        <Trash2 size={15} />
+                        <Send size={13} />
+                        <span>Enviar Boletim</span>
                       </button>
                     </div>
                   </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
-                  {/* Prévia da Mensagem */}
-                  <div className="bg-slate-50 dark:bg-slate-900/70 p-3.5 rounded-xl border border-slate-100 dark:border-slate-800 text-xs text-slate-700 dark:text-slate-300 font-mono whitespace-pre-wrap leading-relaxed max-h-36 overflow-y-auto">
-                    {msg.mensagem_texto}
+      {/* ========================================================================= */}
+      {/* ABA 3: GESTÃO RÁPIDA DOS LÍDERES DE SALA */}
+      {/* ========================================================================= */}
+      {activeTab === 'gestao_lideres' && (
+        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-200 dark:border-slate-800 shadow-sm space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 dark:border-slate-800 pb-5">
+            <div>
+              <h2 className="text-lg font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Users size={20} className="text-emerald-500" />
+                Quadro de Líderes das Turmas
+              </h2>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Defina o nome e o WhatsApp do líder de cada sala para que o envio dos estudos seja automático em 1 clique.
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {classes.map(c => {
+              const leader = getClassLeader(c.id, {
+                leader_name: c.leader_name,
+                leader_phone: c.leader_phone
+              });
+
+              return (
+                <div
+                  key={c.id}
+                  className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-850 flex flex-col justify-between gap-4"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold text-sm">
+                        {c.name.substring(0, 2).toUpperCase()}
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {c.name}
+                        </h4>
+                        <span className="text-xs text-slate-400">Ano Letivo: {c.school_year}</span>
+                      </div>
+                    </div>
+
+                    <button
+                      onClick={() => setEditLeaderModal({
+                        isOpen: true,
+                        classId: c.id,
+                        className: c.name,
+                        leaderName: leader.leaderName,
+                        leaderPhone: leader.leaderPhone
+                      })}
+                      className="p-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:text-emerald-600 transition-all"
+                      title="Editar Líder"
+                    >
+                      <Edit3 size={15} />
+                    </button>
                   </div>
 
-                  {msg.last_error && (
-                    <div className="text-[11px] text-rose-600 dark:text-rose-400 bg-rose-50/50 dark:bg-rose-950/20 p-2 rounded-lg flex items-center gap-1.5">
-                      <AlertCircle size={13} className="shrink-0" />
-                      <span>Último erro: {msg.last_error}</span>
-                    </div>
-                  )}
+                  <div className="bg-white dark:bg-slate-800 p-3.5 rounded-xl border border-slate-200/80 dark:border-slate-700 text-xs space-y-1">
+                    <p className="text-slate-400 font-semibold">Líder Representante:</p>
+                    <p className="text-sm font-bold text-slate-900 dark:text-white">
+                      {leader.leaderName || <span className="text-amber-500 font-normal italic">Não cadastrado</span>}
+                    </p>
+                    {leader.leaderPhone ? (
+                      <p className="text-emerald-600 dark:text-emerald-400 font-medium">
+                        📱 {formatPhoneDisplay(leader.leaderPhone)}
+                      </p>
+                    ) : (
+                      <p className="text-slate-400 italic">Sem número de WhatsApp</p>
+                    )}
+                  </div>
 
-                  {msg.sent_at && (
-                    <div className="text-[11px] text-slate-400 flex items-center gap-1">
-                      <CheckCircle2 size={13} className="text-emerald-500" />
-                      <span>Enviado em {new Date(msg.sent_at).toLocaleString('pt-BR')}</span>
-                    </div>
+                  {leader.leaderPhone && (
+                    <button
+                      onClick={() => {
+                        const testMsg = `Olá, *${leader.leaderName || 'Líder'}*! 👋 Aqui é o Professor de Química. Estou testando nosso canal oficial de comunicação para envio dos cronogramas e conteúdos do AlgoApp para a turma ${c.name}.`;
+                        handleSendWhatsApp(leader.leaderPhone, testMsg);
+                      }}
+                      className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-emerald-50 dark:bg-slate-800 dark:hover:bg-emerald-950/40 text-slate-700 hover:text-emerald-700 dark:text-slate-300 dark:hover:text-emerald-400 font-bold text-xs transition-all flex items-center justify-center gap-2 border border-slate-200 dark:border-slate-700"
+                    >
+                      <Send size={13} />
+                      <span>Testar Conversa no WhatsApp</span>
+                    </button>
                   )}
                 </div>
               );
             })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* MODAL: Configurações do WhatsApp (Grupo dos Líderes & Gateway) */}
+      {/* ========================================================================= */}
+      {/* MODAL: PREVIEW DE MENSAGEM COM ENVIO */}
+      {/* ========================================================================= */}
       <AnimatePresence>
-        {isConfigModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
+        {previewModal?.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-lg w-full p-6 sm:p-7 shadow-2xl space-y-6"
+              className="bg-white dark:bg-slate-900 rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
             >
-              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
-                    <Settings size={20} />
-                  </div>
-                  <div>
-                    <h3 className="font-serif font-bold text-slate-800 dark:text-white text-base">
-                      Configurações do WhatsApp
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      Grupo dos líderes e conexão com a Evolution API / Baileys
-                    </p>
-                  </div>
-                </div>
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {previewModal.title}
+                </h3>
                 <button
-                  onClick={() => setIsConfigModalOpen(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
+                  onClick={() => setPreviewModal(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
                 >
-                  <X size={18} />
+                  ✕
                 </button>
               </div>
 
-              <div className="space-y-4 text-xs">
-                {/* JID do Grupo dos Líderes */}
-                <div className="space-y-1.5">
-                  <label className="font-bold text-slate-700 dark:text-slate-300 flex items-center justify-between">
-                    <span>ID do Grupo dos Líderes (Group JID):</span>
-                    <span className="text-[10px] text-slate-400 font-normal">Ex: 120363028391823912@g.us</span>
+              <div className="bg-emerald-50/50 dark:bg-emerald-950/20 p-3 rounded-xl border border-emerald-100 dark:border-emerald-900/50 text-xs">
+                <p className="font-bold text-emerald-800 dark:text-emerald-300">
+                  Destinatário: {previewModal.recipientName}
+                </p>
+                <p className="text-slate-500 dark:text-slate-400">
+                  WhatsApp: {previewModal.recipientPhone ? formatPhoneDisplay(previewModal.recipientPhone) : 'Não informado'}
+                </p>
+              </div>
+
+              <div>
+                <label className="text-[11px] font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                  Texto Exato a ser Enviado:
+                </label>
+                <textarea
+                  readOnly
+                  rows={10}
+                  value={previewModal.messageText}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-2xl p-4 text-xs font-mono text-slate-800 dark:text-slate-200 leading-relaxed focus:outline-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-between gap-3 pt-2">
+                <button
+                  onClick={() => copyToClipboard(previewModal.messageText, 'preview-copy')}
+                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-bold text-xs hover:bg-slate-200 transition-all"
+                >
+                  {copiedKey === 'preview-copy' ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                  <span>Copiar Texto</span>
+                </button>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPreviewModal(null)}
+                    className="px-4 py-2.5 rounded-xl text-slate-500 font-bold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
+                  >
+                    Fechar
+                  </button>
+
+                  <button
+                    onClick={() => {
+                      handleSendWhatsApp(previewModal.recipientPhone, previewModal.messageText, previewModal.trackingKey);
+                      setPreviewModal(null);
+                    }}
+                    className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-all"
+                  >
+                    <Send size={14} />
+                    <span>Abrir no WhatsApp</span>
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* ========================================================================= */}
+      {/* MODAL: EDITAR LÍDER DA TURMA */}
+      {/* ========================================================================= */}
+      <AnimatePresence>
+        {editLeaderModal?.isOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-sm">
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white dark:bg-slate-900 rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 dark:border-slate-800 space-y-4"
+            >
+              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  Líder da Turma: {editLeaderModal.className}
+                </h3>
+                <button
+                  onClick={() => setEditLeaderModal(null)}
+                  className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    Nome Completo do Líder:
                   </label>
                   <input
                     type="text"
-                    value={config.groupJid}
-                    onChange={(e) => setConfig({ ...config, groupJid: e.target.value })}
-                    placeholder="120363028391823912@g.us"
-                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2.5 font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
+                    value={editLeaderModal.leaderName}
+                    onChange={e => setEditLeaderModal({ ...editLeaderModal, leaderName: e.target.value })}
+                    placeholder="Ex: Lucas Silva"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
-                  <p className="text-[11px] text-slate-400">
-                    Todas as mensagens do cronograma serão enviadas unicamente para este grupo.
-                  </p>
                 </div>
 
-                {/* Modo de Simulação */}
-                <div className="p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 flex items-center justify-between gap-3">
-                  <div>
-                    <p className="font-bold text-slate-700 dark:text-slate-200">
-                      Modo Simulado / Teste Seguro
-                    </p>
-                    <p className="text-[11px] text-slate-400">
-                      Simula o disparo com sucesso sem chamar um gateway real (ideal para testar o fluxo).
-                    </p>
-                  </div>
+                <div>
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-1">
+                    WhatsApp com DDD (Somente números ou formatado):
+                  </label>
                   <input
-                    type="checkbox"
-                    checked={config.simulateDispatch}
-                    onChange={(e) => setConfig({ ...config, simulateDispatch: e.target.checked })}
-                    className="w-5 h-5 rounded-md accent-emerald-600 cursor-pointer"
+                    type="text"
+                    value={editLeaderModal.leaderPhone}
+                    onChange={e => setEditLeaderModal({ ...editLeaderModal, leaderPhone: e.target.value })}
+                    placeholder="Ex: (11) 98765-4321"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2 text-sm font-semibold text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500"
                   />
-                </div>
-
-                {/* Evolution API Gateway (Opcional se não simulado) */}
-                <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800">
-                  <p className="font-bold text-slate-700 dark:text-slate-200">
-                    Dados da Evolution API (Disparo Real):
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Exemplo: 11 98765-4321. O código de país (55) é adicionado automaticamente.
                   </p>
-
-                  <div className="space-y-1">
-                    <label className="text-slate-500 font-medium">URL do Servidor Evolution API:</label>
-                    <input
-                      type="text"
-                      value={config.serverUrl || ''}
-                      onChange={(e) => setConfig({ ...config, serverUrl: e.target.value })}
-                      placeholder="https://api.seuservidor.com"
-                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2 font-mono text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1">
-                      <label className="text-slate-500 font-medium">Nome da Instância:</label>
-                      <input
-                        type="text"
-                        value={config.instanceName || ''}
-                        onChange={(e) => setConfig({ ...config, instanceName: e.target.value })}
-                        placeholder="lideres-sala"
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-
-                    <div className="space-y-1">
-                      <label className="text-slate-500 font-medium">API Key (Token):</label>
-                      <input
-                        type="password"
-                        value={config.apiKey || ''}
-                        onChange={(e) => setConfig({ ...config, apiKey: e.target.value })}
-                        placeholder="••••••••••••"
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3.5 py-2 text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                      />
-                    </div>
-                  </div>
                 </div>
               </div>
 
-              <div className="flex items-center justify-end gap-3 border-t border-slate-100 dark:border-slate-800 pt-4">
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
                 <button
-                  type="button"
-                  onClick={() => setIsConfigModalOpen(false)}
-                  className="px-4 py-2 rounded-xl text-slate-500 hover:text-slate-700 dark:hover:text-slate-200 text-xs font-semibold"
+                  onClick={() => setEditLeaderModal(null)}
+                  className="px-4 py-2 rounded-xl text-slate-500 font-bold text-xs hover:bg-slate-100 dark:hover:bg-slate-800 transition-all"
                 >
                   Cancelar
                 </button>
                 <button
-                  type="button"
-                  onClick={handleSaveConfig}
-                  className="px-5 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md shadow-emerald-600/20"
+                  onClick={handleSaveLeader}
+                  className="px-5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-md transition-all"
                 >
-                  Salvar Configurações
+                  Salvar Líder
                 </button>
               </div>
             </motion.div>
@@ -934,81 +1396,15 @@ export default function WhatsappAutomationView() {
         )}
       </AnimatePresence>
 
-      {/* MODAL: Script SQL do Supabase */}
-      <AnimatePresence>
-        {isSqlModalOpen && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-2xl w-full p-6 sm:p-7 shadow-2xl space-y-5"
-            >
-              <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2 rounded-xl bg-sky-500/10 text-sky-600 dark:text-sky-400">
-                    <Code size={20} />
-                  </div>
-                  <div>
-                    <h3 className="font-serif font-bold text-slate-800 dark:text-white text-base">
-                      Script SQL • Supabase
-                    </h3>
-                    <p className="text-xs text-slate-400">
-                      Comando para criar a tabela weekly_study_messages no Supabase SQL Editor
-                    </p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setIsSqlModalOpen(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-
-              <div className="relative">
-                <pre className="bg-slate-950 text-emerald-400 p-4 rounded-2xl text-xs font-mono overflow-x-auto leading-relaxed max-h-72 border border-slate-800">
-                  {SQL_SCHEMA_SNIPPET}
-                </pre>
-
-                <button
-                  type="button"
-                  onClick={handleCopySql}
-                  className="absolute top-3 right-3 flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white text-xs font-semibold transition-all border border-slate-700"
-                >
-                  {copiedSql ? (
-                    <>
-                      <Check size={14} className="text-emerald-400" />
-                      <span>Copiado!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy size={14} />
-                      <span>Copiar SQL</span>
-                    </>
-                  )}
-                </button>
-              </div>
-
-              <div className="text-xs text-slate-500 dark:text-slate-400 space-y-1">
-                <p>
-                  💡 <strong>Nota:</strong> Mesmo se você ainda não executar este script, a aplicação já grava e funciona com persistência automática no navegador.
-                </p>
-              </div>
-
-              <div className="flex justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={() => setIsSqlModalOpen(false)}
-                  className="px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-750 text-slate-700 dark:text-slate-200 font-bold text-xs"
-                >
-                  Fechar
-                </button>
-              </div>
-            </motion.div>
-          </div>
-        )}
-      </AnimatePresence>
+      {/* MODAL GENÉRICO DE FEEDBACK */}
+      <CustomModal
+        isOpen={modal.isOpen}
+        onClose={() => setModal({ ...modal, isOpen: false })}
+        title={modal.title}
+        message={modal.message}
+        type={modal.type}
+        onConfirm={modal.onConfirm}
+      />
     </div>
   );
 }
