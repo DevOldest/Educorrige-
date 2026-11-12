@@ -69,16 +69,18 @@ export default function EnemSimuladoView({
   reviewerName = 'Professor Corretor',
   onExitReviewerMode 
 }: EnemSimuladoViewProps) {
-  // Configurações e dados
-  const [simulation, setSimulation] = useState<EnemSimulation>(getStoredSimulation);
+  // Configurações e dados (individual por corretor se for corretor)
+  const [simulation, setSimulation] = useState<EnemSimulation>(() => getStoredSimulation(isReviewerMode ? reviewerName : undefined));
   const [submissions, setSubmissions] = useState<EnemSubmission[]>(getStoredSubmissions);
   const [classes, setClasses] = useState<Class[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
 
-  // Aba ativa para Administrador ('grading' | 'answer-key' | 'settings' | 'results')
+  // Aba ativa ('grading' | 'answer-key' | 'settings' | 'results')
   const [activeTab, setActiveTab] = useState<'grading' | 'answer-key' | 'settings' | 'results'>('grading');
+  const [quickSequenceInput, setQuickSequenceInput] = useState('');
+  const [showQuickFill, setShowQuickFill] = useState(false);
 
   // Estado da correção atual
   const [selectedClassId, setSelectedClassId] = useState<string>('');
@@ -94,7 +96,7 @@ export default function EnemSimuladoView({
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
 
-  // Edição do gabarito oficial (modo admin)
+  // Edição do gabarito oficial (individual por corretor se for corretor)
   const [editingAnswers, setEditingAnswers] = useState<Record<number, EnemAnswerOption>>(simulation.official_answers);
   const [tempAccessCode, setTempAccessCode] = useState(simulation.access_code);
   const [isCopiedCode, setIsCopiedCode] = useState(false);
@@ -111,18 +113,20 @@ export default function EnemSimuladoView({
   useEffect(() => {
     fetchClasses();
 
+    const targetReviewer = isReviewerMode ? reviewerName : undefined;
+
     // Sincronizar dados do Simulado do Supabase
-    fetchRemoteSimulation().then(sim => {
+    fetchRemoteSimulation(targetReviewer).then(sim => {
       setSimulation(sim);
       setEditingAnswers(sim.official_answers);
       setTempAccessCode(sim.access_code);
 
       // Sincronizar submissões do Supabase
-      fetchRemoteSubmissions(sim.id).then(subs => {
+      fetchRemoteSubmissions(sim.id, targetReviewer).then(subs => {
         setSubmissions(subs);
       });
     });
-  }, []);
+  }, [isReviewerMode, reviewerName]);
 
   // Carregar alunos quando turma for selecionada
   useEffect(() => {
@@ -461,17 +465,51 @@ export default function EnemSimuladoView({
     }
   };
 
-  // Salvar novo Gabarito Oficial
+  // Preenchimento rápido a partir de uma sequência de texto (ex: "ABCDE...")
+  const handleApplyQuickSequence = () => {
+    if (!quickSequenceInput.trim()) return;
+    const cleanLetters = quickSequenceInput
+      .toUpperCase()
+      .replace(/[^ABCDE*]/g, '');
+
+    if (cleanLetters.length === 0) {
+      alert('Nenhuma alternativa válida (A, B, C, D, E) encontrada no texto.');
+      return;
+    }
+
+    const nextAnswers = { ...editingAnswers };
+    for (let i = 0; i < Math.min(cleanLetters.length, 45); i++) {
+      const char = cleanLetters[i];
+      if (['A', 'B', 'C', 'D', 'E'].includes(char)) {
+        nextAnswers[i + 1] = char as EnemAnswerOption;
+      } else if (char === '*') {
+        nextAnswers[i + 1] = 'ANULADA';
+      }
+    }
+
+    setEditingAnswers(nextAnswers);
+    setShowQuickFill(false);
+    setQuickSequenceInput('');
+    setStatusMessage({
+      text: `${Math.min(cleanLetters.length, 45)} questões foram preenchidas a partir da sequência informada! Clique em "Salvar" para confirmar.`,
+      type: 'success'
+    });
+  };
+
+  // Salvar novo Gabarito Oficial (Individual por corretor se for corretor)
   const handleSaveOfficialAnswers = async () => {
+    const targetReviewer = isReviewerMode ? reviewerName : undefined;
     const updatedSim: EnemSimulation = {
       ...simulation,
       official_answers: editingAnswers,
       access_code: tempAccessCode.trim() || DEFAULT_SIMULATION.access_code
     };
     setSimulation(updatedSim);
-    await saveStoredSimulation(updatedSim);
+    await saveStoredSimulation(updatedSim, targetReviewer);
     setStatusMessage({
-      text: 'Gabarito Oficial e Código de Acesso salvos com sucesso no banco de dados!',
+      text: isReviewerMode
+        ? `Seu gabarito pessoal de correção (${reviewerName}) foi salvo com sucesso!`
+        : 'Gabarito Oficial e Código de Acesso salvos com sucesso no banco de dados!',
       type: 'success'
     });
   };
@@ -722,17 +760,52 @@ export default function EnemSimuladoView({
         </div>
 
         <div className="flex items-center gap-3">
-          {isReviewerMode && (
-            <button
-              onClick={onExitReviewerMode}
-              className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 text-sm font-semibold transition-all"
-            >
-              <LogOut size={16} />
-              Sair do Portal
-            </button>
-          )}
+          {isReviewerMode ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
+                <button
+                  onClick={() => setActiveTab('grading')}
+                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                    activeTab === 'grading' 
+                      ? 'bg-brand-blue text-white shadow-md' 
+                      : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
+                  }`}
+                >
+                  Corrigir Cartões
+                </button>
+                <button
+                  onClick={() => setActiveTab('answer-key')}
+                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                    activeTab === 'answer-key' 
+                      ? 'bg-brand-blue text-white shadow-md' 
+                      : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
+                  }`}
+                >
+                  <Key size={13} />
+                  <span>Meu Gabarito</span>
+                </button>
+                <button
+                  onClick={() => setActiveTab('results')}
+                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                    activeTab === 'results' 
+                      ? 'bg-brand-blue text-white shadow-md' 
+                      : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
+                  }`}
+                >
+                  Alunos Corrigidos ({submissions.length})
+                </button>
+              </div>
 
-          {!isReviewerMode && (
+              <button
+                onClick={onExitReviewerMode}
+                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 hover:bg-rose-100 text-xs font-bold transition-all border border-rose-200 dark:border-rose-900"
+                title="Sair do Portal do Corretor"
+              >
+                <LogOut size={14} />
+                <span className="hidden sm:inline">Sair</span>
+              </button>
+            </div>
+          ) : (
             <div className="flex items-center gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
               <button
                 onClick={() => setActiveTab('grading')}
@@ -809,8 +882,32 @@ export default function EnemSimuladoView({
       </div>
 
       {/* ABA 1: TELA DE CORREÇÃO (Disponível para Administrador e para o Corretor) */}
-      {(isReviewerMode || activeTab === 'grading') && (
-        <div className="space-y-8">
+      {activeTab === 'grading' && (
+        <div className="space-y-6">
+          {/* Barra Informativa do Gabarito Ativo */}
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3 bg-blue-50/80 dark:bg-blue-950/40 rounded-2xl border border-blue-200/70 dark:border-blue-900/50 text-xs">
+            <div className="flex items-center gap-2.5">
+              <div className="w-7 h-7 rounded-lg bg-blue-600/10 dark:bg-blue-400/10 text-brand-blue dark:text-brand-yellow flex items-center justify-center shrink-0">
+                <Key size={15} />
+              </div>
+              <div>
+                <span className="text-slate-500 dark:text-slate-400 block text-[11px]">Chave de Correção Utilizada:</span>
+                <span className="font-bold text-slate-800 dark:text-slate-100 text-xs">
+                  {isReviewerMode ? `Gabarito Pessoal de ${reviewerName}` : 'Gabarito Oficial Mestre (Admin)'}
+                </span>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('answer-key')}
+              className="self-start sm:self-center px-3 py-1.5 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-brand-blue dark:text-brand-yellow font-bold text-xs rounded-xl shadow-xs border border-blue-200 dark:border-blue-900 transition-all flex items-center gap-1.5"
+            >
+              <Edit3 size={13} />
+              <span>{isReviewerMode ? 'Ajustar Meu Gabarito Pessoal' : 'Editar Gabarito Mestre'}</span>
+            </button>
+          </div>
+
           {/* Topo: Painel de Correção em 2 Colunas */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             {/* Coluna 1: Seleção de Turma do 3º Ano e Aluno */}
@@ -1142,27 +1239,75 @@ export default function EnemSimuladoView({
         </div>
       )}
 
-      {/* ABA 2: GABARITO OFICIAL (Exclusivo Administrador) */}
-      {!isReviewerMode && activeTab === 'answer-key' && (
+      {/* ABA 2: GABARITO (OFICIAL OU PESSOAL DO CORRETOR) */}
+      {activeTab === 'answer-key' && (
         <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-100 dark:border-slate-800 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-4">
             <div>
+              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-brand-yellow text-xs font-bold uppercase tracking-wider mb-2 border border-blue-200/60 dark:border-blue-900">
+                <Key size={13} />
+                {isReviewerMode ? `Gabarito Pessoal de ${reviewerName}` : 'Gabarito Oficial Master (Administrador)'}
+              </div>
               <h2 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white">
-                Gabarito Oficial do Simulado (45 Questões)
+                {isReviewerMode ? `Seu Gabarito Exclusivo de Correção (45 Questões)` : 'Gabarito Oficial do Simulado (45 Questões)'}
               </h2>
-              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                Defina a resposta correta de cada questão. Esse gabarito será usado por todos os professores durante a correção.
+              <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
+                {isReviewerMode 
+                  ? `Professor(a) ${reviewerName}, este gabarito é individual para você. Suas correções usarão estritamente estas respostas. Suas alterações não afetam outros corretores nem o administrador.`
+                  : 'Defina a resposta correta de cada questão. Esse gabarito mestre serve como base padrão do simulado.'}
               </p>
             </div>
 
-            <button
-              onClick={handleSaveOfficialAnswers}
-              className="py-3 px-6 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-md transition-all"
-            >
-              <Save size={18} />
-              Salvar Gabarito Oficial
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowQuickFill(!showQuickFill)}
+                className="py-3 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition-all border border-slate-200 dark:border-slate-700"
+              >
+                <Sparkles size={16} className="text-brand-yellow" />
+                <span>Colar Sequência (Preencher Rápido)</span>
+              </button>
+
+              <button
+                onClick={handleSaveOfficialAnswers}
+                className="py-3 px-6 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 shadow-md transition-all"
+              >
+                <Save size={18} />
+                <span>{isReviewerMode ? 'Salvar Meu Gabarito Pessoal' : 'Salvar Gabarito Oficial'}</span>
+              </button>
+            </div>
           </div>
+
+          {/* Painel de Preenchimento Rápido (Colar sequência de 45 letras) */}
+          {showQuickFill && (
+            <div className="bg-slate-50 dark:bg-slate-800/60 p-4 rounded-2xl border border-blue-200 dark:border-blue-900/50 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2">
+                  <Sparkles size={14} className="text-brand-yellow" />
+                  Preenchimento Automático por Sequência de Letras
+                </span>
+                <span className="text-[11px] text-slate-400">
+                  Ex: ABCDEEDCBA... (Espaços e quebras de linha são ignorados automaticamente)
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Cole aqui a sequência com as alternativas (ex: A B C D E...)"
+                  value={quickSequenceInput}
+                  onChange={(e) => setQuickSequenceInput(e.target.value)}
+                  className="flex-1 p-2.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-mono uppercase tracking-widest text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-blue"
+                />
+                <button
+                  type="button"
+                  onClick={handleApplyQuickSequence}
+                  className="px-4 py-2 bg-brand-yellow hover:bg-amber-400 text-brand-blue-dark font-bold text-xs rounded-xl shadow-sm transition-all"
+                >
+                  Aplicar às 45 Questões
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Matriz de edição do gabarito oficial */}
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -1229,16 +1374,18 @@ export default function EnemSimuladoView({
         </div>
       )}
 
-      {/* ABA 3: RESULTADOS GERAIS E RELATÓRIO (Exclusivo Administrador) */}
-      {!isReviewerMode && activeTab === 'results' && (
+      {/* ABA 3: RESULTADOS GERAIS E RELATÓRIO */}
+      {activeTab === 'results' && (
         <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-100 dark:border-slate-800 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-4">
             <div>
               <h2 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white">
-                Relatório Geral do Simulado ENEM
+                {isReviewerMode ? `Alunos Corrigidos por ${reviewerName}` : 'Relatório Geral do Simulado ENEM'}
               </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                Acompanhe o desempenho de todos os alunos e exporte os dados consolidados.
+                {isReviewerMode 
+                  ? 'Acompanhe as notas dos alunos que você corrigiu, verifique gabaritos ou audite marcações.' 
+                  : 'Acompanhe o desempenho de todos os alunos e exporte os dados consolidados.'}
               </p>
             </div>
 
