@@ -331,32 +331,46 @@ REGRAS:
 4. MARCAÇÃO ÚNICA: Se o aluno marcou claramente apenas uma alternativa, coloque a respectiva letra maiúscula: "A", "B", "C", "D" ou "E".
 5. Preencha todas as 45 questões (de 1 a 45).`;
 
-  try {
-    const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
+  const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
 
-    const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: cleanBase64
+  const executeWithRetry = async (attempt: number = 0): Promise<string> => {
+    try {
+      const response = await ai.models.generateContent({
+        model: GEMINI_MODEL,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              { text: prompt },
+              {
+                inlineData: {
+                  mimeType: 'image/jpeg',
+                  data: cleanBase64
+                }
               }
-            }
-          ]
+            ]
+          }
+        ],
+        config: {
+          temperature: 0.1,
+          responseMimeType: 'application/json'
         }
-      ],
-      config: {
-        temperature: 0.1,
-        responseMimeType: 'application/json'
+      });
+      return response.text || '{}';
+    } catch (err: any) {
+      const isQuotaOrOverload = err.message?.includes('503') || err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
+      if (isQuotaOrOverload && attempt < 3) {
+        const jitter = Math.floor(Math.random() * 600);
+        const waitTime = Math.pow(1.6, attempt + 1) * 750 + jitter;
+        await new Promise(r => setTimeout(r, waitTime));
+        return executeWithRetry(attempt + 1);
       }
-    });
+      throw err;
+    }
+  };
 
-    const text = response.text || '{}';
+  try {
+    const text = await executeWithRetry();
     const parsed = JSON.parse(text);
     const answers: Record<number, EnemAnswerOption> = {};
 

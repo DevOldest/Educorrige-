@@ -2,86 +2,384 @@ import { ai, GEMINI_MODEL } from './gemini';
 import { supabase } from './supabase';
 import { WeeklyStudyMessage, ExtractedCampaign, WeeklyMessageStatus } from '../types';
 
-export interface WhatsAppConfig {
-  groupJid: string; // Ex: 120363028391823912@g.us (Grupo dos Líderes)
-  serverUrl?: string; // Ex: https://api.meuservidor.com
-  instanceName?: string; // Ex: lideres-sala
-  apiKey?: string; // API Key da Evolution API
-  simulateDispatch?: boolean; // Modo teste simulado
-}
-
 const LOCAL_STORAGE_KEY = 'algoapp_weekly_study_messages';
-const CONFIG_STORAGE_KEY = 'algoapp_whatsapp_config';
-
-export const DEFAULT_WHATSAPP_CONFIG: WhatsAppConfig = {
-  groupJid: '120363028391823912@g.us',
-  serverUrl: '',
-  instanceName: 'quimica-lideres',
-  apiKey: '',
-  simulateDispatch: true
-};
-
-export const SQL_SCHEMA_SNIPPET = `-- Execute este comando no SQL Editor do Supabase se desejar criar a tabela agora:
-CREATE TABLE IF NOT EXISTS weekly_study_messages (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  semana_numero INTEGER NOT NULL,
-  data_envio DATE NOT NULL,
-  horario_envio TIME NOT NULL DEFAULT '08:00',
-  mensagem_texto TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'agendado', -- 'rascunho', 'agendado', 'enviado', 'falha'
-  campaign_title TEXT,
-  whatsapp_group_jid TEXT,
-  sent_at TIMESTAMPTZ,
-  last_error TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
-);
-
--- Habilitar RLS e permitir operações
-ALTER TABLE weekly_study_messages ENABLE ROW LEVEL SECURITY;
-CREATE POLICY "Acesso total weekly_study_messages" 
-  ON weekly_study_messages FOR ALL 
-  TO public 
-  USING (true) 
-  WITH CHECK (true);
-`;
+const CLASS_LEADERS_KEY = 'algoapp_class_leaders';
+const STUDENT_GUARDIANS_KEY = 'algoapp_student_guardians';
+const SENT_HISTORY_KEY = 'algoapp_whatsapp_sent_history';
 
 /**
- * Lê as configurações salvas do WhatsApp
+ * Normaliza e sanitiza número de telefone para o padrão WhatsApp internacional.
+ * Ex: "(11) 98765-4321" -> "5511987654321"
  */
-export function getSavedWhatsAppConfig(): WhatsAppConfig {
-  if (typeof window === 'undefined') return DEFAULT_WHATSAPP_CONFIG;
+export function cleanPhoneNumber(phone: string): string {
+  if (!phone) return '';
+  const digits = phone.replace(/\D/g, '');
+  if (!digits) return '';
+
+  // Se tem 10 ou 11 dígitos (DDD + número brasileiro sem DDI), adiciona 55
+  if (digits.length === 10 || digits.length === 11) {
+    return `55${digits}`;
+  }
+
+  // Se já tem 12 ou 13 dígitos e começa com 55
+  return digits;
+}
+
+/**
+ * Formata um número para exibição amigável em inputs e cartões
+ * Ex: "5511987654321" ou "11987654321" -> "(11) 98765-4321"
+ */
+export function formatPhoneDisplay(phone: string): string {
+  if (!phone) return '';
+  let digits = phone.replace(/\D/g, '');
+  if (digits.startsWith('55') && digits.length >= 12) {
+    digits = digits.slice(2);
+  }
+
+  if (digits.length <= 2) return digits;
+  if (digits.length <= 6) return `(${digits.slice(0, 2)}) ${digits.slice(2)}`;
+  if (digits.length <= 10) return `(${digits.slice(0, 2)}) ${digits.slice(2, 6)}-${digits.slice(6)}`;
+  return `(${digits.slice(0, 2)}) ${digits.slice(2, 7)}-${digits.slice(7, 11)}`;
+}
+
+/**
+ * Gera o link direto oficial do WhatsApp (Click-to-Chat wa.me)
+ */
+export function generateWhatsAppUrl(phone: string, text: string): string {
+  const clean = cleanPhoneNumber(phone);
+  const encoded = encodeURIComponent(text);
+  if (!clean) {
+    return `https://wa.me/?text=${encoded}`;
+  }
+  return `https://wa.me/${clean}?text=${encoded}`;
+}
+
+/**
+ * Abre o WhatsApp em nova aba ou aplicativo nativo do celular
+ */
+export function openWhatsAppChat(phone: string, text: string): boolean {
+  if (typeof window === 'undefined') return false;
+  const url = generateWhatsAppUrl(phone, text);
+  window.open(url, '_blank', 'noopener,noreferrer');
+  return true;
+}
+
+/**
+ * Obtém dados do líder da turma (LocalStorage com fallback para campos da turma)
+ */
+export function getClassLeader(classId: string, fallback?: { leader_name?: string; leader_phone?: string }): { leaderName: string; leaderPhone: string } {
+  if (typeof window === 'undefined') {
+    return {
+      leaderName: fallback?.leader_name || '',
+      leaderPhone: fallback?.leader_phone || ''
+    };
+  }
+
   try {
-    const raw = localStorage.getItem(CONFIG_STORAGE_KEY);
+    const raw = localStorage.getItem(CLASS_LEADERS_KEY);
     if (raw) {
-      return { ...DEFAULT_WHATSAPP_CONFIG, ...JSON.parse(raw) };
+      const map = JSON.parse(raw);
+      if (map && map[classId]) {
+        return {
+          leaderName: map[classId].leaderName || fallback?.leader_name || '',
+          leaderPhone: map[classId].leaderPhone || fallback?.leader_phone || ''
+        };
+      }
     }
   } catch (e) {
-    console.warn('Erro ao ler config do WhatsApp:', e);
+    console.warn('Erro ao ler líder do localStorage:', e);
   }
-  return DEFAULT_WHATSAPP_CONFIG;
+
+  return {
+    leaderName: fallback?.leader_name || '',
+    leaderPhone: fallback?.leader_phone || ''
+  };
 }
 
 /**
- * Salva as configurações do WhatsApp
+ * Salva informações do líder da turma (no LocalStorage e tenta sincronizar no Supabase)
  */
-export function saveWhatsAppConfig(config: WhatsAppConfig): void {
+export async function saveClassLeader(classId: string, leaderName: string, leaderPhone: string): Promise<void> {
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(CLASS_LEADERS_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      map[classId] = { leaderName: leaderName.trim(), leaderPhone: leaderPhone.trim() };
+      localStorage.setItem(CLASS_LEADERS_KEY, JSON.stringify(map));
+    } catch (e) {
+      console.error('Erro ao salvar líder localmente:', e);
+    }
+  }
+
+  // Tenta sincronizar com o Supabase de forma segura
+  if (supabase) {
+    try {
+      await supabase
+        .from('classes')
+        .update({
+          leader_name: leaderName.trim(),
+          leader_phone: leaderPhone.trim()
+        } as any)
+        .eq('id', classId);
+    } catch (e) {
+      // Ignora se as colunas ainda não existirem no schema do banco
+    }
+  }
+}
+
+/**
+ * Obtém contato do responsável pelo aluno
+ */
+export function getStudentGuardian(studentId: string, fallback?: { guardian_name?: string; guardian_phone?: string }): { guardianName: string; guardianPhone: string } {
+  if (typeof window === 'undefined') {
+    return {
+      guardianName: fallback?.guardian_name || '',
+      guardianPhone: fallback?.guardian_phone || ''
+    };
+  }
+
+  try {
+    const raw = localStorage.getItem(STUDENT_GUARDIANS_KEY);
+    if (raw) {
+      const map = JSON.parse(raw);
+      if (map && map[studentId]) {
+        return {
+          guardianName: map[studentId].guardianName || fallback?.guardian_name || '',
+          guardianPhone: map[studentId].guardianPhone || fallback?.guardian_phone || ''
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Erro ao ler responsável do localStorage:', e);
+  }
+
+  return {
+    guardianName: fallback?.guardian_name || '',
+    guardianPhone: fallback?.guardian_phone || ''
+  };
+}
+
+/**
+ * Salva contato do responsável pelo aluno
+ */
+export async function saveStudentGuardian(studentId: string, guardianName: string, guardianPhone: string): Promise<void> {
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(STUDENT_GUARDIANS_KEY);
+      const map = raw ? JSON.parse(raw) : {};
+      map[studentId] = { guardianName: guardianName.trim(), guardianPhone: guardianPhone.trim() };
+      localStorage.setItem(STUDENT_GUARDIANS_KEY, JSON.stringify(map));
+    } catch (e) {
+      console.error('Erro ao salvar responsável localmente:', e);
+    }
+  }
+
+  // Tenta sincronizar com o Supabase de forma segura
+  if (supabase) {
+    try {
+      await supabase
+        .from('students')
+        .update({
+          guardian_name: guardianName.trim(),
+          guardian_phone: guardianPhone.trim()
+        } as any)
+        .eq('id', studentId);
+    } catch (e) {
+      // Ignora se as colunas ainda não existirem no schema
+    }
+  }
+}
+
+/**
+ * Registra histórico de envio para controle visual do professor
+ */
+export function recordMessageSent(key: string): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(CONFIG_STORAGE_KEY, JSON.stringify(config));
+    const raw = localStorage.getItem(SENT_HISTORY_KEY);
+    const history = raw ? JSON.parse(raw) : {};
+    history[key] = new Date().toISOString();
+    localStorage.setItem(SENT_HISTORY_KEY, JSON.stringify(history));
   } catch (e) {
-    console.warn('Erro ao salvar config do WhatsApp:', e);
+    console.warn('Erro ao gravar histórico de envio:', e);
   }
 }
 
 /**
- * Converte um arquivo PDF para Base64 puro (sem prefixo data:application/pdf;base64,)
+ * Verifica quando uma mensagem foi enviada (ou null se nunca enviada)
  */
+export function getMessageSentDate(key: string): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(SENT_HISTORY_KEY);
+    if (raw) {
+      const history = JSON.parse(raw);
+      return history[key] || null;
+    }
+  } catch (e) {
+    return null;
+  }
+  return null;
+}
+
+// ==========================================
+// FORMATAÇÃO DE MENSAGENS PARA WHATSAPP
+// ==========================================
+
+export function formatLeaderStudyMessage(options: {
+  className: string;
+  leaderName?: string;
+  semanaNumero?: number;
+  dataEnvio?: string;
+  horarioEnvio?: string;
+  studyText: string;
+  teacherName?: string;
+}): string {
+  const leaderGreeting = options.leaderName?.trim() 
+    ? `Olá, *${options.leaderName.trim()}*! 👋` 
+    : `Olá, *Líder da Turma*! 👋`;
+
+  let formattedDate = '';
+  if (options.dataEnvio) {
+    try {
+      const parts = options.dataEnvio.split('-');
+      if (parts.length === 3) {
+        formattedDate = `${parts[2]}/${parts[1]}/${parts[0]}`;
+      }
+    } catch {
+      formattedDate = options.dataEnvio;
+    }
+  }
+
+  return [
+    `*📚 ROTEIRO PEDAGÓGICO DE QUÍMICA*`,
+    `*Turma:* ${options.className}`,
+    options.semanaNumero ? `*Semana:* ${options.semanaNumero}` : '',
+    formattedDate ? `*Previsão de Envio:* ${formattedDate}${options.horarioEnvio ? ` às ${options.horarioEnvio}` : ''}` : '',
+    ``,
+    leaderGreeting,
+    `Por favor, compartilhe com todos os colegas no *grupo oficial da turma* o roteiro de estudos e repetição espaçada desta semana:`,
+    ``,
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    options.studyText.trim(),
+    `━━━━━━━━━━━━━━━━━━━━━━`,
+    ``,
+    `💡 *Dica importante para os alunos:*`,
+    `Copiem o bloco de texto acima e colem diretamente no aplicativo *AlgoApp / Anki* para praticar suas repetições espaçadas e fixar os conteúdos!`,
+    ``,
+    `_Bons estudos a todos!_ 🧪`,
+    options.teacherName ? `_${options.teacherName}_` : `_Professor(a) de Química_`
+  ].filter(line => line !== null && line !== undefined).join('\n');
+}
+
+export function formatStudentReportMessage(options: {
+  studentName: string;
+  className: string;
+  periodName: string;
+  guardianName?: string;
+  grades?: {
+    notebookScore?: number | null;
+    ankiScore?: number | null;
+    listsAverage?: number | null;
+    examScore?: number | null;
+    recoveryScore?: number | null;
+    unitAverage?: number | null;
+  };
+  customNote?: string;
+  teacherName?: string;
+}): string {
+  const greeting = options.guardianName?.trim()
+    ? `Olá, *${options.guardianName.trim()}*! 👋`
+    : `Olá, responsável! 👋`;
+
+  const lines: string[] = [
+    `*📊 BOLETIM DE DESEMPENHO - QUÍMICA*`,
+    `*Aluno(a):* ${options.studentName}`,
+    `*Turma:* ${options.className}`,
+    `*Período:* ${options.periodName}`,
+    ``,
+    greeting,
+    `Segue o acompanhamento de rendimento pedagógico do(a) estudante nas atividades e avaliações:`,
+    ``
+  ];
+
+  if (options.grades) {
+    const g = options.grades;
+    lines.push(`📝 *Detalhamento das Notas:*`);
+    if (g.notebookScore !== undefined && g.notebookScore !== null) {
+      lines.push(`• Vistos de Caderno: *${g.notebookScore.toFixed(1)}*`);
+    }
+    if (g.ankiScore !== undefined && g.ankiScore !== null) {
+      lines.push(`• AlgoApp / Anki (Repetição): *${g.ankiScore.toFixed(1)}*`);
+    }
+    if (g.listsAverage !== undefined && g.listsAverage !== null) {
+      lines.push(`• Listas de Exercícios: *${g.listsAverage.toFixed(1)}*`);
+    }
+    if (g.examScore !== undefined && g.examScore !== null) {
+      lines.push(`• Avaliação Oficial: *${g.examScore.toFixed(1)}*`);
+    }
+    if (g.recoveryScore !== undefined && g.recoveryScore !== null && g.recoveryScore > 0) {
+      lines.push(`• Recuperação: *${g.recoveryScore.toFixed(1)}*`);
+    }
+
+    if (g.unitAverage !== undefined && g.unitAverage !== null) {
+      lines.push(``);
+      lines.push(`🎯 *MÉDIA DA UNIDADE: ${g.unitAverage.toFixed(1)}*`);
+      const statusText = g.unitAverage >= 6.0 ? '✅ Aprovado(a) / Desempenho Adequado' : '⚠️ Atenção / Necessita Reforço Pedagógico';
+      lines.push(`📌 *Situação:* ${statusText}`);
+    }
+    lines.push(``);
+  }
+
+  if (options.customNote?.trim()) {
+    lines.push(`💬 *Observação do Professor:*`);
+    lines.push(`${options.customNote.trim()}`);
+    lines.push(``);
+  }
+
+  lines.push(`_Em caso de dúvidas ou necessidade de orientação pedagógica, permaneço à disposição!_ 🔬`);
+  if (options.teacherName) {
+    lines.push(`_${options.teacherName}_`);
+  } else {
+    lines.push(`_Professor(a) de Química_`);
+  }
+
+  return lines.join('\n');
+}
+
+export function formatGeneralNoticeMessage(options: {
+  title: string;
+  message: string;
+  recipientName?: string;
+  className?: string;
+  teacherName?: string;
+}): string {
+  const greeting = options.recipientName?.trim()
+    ? `Olá, *${options.recipientName.trim()}*! 👋`
+    : `Olá! 👋`;
+
+  return [
+    `*📢 COMUNICADO PEDAGÓGICO - QUÍMICA*`,
+    options.className ? `*Turma:* ${options.className}` : '',
+    `*Assunto:* ${options.title}`,
+    ``,
+    greeting,
+    options.message.trim(),
+    ``,
+    `_Qualquer dúvida, estou à disposição._`,
+    options.teacherName ? `_${options.teacherName}_` : `_Professor(a) de Química_`
+  ].filter(line => line !== '').join('\n');
+}
+
+// ==========================================
+// EXTRAÇÃO DE PDF VIA GEMINI
+// ==========================================
+
 export function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       const result = reader.result as string;
-      // Remove o prefixo se existir
       const base64 = result.includes(',') ? result.split(',')[1] : result;
       resolve(base64);
     };
@@ -90,12 +388,9 @@ export function fileToBase64(file: File): Promise<string> {
   });
 }
 
-/**
- * Extrai dinamicamente N semanas/mensagens do PDF via Gemini API
- */
 export async function extractStudyScheduleFromPdf(file: File): Promise<ExtractedCampaign> {
   if (!ai) {
-    throw new Error('Chave da API Gemini não configurada (VITE_GEMINI_API_KEY). Verifique as variáveis de ambiente.');
+    throw new Error('Chave da API Gemini não configurada.');
   }
 
   const base64Data = await fileToBase64(file);
@@ -156,7 +451,6 @@ Responda OBRIGATORIAMENTE em JSON válido com esta estrutura exata:
       throw new Error('A IA retornou uma resposta vazia.');
     }
 
-    // Tentar localizar e parsear o bloco JSON
     let parsed: any;
     try {
       parsed = JSON.parse(responseText);
@@ -173,7 +467,6 @@ Responda OBRIGATORIAMENTE em JSON válido com esta estrutura exata:
       throw new Error('Estrutura de dados retornada não contém a lista de mensagens.');
     }
 
-    // Normalização e sanitização
     const sanitizedMessages = parsed.messages.map((m: any, idx: number) => ({
       semana_numero: Number(m.semana_numero) || (idx + 1),
       data_envio: typeof m.data_envio === 'string' && m.data_envio.includes('-') 
@@ -193,13 +486,18 @@ Responda OBRIGATORIAMENTE em JSON válido com esta estrutura exata:
     };
   } catch (error: any) {
     console.error('Erro na extração de PDF via Gemini:', error);
-    throw new Error(error.message || 'Falha ao processar o arquivo PDF com a IA.');
+    // Erro de cota / créditos esgotados
+    if (error?.message?.includes('402') || error?.message?.includes('RESOURCE_EXHAUSTED') || error?.message?.includes('depleted')) {
+      throw new Error('Créditos da chave Gemini esgotados. Você pode digitar ou colar o cronograma diretamente abaixo sem precisar da IA!');
+    }
+    throw new Error(error.message || 'Falha ao processar o arquivo PDF.');
   }
 }
 
-/**
- * Busca todas as mensagens salvas (Supabase com fallback para LocalStorage)
- */
+// ==========================================
+// PERSISTÊNCIA DE CRONOGRAMA DE SEMANAS
+// ==========================================
+
 export async function fetchWeeklyStudyMessages(): Promise<{ data: WeeklyStudyMessage[]; source: 'supabase' | 'local' }> {
   if (supabase) {
     try {
@@ -209,7 +507,6 @@ export async function fetchWeeklyStudyMessages(): Promise<{ data: WeeklyStudyMes
         .order('semana_numero', { ascending: true });
 
       if (!error && data) {
-        // Atualiza cache local
         if (typeof window !== 'undefined') {
           localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(data));
         }
@@ -220,7 +517,6 @@ export async function fetchWeeklyStudyMessages(): Promise<{ data: WeeklyStudyMes
     }
   }
 
-  // Fallback LocalStorage
   if (typeof window !== 'undefined') {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
     if (raw) {
@@ -236,13 +532,10 @@ export async function fetchWeeklyStudyMessages(): Promise<{ data: WeeklyStudyMes
   return { data: [], source: 'local' };
 }
 
-/**
- * Grava N mensagens agendadas na tabela weekly_study_messages
- */
 export async function saveWeeklyStudyMessages(
   messages: Array<Omit<WeeklyStudyMessage, 'id' | 'created_at'>>,
   campaignTitle: string,
-  groupJid: string
+  groupJid?: string
 ): Promise<{ count: number; source: 'supabase' | 'local' }> {
   const preparedRecords: WeeklyStudyMessage[] = messages.map(m => ({
     id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : `msg-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
@@ -252,7 +545,7 @@ export async function saveWeeklyStudyMessages(
     mensagem_texto: m.mensagem_texto,
     status: (m.status || 'agendado') as WeeklyMessageStatus,
     campaign_title: campaignTitle,
-    whatsapp_group_jid: groupJid,
+    whatsapp_group_jid: groupJid || 'lideres-sala',
     sent_at: m.sent_at || null,
     last_error: m.last_error || null,
     created_at: new Date().toISOString()
@@ -268,15 +561,12 @@ export async function saveWeeklyStudyMessages(
 
       if (!error) {
         savedInSupabase = true;
-      } else {
-        console.warn('Erro ao inserir no Supabase (possível ausência da tabela):', error);
       }
     } catch (e) {
-      console.warn('Falha na conexão com Supabase:', e);
+      console.warn('Falha na gravação do Supabase:', e);
     }
   }
 
-  // Sempre sincroniza com LocalStorage para garantir persistência contínua
   if (typeof window !== 'undefined') {
     try {
       const existingRaw = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -294,9 +584,6 @@ export async function saveWeeklyStudyMessages(
   };
 }
 
-/**
- * Atualiza uma mensagem específica (ex: após edição manual ou alteração de status)
- */
 export async function updateWeeklyStudyMessage(
   id: string,
   updates: Partial<WeeklyStudyMessage>
@@ -315,7 +602,6 @@ export async function updateWeeklyStudyMessage(
     }
   }
 
-  // Atualiza LocalStorage
   if (typeof window !== 'undefined') {
     try {
       const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
@@ -332,9 +618,6 @@ export async function updateWeeklyStudyMessage(
   return updatedInSupabase;
 }
 
-/**
- * Deleta uma mensagem do cronograma
- */
 export async function deleteWeeklyStudyMessage(id: string): Promise<boolean> {
   if (supabase) {
     try {
@@ -358,96 +641,4 @@ export async function deleteWeeklyStudyMessage(id: string): Promise<boolean> {
   }
 
   return true;
-}
-
-/**
- * Dispara uma mensagem imediatamente via WhatsApp Gateway (Evolution API / Baileys)
- * ou realiza um disparo simulado com registro de log
- */
-export async function dispatchWhatsAppMessage(
-  message: WeeklyStudyMessage,
-  config: WhatsAppConfig
-): Promise<{ success: boolean; messageId?: string; error?: string }> {
-  const targetJid = message.whatsapp_group_jid || config.groupJid;
-
-  if (!targetJid) {
-    const err = 'JID do grupo do WhatsApp não configurado.';
-    await updateWeeklyStudyMessage(message.id, { status: 'falha', last_error: err });
-    return { success: false, error: err };
-  }
-
-  // Se estiver em modo simulado ou se a URL não tiver sido configurada
-  if (config.simulateDispatch || !config.serverUrl) {
-    await new Promise(res => setTimeout(res, 800)); // Pequeno delay realista
-    const mockId = `WATP-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
-    const nowIso = new Date().toISOString();
-
-    await updateWeeklyStudyMessage(message.id, {
-      status: 'enviado',
-      sent_at: nowIso,
-      last_error: null
-    });
-
-    return {
-      success: true,
-      messageId: mockId
-    };
-  }
-
-  // Disparo Real via Evolution API
-  try {
-    const cleanServerUrl = config.serverUrl.replace(/\/$/, '');
-    const instance = config.instanceName || 'quimica-lideres';
-    const endpoint = `${cleanServerUrl}/message/sendText/${instance}`;
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (config.apiKey) {
-      headers['apikey'] = config.apiKey;
-    }
-
-    const payload = {
-      number: targetJid,
-      text: message.mensagem_texto,
-      options: {
-        delay: 1200,
-        presence: 'composing',
-        linkPreview: false
-      }
-    };
-
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const errText = await response.text();
-      throw new Error(`Evolution API retornou status ${response.status}: ${errText}`);
-    }
-
-    const data = await response.json();
-    const messageId = data?.key?.id || data?.id || `EVO-${Date.now()}`;
-    const nowIso = new Date().toISOString();
-
-    await updateWeeklyStudyMessage(message.id, {
-      status: 'enviado',
-      sent_at: nowIso,
-      last_error: null
-    });
-
-    return { success: true, messageId };
-  } catch (error: any) {
-    console.error('Falha no envio da mensagem via WhatsApp:', error);
-    const errorMsg = error.message || 'Erro desconhecido ao comunicar com a Evolution API.';
-
-    await updateWeeklyStudyMessage(message.id, {
-      status: 'falha',
-      last_error: errorMsg
-    });
-
-    return { success: false, error: errorMsg };
-  }
 }

@@ -18,7 +18,7 @@ const getApiKey = () => {
 
 const apiKey = getApiKey();
 
-// Use standard stable model with explicit prefix
-export const GEMINI_MODEL = "gemini-3-flash-preview";
+// Use standard high-throughput stable Flash model
+export const GEMINI_MODEL = "gemini-3.8-flash";
 
 export const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
