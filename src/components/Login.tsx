@@ -1,15 +1,16 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { LogIn, Loader2, GraduationCap, AlertCircle, Key, FileCheck } from 'lucide-react';
 import { motion } from 'motion/react';
-import { supabase } from '../lib/supabase';
-import { getStoredSimulation } from '../lib/enemService';
+import { supabase, clearSupabaseAuthStorage } from '../lib/supabase';
+import { getStoredSimulation, fetchRemoteSimulation } from '../lib/enemService';
 
 interface LoginProps {
   onLogin: () => void;
   onReviewerLogin: (reviewerName: string) => void;
+  sessionNotice?: string | null;
 }
 
-export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
+export default function Login({ onLogin, onReviewerLogin, sessionNotice }: LoginProps) {
   const [mode, setMode] = useState<'admin' | 'reviewer'>('admin');
   
   // Login Titular
@@ -28,6 +29,10 @@ export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
   });
   const [accessCode, setAccessCode] = useState('');
   const [reviewerError, setReviewerError] = useState<string | null>(null);
+
+  useEffect(() => {
+    fetchRemoteSimulation().catch(() => {});
+  }, []);
 
   const handleAdminLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -65,6 +70,7 @@ export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
   };
 
   const handleDemoLogin = () => {
+    clearSupabaseAuthStorage();
     const demoSession = {
       user: {
         id: 'prof-titular-demo',
@@ -77,7 +83,7 @@ export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
     onLogin();
   };
 
-  const handleReviewerLogin = (e: React.FormEvent) => {
+  const handleReviewerLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setReviewerError(null);
 
@@ -86,9 +92,14 @@ export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
       return;
     }
 
-    const currentSim = getStoredSimulation();
+    let currentSim = getStoredSimulation();
     const enteredCode = accessCode.trim().toUpperCase();
-    const validCode = (currentSim.access_code || 'ENEM2026').trim().toUpperCase();
+    let validCode = (currentSim.access_code || 'ENEM2026').trim().toUpperCase();
+
+    if (enteredCode !== validCode) {
+      currentSim = await fetchRemoteSimulation();
+      validCode = (currentSim.access_code || 'ENEM2026').trim().toUpperCase();
+    }
 
     if (enteredCode !== validCode) {
       setReviewerError('Código de acesso inválido. Peça o código correto ao professor coordenador.');
@@ -147,6 +158,13 @@ export default function Login({ onLogin, onReviewerLogin }: LoginProps) {
         {mode === 'admin' ? (
           /* Formulário do Professor Titular (Login tradicional) */
           <form onSubmit={handleAdminLogin} className="p-8 space-y-6">
+            {sessionNotice && !error && (
+              <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-300 rounded-2xl text-sm flex items-start gap-3">
+                <AlertCircle size={20} className="shrink-0 mt-0.5" />
+                <span>{sessionNotice}</span>
+              </div>
+            )}
+
             {error && (
               <div className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-900 text-red-600 dark:text-red-400 rounded-2xl text-sm space-y-3">
                 <div className="flex items-start gap-3">
