@@ -145,6 +145,11 @@ export default function GradingView() {
     slotIndex: number;
   } | null>(null);
 
+  // Controle de Fila de Correção da Turma (Ordem Alfabética: Pendentes vs Corrigidos)
+  const [classAssessmentResults, setClassAssessmentResults] = useState<Record<string, any>>({});
+  const [queueFilter, setQueueFilter] = useState<'all' | 'pending' | 'done'>('all');
+  const [isLoadingQueue, setIsLoadingQueue] = useState(false);
+
   // Modal de Câmera Ao Vivo
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const [activeCameraSlotId, setActiveCameraSlotId] = useState<string | null>(null);
@@ -176,8 +181,44 @@ export default function GradingView() {
       fetchStudents(selectedClassId);
     } else {
       setStudents([]);
+      setClassAssessmentResults({});
     }
   }, [selectedClassId]);
+
+  useEffect(() => {
+    fetchClassAssessmentResults();
+  }, [selectedClassId, selectedAssessmentId, students]);
+
+  async function fetchClassAssessmentResults() {
+    if (!supabase || !selectedClassId || !selectedAssessmentId || students.length === 0) {
+      setClassAssessmentResults({});
+      return;
+    }
+    setIsLoadingQueue(true);
+    try {
+      const studentIds = students.map(s => s.id);
+      const { data, error } = await supabase
+        .from('assessment_results')
+        .select('*')
+        .eq('assessment_id', selectedAssessmentId)
+        .in('student_id', studentIds)
+        .order('created_at', { ascending: false });
+
+      if (!error && data) {
+        const byStudent: Record<string, any> = {};
+        for (const row of data) {
+          if (!byStudent[row.student_id]) {
+            byStudent[row.student_id] = row;
+          }
+        }
+        setClassAssessmentResults(byStudent);
+      }
+    } catch (err) {
+      console.warn('Erro ao carregar fila de correções da turma:', err);
+    } finally {
+      setIsLoadingQueue(false);
+    }
+  }
 
   async function fetchInitialData() {
     if (!supabase) return;
@@ -208,13 +249,10 @@ export default function GradingView() {
         .eq('class_id', classId)
         .order('name');
       if (data) {
-        // Ordenar por roll_number e nome
-        const sorted = [...data].sort((a, b) => {
-          if (a.roll_number && b.roll_number) return a.roll_number - b.roll_number;
-          if (a.roll_number) return -1;
-          if (b.roll_number) return 1;
-          return a.name.localeCompare(b.name, 'pt-BR');
-        });
+        // Ordenar estritamente em ordem alfabética da turma
+        const sorted = [...data].sort((a, b) =>
+          (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' })
+        );
         setStudents(sorted);
       }
     } finally {
@@ -257,7 +295,49 @@ export default function GradingView() {
     }]);
   };
 
-  // Preencher automaticamente todos os slots com os alunos da turma
+  // Preencher slots apenas com os alunos PENDENTES da turma (em ordem alfabética)
+  const handleFillPendingSlotsFromClass = () => {
+    if (!students || students.length === 0) {
+      setModal({
+        isOpen: true,
+        title: 'Selecione uma Turma',
+        message: 'Primeiro selecione uma turma que contenha alunos cadastrados.',
+        type: 'warning'
+      });
+      return;
+    }
+
+    const pendingStudents = students.filter(s => !classAssessmentResults[s.id]);
+    if (pendingStudents.length === 0) {
+      setModal({
+        isOpen: true,
+        title: 'Turma Totalmente Corrigida',
+        message: 'Todos os alunos desta turma já possuem correção salva para este gabarito! Use "Preencher Todos" ou clique em "Refazer" na fila caso queira recorrigir algum aluno.',
+        type: 'info'
+      });
+      return;
+    }
+
+    const newSlots: SlotItem[] = pendingStudents.map((student, idx) => ({
+      id: `slot-${student.id}-${Date.now()}-${idx}`,
+      studentIds: [student.id],
+      files: [],
+      previews: [],
+      result: null,
+      status: 'idle',
+      error: null
+    }));
+
+    setBatchSlots(newSlots);
+    setModal({
+      isOpen: true,
+      title: 'Slots Pendentes Criados',
+      message: `${pendingStudents.length} slot(s) criados em ordem alfabética apenas para os alunos pendentes! Agora fotografe ou faça upload em lote.`,
+      type: 'success'
+    });
+  };
+
+  // Preencher automaticamente todos os slots com os alunos da turma em ordem alfabética
   const handleFillAllSlotsFromClass = () => {
     if (!students || students.length === 0) {
       setModal({
@@ -283,8 +363,135 @@ export default function GradingView() {
     setModal({
       isOpen: true,
       title: 'Slots Preenchidos com Sucesso',
-      message: `${students.length} slots foram criados na sequência da chamada da turma. Agora você pode tirar fotos via câmera ou carregar imagens para os alunos!`,
+      message: `${students.length} slots foram criados na ordem alfabética da turma. Agora você pode tirar fotos via câmera ou carregar imagens para os alunos!`,
       type: 'success'
+    });
+  };
+
+  // Focar em um slot existente do aluno ou criar um novo slot a partir da Fila de Correção
+  const handleFocusOrCreateSlotForStudent = (studentId: string) => {
+    setBatchSlots(prev => {
+      const existingIdx = prev.findIndex(s => s.studentIds.includes(studentId) && s.status !== 'done');
+      if (existingIdx >= 0) return prev;
+
+      const emptyIdx = prev.findIndex(s => !s.studentIds.some(Boolean) && s.files.length === 0 && !s.result);
+      if (emptyIdx >= 0) {
+        const clone = [...prev];
+        clone[emptyIdx] = { ...clone[emptyIdx], studentIds: [studentId] };
+        return clone;
+      }
+
+      return [
+        ...prev,
+        {
+          id: `slot-${studentId}-${Date.now()}`,
+          studentIds: [studentId],
+          files: [],
+          previews: [],
+          result: null,
+          status: 'idle',
+          error: null
+        }
+      ];
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Excluir correção diretamente pela Fila da Turma, zerando a nota correspondente na Gestão
+  const handleDeleteStudentResultFromQueue = (student: any, resultRecord: any) => {
+    if (!supabase || !selectedAssessmentId || !resultRecord) return;
+    setModal({
+      isOpen: true,
+      title: 'Excluir Correção da Fila?',
+      message: `Deseja remover a correção de "${student.name}" nesta atividade? A nota será zerada e o aluno voltará para o status Pendente.`,
+      type: 'confirm',
+      onConfirm: async () => {
+        try {
+          const { data: answers } = await supabase!
+            .from('student_answers')
+            .select('id')
+            .eq('assessment_id', selectedAssessmentId)
+            .eq('student_id', student.id);
+
+          const answerIds = answers?.map(a => a.id) || [];
+          if (answerIds.length > 0) {
+            await supabase!.from('ai_corrections').delete().in('student_answer_id', answerIds);
+          }
+          await supabase!
+            .from('student_answers')
+            .delete()
+            .eq('assessment_id', selectedAssessmentId)
+            .eq('student_id', student.id);
+
+          await supabase!
+            .from('assessment_results')
+            .delete()
+            .eq('assessment_id', selectedAssessmentId)
+            .eq('student_id', student.id);
+
+          const { data: assessment } = await supabase!
+            .from('assessments')
+            .select('type, unit_id')
+            .eq('id', selectedAssessmentId)
+            .maybeSingle();
+
+          if (assessment?.unit_id) {
+            const { data: grade } = await supabase!
+              .from('grades')
+              .select('*')
+              .eq('student_id', student.id)
+              .eq('unit_id', assessment.unit_id)
+              .maybeSingle();
+
+            if (grade) {
+              const fieldToUpdate =
+                assessment.type === 'prova' ? 'exam_score' :
+                assessment.type === 'lista2' ? 'list2_score' :
+                assessment.type === 'lista3' ? 'list3_score' :
+                'list1_score';
+
+              const updatedGrade = { ...grade, [fieldToUpdate]: 0 };
+              const sum =
+                (updatedGrade.list1_score || 0) +
+                (updatedGrade.list2_score || 0) +
+                (updatedGrade.list3_score || 0) +
+                (updatedGrade.exam_score || 0) +
+                (updatedGrade.notebook_score || 0) +
+                (updatedGrade.anki_score || 0);
+
+              let average = Math.min(10, sum);
+              if (updatedGrade.recovery_score !== null && updatedGrade.recovery_score !== undefined) {
+                if (sum < 5) {
+                  average = Math.min(5, Math.max(sum, updatedGrade.recovery_score));
+                } else {
+                  average = Math.min(10, sum + updatedGrade.recovery_score);
+                }
+              }
+
+              await supabase!
+                .from('grades')
+                .update({ [fieldToUpdate]: 0, unit_average: Number(average.toFixed(1)) })
+                .eq('id', grade.id);
+            }
+          }
+
+          await fetchClassAssessmentResults();
+          setModal({
+            isOpen: true,
+            title: 'Correção Removida',
+            message: `O aluno "${student.name}" retornou para o status Pendente na fila desta atividade.`,
+            type: 'success'
+          });
+        } catch (err: any) {
+          console.error('Erro ao excluir correção da fila:', err);
+          setModal({
+            isOpen: true,
+            title: 'Erro ao Excluir',
+            message: err?.message || 'Não foi possível excluir a correção do aluno.',
+            type: 'error'
+          });
+        }
+      }
     });
   };
 
@@ -786,6 +993,7 @@ REGRAS ESTRITAS:
       });
 
       await Promise.all(workers);
+      await fetchClassAssessmentResults();
 
       setModal({
         isOpen: true,
@@ -816,6 +1024,7 @@ REGRAS ESTRITAS:
       for (const slot of readySlots) {
         await saveSingleSlot(slot);
       }
+      await fetchClassAssessmentResults();
       setModal({
         isOpen: true,
         title: 'Salvo com Sucesso',
@@ -868,6 +1077,35 @@ REGRAS ESTRITAS:
     // Loop individual para cada aluno vinculado ao slot
     for (const studentId of slot.studentIds) {
       if (!studentId) continue;
+
+      // Limpar registros anteriores desta mesma atividade para o aluno (evita duplicação ao refazer)
+      try {
+        if (supabase) {
+          const { data: prevAnswers } = await supabase
+            .from('student_answers')
+            .select('id')
+            .eq('assessment_id', assessmentId)
+            .eq('student_id', studentId);
+
+          const prevIds = prevAnswers?.map(a => a.id) || [];
+          if (prevIds.length > 0) {
+            await supabase.from('ai_corrections').delete().in('student_answer_id', prevIds);
+          }
+          await supabase
+            .from('student_answers')
+            .delete()
+            .eq('assessment_id', assessmentId)
+            .eq('student_id', studentId);
+
+          await supabase
+            .from('assessment_results')
+            .delete()
+            .eq('assessment_id', assessmentId)
+            .eq('student_id', studentId);
+        }
+      } catch (cleanupErr) {
+        console.warn('Erro ao limpar registros anteriores antes de salvar:', cleanupErr);
+      }
 
       // 1. Salvar Respostas Individuais
       for (const corr of result.corrections) {
@@ -1017,6 +1255,14 @@ REGRAS ESTRITAS:
   };
 
   const activeSlotsCount = batchSlots.filter(s => s.studentIds.some((id: string) => id) && s.files.length > 0 && s.status !== 'done').length;
+  const correctedStudentsCount = selectedAssessmentId ? students.filter(s => !!classAssessmentResults[s.id]).length : 0;
+  const pendingStudentsCount = Math.max(0, students.length - correctedStudentsCount);
+  const filteredQueueStudents = students.filter(s => {
+    const hasResult = !!classAssessmentResults[s.id];
+    if (queueFilter === 'pending') return !hasResult;
+    if (queueFilter === 'done') return hasResult;
+    return true;
+  });
 
   return (
     <div className="space-y-6 pb-20">
@@ -1254,15 +1500,26 @@ REGRAS ESTRITAS:
         {/* BARRA DE AÇÕES PODEROSAS DO LOTE: Preencher slots, Câmera contínua, Upload em Lote */}
         <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap items-center gap-2">
+            {/* Preencher apenas alunos pendentes */}
+            <button
+              onClick={handleFillPendingSlotsFromClass}
+              disabled={!selectedClassId || !selectedAssessmentId || students.length === 0}
+              className="px-4 py-2.5 bg-brand-blue text-white rounded-xl text-xs font-bold hover:bg-brand-blue-dark flex items-center gap-2 shadow-sm disabled:opacity-50 transition-all active:scale-95"
+              title="Cria slots em ordem alfabética apenas para os alunos ainda pendentes nesta atividade"
+            >
+              <Users size={16} />
+              Preencher Pendentes ({pendingStudentsCount})
+            </button>
+
             {/* Preencher todos os slots com os alunos da turma */}
             <button
               onClick={handleFillAllSlotsFromClass}
               disabled={!selectedClassId || students.length === 0}
-              className="px-4 py-2.5 bg-brand-blue text-white rounded-xl text-xs font-bold hover:bg-brand-blue-dark flex items-center gap-2 shadow-sm disabled:opacity-50 transition-all active:scale-95"
-              title="Cria um slot para cada aluno da turma em ordem alfabética e número de chamada"
+              className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center gap-2 disabled:opacity-50 transition-all active:scale-95"
+              title="Cria um slot para cada aluno da turma em ordem alfabética"
             >
-              <Users size={16} />
-              Preencher Todos os Slots da Turma ({students.length} alunos)
+              <Users size={16} className="text-brand-blue dark:text-brand-yellow" />
+              Todos da Turma ({students.length})
             </button>
 
             {/* Upload em lote que distribui fotos nos slots */}
@@ -1349,12 +1606,15 @@ REGRAS ESTRITAS:
                           className="flex-1 p-2 bg-slate-50/70 dark:bg-slate-800/50 rounded-xl font-bold text-brand-blue-dark dark:text-brand-yellow focus:ring-2 focus:ring-brand-yellow text-sm transition-colors border-none"
                           disabled={!selectedClassId || slot.status === 'processing'}
                         >
-                          <option value="">{sIdx === 0 ? 'Selecionar Aluno da Turma' : 'Aluno Adicional (Dupla/Grupo)'}</option>
-                          {students.map(s => (
-                            <option key={s.id} value={s.id}>
-                              {s.roll_number ? `${s.roll_number}. ` : ''}{s.name}
-                            </option>
-                          ))}
+                          <option value="">{sIdx === 0 ? 'Selecionar Aluno (Ordem Alfabética)' : 'Aluno Adicional (Dupla/Grupo)'}</option>
+                          {students.map(s => {
+                            const existingRes = selectedAssessmentId ? classAssessmentResults[s.id] : null;
+                            return (
+                              <option key={s.id} value={s.id}>
+                                {s.name}{s.roll_number ? ` (Nº ${s.roll_number})` : ''} {selectedAssessmentId ? (existingRes ? `✓ [Nota: ${Number(existingRes.total_score).toFixed(1)}]` : '• (Pendente)') : ''}
+                              </option>
+                            );
+                          })}
                         </select>
                         {sIdx > 0 && slot.status !== 'processing' && (
                           <button 
@@ -1617,6 +1877,171 @@ REGRAS ESTRITAS:
           {isSavingBatch ? <Loader2 className="animate-spin" size={20} /> : <CheckCircle2 size={20} />}
           {isSavingBatch ? 'Sincronizando...' : 'Salvar e Atualizar Gestão'}
         </button>
+      </div>
+
+      {/* Fila de Correção da Turma em Ordem Alfabética (Controle de Pendentes vs Corrigidos) */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-4">
+          <div>
+            <h3 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
+              <Users size={22} className="text-brand-blue dark:text-brand-yellow" />
+              Fila de Correção da Turma — Ordem Alfabética ({correctedStudentsCount} de {students.length} corrigidos)
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+              Acompanhamento em tempo real de quem já foi corrigido e quem está pendente para o gabarito selecionado.
+            </p>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Abas de Filtro da Fila */}
+            <div className="flex items-center p-1 bg-slate-100 dark:bg-slate-800 rounded-xl text-xs font-bold">
+              <button
+                type="button"
+                onClick={() => setQueueFilter('all')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  queueFilter === 'all'
+                    ? 'bg-white dark:bg-slate-700 text-brand-blue-dark dark:text-white shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-slate-800'
+                }`}
+              >
+                Todos ({students.length})
+              </button>
+              <button
+                type="button"
+                onClick={() => setQueueFilter('pending')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  queueFilter === 'pending'
+                    ? 'bg-amber-500 text-white shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-amber-600'
+                }`}
+              >
+                Pendentes ({pendingStudentsCount})
+              </button>
+              <button
+                type="button"
+                onClick={() => setQueueFilter('done')}
+                className={`px-3 py-1.5 rounded-lg transition-all ${
+                  queueFilter === 'done'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-500 dark:text-slate-400 hover:text-emerald-600'
+                }`}
+              >
+                Corrigidos ({correctedStudentsCount})
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={fetchClassAssessmentResults}
+              disabled={!selectedClassId || !selectedAssessmentId || isLoadingQueue}
+              className="px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all disabled:opacity-50"
+              title="Atualizar status da fila"
+            >
+              <RefreshCw size={14} className={isLoadingQueue ? 'animate-spin' : ''} />
+              Atualizar
+            </button>
+          </div>
+        </div>
+
+        {!selectedClassId || !selectedAssessmentId ? (
+          <div className="py-10 text-center text-sm text-slate-400 dark:text-slate-500">
+            Selecione uma <strong className="text-slate-600 dark:text-slate-300">Turma</strong> e um <strong className="text-slate-600 dark:text-slate-300">Gabarito Mestre</strong> acima para acompanhar a fila alfabética de alunos corrigidos e pendentes.
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs sm:text-sm">
+              <thead>
+                <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-xs">
+                  <th className="py-3 px-3">Nº Chamada</th>
+                  <th className="py-3 px-3">Aluno (Ordem Alfabética)</th>
+                  <th className="py-3 px-3 text-center">Status</th>
+                  <th className="py-3 px-3 text-center">Nota Salva</th>
+                  <th className="py-3 px-3 text-right">Ações</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredQueueStudents.map((student) => {
+                  const res = classAssessmentResults[student.id];
+                  const isInSlot = batchSlots.some(slot => slot.studentIds.includes(student.id));
+
+                  return (
+                    <tr
+                      key={student.id}
+                      className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
+                        isInSlot ? 'bg-amber-50/60 dark:bg-amber-950/20' : ''
+                      }`}
+                    >
+                      <td className="py-3 px-3 font-semibold text-slate-500">
+                        {student.roll_number ? `Nº ${student.roll_number}` : '-'}
+                      </td>
+                      <td className="py-3 px-3 font-medium text-slate-800 dark:text-slate-200">
+                        {student.name}
+                      </td>
+                      <td className="py-3 px-3 text-center">
+                        {res ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200">
+                            ✓ Corrigido
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                            ⏳ Pendente
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-center">
+                        {res ? (
+                          <span className="px-2.5 py-0.5 rounded-full font-bold border text-xs bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800">
+                            {Number(res.total_score).toFixed(1)} / {Number(res.max_score || targetScale).toFixed(1)}
+                          </span>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
+                      <td className="py-3 px-3 text-right">
+                        {res ? (
+                          <div className="flex items-center justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleFocusOrCreateSlotForStudent(student.id)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 hover:bg-amber-100 border border-amber-200 dark:border-amber-800/80 transition-colors"
+                              title="Adicionar este aluno aos slots para refazer a correção"
+                            >
+                              <Edit3 size={13} />
+                              Refazer
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteStudentResultFromQueue(student, res)}
+                              className="p-1.5 rounded-lg text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 transition-colors"
+                              title="Excluir nota e devolver aluno para pendente"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => handleFocusOrCreateSlotForStudent(student.id)}
+                            className="px-2.5 py-1 text-xs font-bold text-brand-blue hover:text-brand-blue-dark dark:text-brand-yellow hover:underline"
+                          >
+                            Corrigir este aluno →
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {filteredQueueStudents.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="py-8 text-center text-slate-400">
+                      Nenhum aluno encontrado para este filtro na turma selecionada.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );

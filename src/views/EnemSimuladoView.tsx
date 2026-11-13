@@ -28,9 +28,15 @@ import {
   Info,
   CheckSquare,
   X,
-  Edit3
+  Edit3,
+  Plus,
+  ChevronDown,
+  ChevronUp,
+  RotateCcw,
+  SwitchCamera
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
+import { useDropzone } from 'react-dropzone';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { supabase } from '../lib/supabase';
@@ -67,6 +73,16 @@ interface EnemSimuladoViewProps {
   onExitReviewerMode?: () => void;
 }
 
+interface EnemSlotItem {
+  id: string;
+  studentId: string;
+  imagePreview: string | null;
+  answers: Record<number, EnemAnswerOption> | null;
+  status: 'idle' | 'processing' | 'done' | 'error';
+  error: string | null;
+  savedSubmissionId?: string | null;
+}
+
 export default function EnemSimuladoView({ 
   isReviewerMode = false, 
   reviewerName = 'Professor Corretor',
@@ -90,22 +106,36 @@ export default function EnemSimuladoView({
   const [quickSequenceInput, setQuickSequenceInput] = useState('');
   const [showQuickFill, setShowQuickFill] = useState(false);
 
-  // Estado da correção atual
+  // Estado de correção por Slots (Em Cascata)
+  const [enemSlots, setEnemSlots] = useState<EnemSlotItem[]>(() => [
+    {
+      id: `enem-slot-${Date.now()}-1`,
+      studentId: '',
+      imagePreview: null,
+      answers: null,
+      status: 'idle',
+      error: null
+    }
+  ]);
+  const [expandedSlotIds, setExpandedSlotIds] = useState<Record<string, boolean>>({});
   const [selectedClassId, setSelectedClassId] = useState<string>('');
-  const [selectedStudentId, setSelectedStudentId] = useState<string>('');
-  const [currentAnswers, setCurrentAnswers] = useState<Record<number, EnemAnswerOption>>({});
-  const [capturedImage, setCapturedImage] = useState<string | null>(null);
-  const [lastAnalyzedImage, setLastAnalyzedImage] = useState<string | null>(null);
-  const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [isProcessingBatch, setIsProcessingBatch] = useState(false);
+  const [isSavingBatch, setIsSavingBatch] = useState(false);
+  const [currentBatchProgress, setCurrentBatchProgress] = useState<{
+    currentStep: number;
+    totalSteps: number;
+    studentName: string;
+    slotIndex: number;
+  } | null>(null);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
+  const batchFileInputRef = useRef<HTMLInputElement>(null);
 
-  // Modal de câmera
+  // Modal de câmera contínua para slots
   const [isCameraOpen, setIsCameraOpen] = useState(false);
+  const [activeCameraSlotId, setActiveCameraSlotId] = useState<string | null>(null);
+  const [facingMode, setFacingMode] = useState<'environment' | 'user'>('environment');
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
-  const hasUnsavedEditsRef = useRef<boolean>(false);
-  const lastLoadedStudentIdRef = useRef<string>('');
 
   // Edição do gabarito oficial (individual por corretor se for corretor)
   const [editingAnswers, setEditingAnswers] = useState<Record<number, EnemAnswerOption>>(simulation.official_answers);
@@ -223,42 +253,8 @@ export default function EnemSimuladoView({
       fetchStudents(selectedClassId);
     } else {
       setStudents([]);
-      setSelectedStudentId('');
     }
   }, [selectedClassId]);
-
-  // Carregar respostas do aluno selecionado sem apagar correção em andamento durante sincronizações em segundo plano
-  useEffect(() => {
-    const studentChanged = lastLoadedStudentIdRef.current !== selectedStudentId;
-
-    if (studentChanged) {
-      lastLoadedStudentIdRef.current = selectedStudentId;
-      hasUnsavedEditsRef.current = false;
-      setLastAnalyzedImage(null);
-
-      if (selectedStudentId) {
-        const existing = submissions.find(s => s.student_id === selectedStudentId);
-        if (existing) {
-          setCurrentAnswers(existing.answers);
-        } else {
-          const initialAnswers: Record<number, EnemAnswerOption> = {};
-          for (let q = 1; q <= 45; q++) {
-            initialAnswers[q] = 'BLANK';
-          }
-          setCurrentAnswers(initialAnswers);
-        }
-      }
-      return;
-    }
-
-    // Se o aluno não mudou (apenas chegou atualização remota de submissions), só atualiza se não houver edição/leitura não salva
-    if (selectedStudentId && !hasUnsavedEditsRef.current) {
-      const existing = submissions.find(s => s.student_id === selectedStudentId);
-      if (existing) {
-        setCurrentAnswers(existing.answers);
-      }
-    }
-  }, [selectedStudentId, submissions]);
 
   // Função utilitária para filtrar estritamente turmas do 3º ano do Ensino Médio
   const isThirdYearClass = (c: Class): boolean => {
@@ -368,7 +364,6 @@ export default function EnemSimuladoView({
   async function fetchStudents(classId: string) {
     if (!classId) {
       setStudents([]);
-      setSelectedStudentId('');
       return;
     }
     setIsLoadingStudents(true);
@@ -411,57 +406,229 @@ export default function EnemSimuladoView({
       }
     }
 
-    // Ordenar estudantes
-    studentList.sort((a, b) => {
-      if (a.roll_number && b.roll_number) return a.roll_number - b.roll_number;
-      if (a.roll_number) return -1;
-      if (b.roll_number) return 1;
-      return a.name.localeCompare(b.name, 'pt-BR');
-    });
+    // Ordenar estudantes em ordem alfabética da turma
+    studentList.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
 
     setStudents(studentList);
+
+    // Se houver apenas 1 slot vazio inicial, já pré-seleciona o primeiro aluno pendente para agilizar
     if (studentList.length > 0) {
-      // Priorizar o primeiro aluno ainda não corrigido
-      const firstUncorrected = studentList.find(s => 
-        !submissions.some(sub => sub.student_id === s.id)
-      );
-      setSelectedStudentId(firstUncorrected ? firstUncorrected.id : studentList[0].id);
-    } else {
-      setSelectedStudentId('');
+      const firstUncorrected = studentList.find(s => !submissions.some(sub => sub.student_id === s.id));
+      setEnemSlots(prev => {
+        if (prev.length === 1 && !prev[0].studentId && !prev[0].imagePreview && !prev[0].answers) {
+          return [{
+            ...prev[0],
+            studentId: firstUncorrected ? firstUncorrected.id : studentList[0].id
+          }];
+        }
+        return prev;
+      });
     }
 
     setIsLoadingStudents(false);
   }
 
-  // Estatísticas calculadas em tempo real para a correção atual seguindo regras do ENEM:
-  const currentStats = calculateEnemStatistics(currentAnswers, simulation.official_answers);
-  const correctCount = currentStats.totalCorrect;
-  const calculatedScore = currentStats.score;
-
-  // Upload de imagem do cartão com alta nitidez (1440px) para leitura precisa de todas as 225 bolinhas
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setLastAnalyzedImage(null);
-      try {
-        const compressed = await compressImageForAI(file, 1440, 0.85);
-        setCapturedImage(`data:${compressed.mimeType};base64,${compressed.base64}`);
-      } catch (err) {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          setCapturedImage(reader.result as string);
-        };
-        reader.readAsDataURL(file);
+  // Gerenciamento dos Slots de Correção do ENEM
+  const addEnemSlot = (preselectStudentId: string = '') => {
+    if (enemSlots.length >= 60) return;
+    const newId = `enem-slot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+    setEnemSlots(prev => [
+      ...prev,
+      {
+        id: newId,
+        studentId: preselectStudentId,
+        imagePreview: null,
+        answers: null,
+        status: 'idle',
+        error: null
       }
+    ]);
+  };
+
+  const removeEnemSlot = (slotId: string) => {
+    if (enemSlots.length <= 1) return;
+    setEnemSlots(prev => prev.filter(s => s.id !== slotId));
+  };
+
+  const updateEnemSlot = (slotId: string, updates: Partial<EnemSlotItem>) => {
+    setEnemSlots(prev => prev.map(s => (s.id === slotId ? { ...s, ...updates } : s)));
+  };
+
+  const handleFillEnemSlots = (onlyPending: boolean) => {
+    if (!students || students.length === 0) {
+      setStatusMessage({
+        text: 'Selecione uma turma que contenha alunos cadastrados primeiro.',
+        type: 'error'
+      });
+      return;
+    }
+
+    const targetList = onlyPending
+      ? students.filter(s => !submissions.some(sub => sub.student_id === s.id))
+      : students;
+
+    if (targetList.length === 0) {
+      setStatusMessage({
+        text: 'Todos os alunos desta turma já estão corrigidos! Use "Preencher Todos" se desejar refazer algum cartão.',
+        type: 'info'
+      });
+      return;
+    }
+
+    const newSlots: EnemSlotItem[] = targetList.map((student, idx) => ({
+      id: `enem-slot-${student.id}-${Date.now()}-${idx}`,
+      studentId: student.id,
+      imagePreview: null,
+      answers: null,
+      status: 'idle',
+      error: null
+    }));
+
+    setEnemSlots(newSlots);
+    setStatusMessage({
+      text: `${newSlots.length} slot(s) criados em ordem alfabética (${onlyPending ? 'apenas pendentes' : 'turma completa'}). Agora fotografe com a câmera contínua ou distribua as fotos!`,
+      type: 'success'
+    });
+  };
+
+  const compressFileToDataUrl = async (file: File): Promise<string> => {
+    try {
+      const compressed = await compressImageForAI(file, 1440, 0.85);
+      return `data:${compressed.mimeType};base64,${compressed.base64}`;
+    } catch {
+      return await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(String(reader.result || ''));
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+      });
     }
   };
 
-  // Câmera
-  const startCamera = async () => {
+  const handleSlotFileUpload = async (slotId: string, files: File[]) => {
+    const file = files[0];
+    if (!file) return;
+    const dataUrl = await compressFileToDataUrl(file);
+    updateEnemSlot(slotId, {
+      imagePreview: dataUrl,
+      answers: null,
+      status: 'idle',
+      error: null
+    });
+  };
+
+  const handleBatchEnemPhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+
+    const fileList: File[] = Array.from(files);
+    fileList.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+
+    const dataUrls = await Promise.all(fileList.map(compressFileToDataUrl));
+
+    setEnemSlots(prev => {
+      const updated = [...prev];
+      let urlIdx = 0;
+
+      // Preenche primeiro os slots que ainda não possuem foto
+      for (let i = 0; i < updated.length && urlIdx < dataUrls.length; i++) {
+        if (!updated[i].imagePreview) {
+          updated[i] = {
+            ...updated[i],
+            imagePreview: dataUrls[urlIdx],
+            answers: null,
+            status: 'idle',
+            error: null
+          };
+          urlIdx++;
+        }
+      }
+
+      // Se sobrarem fotos, cria novos slots automaticamente
+      while (urlIdx < dataUrls.length && updated.length < 60) {
+        updated.push({
+          id: `enem-slot-${Date.now()}-${urlIdx}`,
+          studentId: '',
+          imagePreview: dataUrls[urlIdx],
+          answers: null,
+          status: 'idle',
+          error: null
+        });
+        urlIdx++;
+      }
+
+      return updated;
+    });
+
+    e.target.value = '';
+    setStatusMessage({
+      text: `${fileList.length} foto(s) comprimidas em alta nitidez (1440px) e distribuídas nos slots!`,
+      type: 'success'
+    });
+  };
+
+  const handleClearCompletedEnemSlots = () => {
+    setEnemSlots(prev => {
+      const remaining = prev.filter(s => s.status !== 'done');
+      if (remaining.length === 0) {
+        return [{
+          id: `enem-slot-${Date.now()}-1`,
+          studentId: '',
+          imagePreview: null,
+          answers: null,
+          status: 'idle',
+          error: null
+        }];
+      }
+      return remaining;
+    });
+  };
+
+  const handleResetAllEnemSlots = () => {
+    setEnemSlots(prev => prev.map(s => ({
+      ...s,
+      imagePreview: null,
+      answers: null,
+      status: 'idle',
+      error: null
+    })));
+  };
+
+  const handleFocusOrCreateSlotForStudent = (studentId: string) => {
+    setEnemSlots(prev => {
+      const alreadyIdx = prev.findIndex(s => s.studentId === studentId && s.status !== 'done');
+      if (alreadyIdx >= 0) return prev;
+
+      const emptyIdx = prev.findIndex(s => !s.studentId && !s.imagePreview && !s.answers);
+      if (emptyIdx >= 0) {
+        const clone = [...prev];
+        clone[emptyIdx] = { ...clone[emptyIdx], studentId };
+        return clone;
+      }
+
+      return [
+        ...prev,
+        {
+          id: `enem-slot-${studentId}-${Date.now()}`,
+          studentId,
+          imagePreview: null,
+          answers: null,
+          status: 'idle',
+          error: null
+        }
+      ];
+    });
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Câmera Contínua para Slots
+  const startCamera = async (slotId?: string) => {
+    const targetSlotId = slotId || (enemSlots.find(s => !s.imagePreview) || enemSlots[0])?.id || null;
     try {
+      setActiveCameraSlotId(targetSlotId);
       setIsCameraOpen(true);
       const mediaStream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
+        video: { facingMode }
       });
       setStream(mediaStream);
       if (videoRef.current) {
@@ -470,7 +637,7 @@ export default function EnemSimuladoView({
     } catch (err) {
       console.error('Erro ao acessar câmera:', err);
       setStatusMessage({
-        text: 'Não foi possível acessar a câmera. Você pode usar a opção "Carregar Foto".',
+        text: 'Não foi possível acessar a câmera. Você pode usar a opção "Galeria" ou "Upload em Lote".',
         type: 'error'
       });
       setIsCameraOpen(false);
@@ -483,129 +650,237 @@ export default function EnemSimuladoView({
       setStream(null);
     }
     setIsCameraOpen(false);
+    setActiveCameraSlotId(null);
   };
 
-  const capturePhoto = () => {
-    if (videoRef.current) {
-      let width = videoRef.current.videoWidth || 1440;
-      let height = videoRef.current.videoHeight || 1080;
-      const maxDim = 1440;
-      if (width > maxDim || height > maxDim) {
-        if (width > height) {
-          height = Math.round((height * maxDim) / width);
-          width = maxDim;
+  const switchCameraFacing = async () => {
+    const nextMode = facingMode === 'environment' ? 'user' : 'environment';
+    setFacingMode(nextMode);
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+    }
+    try {
+      const mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: nextMode }
+      });
+      setStream(mediaStream);
+      if (videoRef.current) {
+        videoRef.current.srcObject = mediaStream;
+      }
+    } catch (err) {
+      console.warn('Não foi possível alternar câmera:', err);
+    }
+  };
+
+  const capturePhoto = (advanceToNextSlot: boolean = true) => {
+    if (!videoRef.current || !activeCameraSlotId) return;
+    let width = videoRef.current.videoWidth || 1440;
+    let height = videoRef.current.videoHeight || 1080;
+    const maxDim = 1440;
+    if (width > maxDim || height > maxDim) {
+      if (width > height) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.drawImage(videoRef.current, 0, 0, width, height);
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+      updateEnemSlot(activeCameraSlotId, {
+        imagePreview: dataUrl,
+        answers: null,
+        status: 'idle',
+        error: null
+      });
+
+      if (advanceToNextSlot) {
+        const currentIndex = enemSlots.findIndex(s => s.id === activeCameraSlotId);
+        if (currentIndex !== -1 && currentIndex + 1 < enemSlots.length) {
+          setActiveCameraSlotId(enemSlots[currentIndex + 1].id);
         } else {
-          width = Math.round((width * maxDim) / height);
-          height = maxDim;
+          stopCamera();
         }
       }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
-        setLastAnalyzedImage(null);
-        setCapturedImage(dataUrl);
-        stopCamera();
-      }
     }
   };
 
-  // Análise com IA (Gemini 3.8 Flash LOW + trava anti-clique repetido na mesma foto)
-  const handleAnalyzeWithAI = async () => {
-    if (!capturedImage) {
-      setStatusMessage({
-        text: 'Tire uma foto ou carregue a imagem do cartão-resposta antes de analisar.',
-        type: 'error'
-      });
-      return;
-    }
+  const buildSubmissionFromSlot = (
+    slot: EnemSlotItem,
+    answers: Record<number, EnemAnswerOption>
+  ): EnemSubmission | null => {
+    const studentObj = students.find(s => s.id === slot.studentId);
+    if (!studentObj || !selectedClassId) return null;
 
-    if (lastAnalyzedImage === capturedImage) {
-      setStatusMessage({
-        text: 'Esta foto já foi analisada pela IA. Confirme e salve a nota abaixo ou carregue uma nova foto.',
-        type: 'info'
-      });
-      return;
-    }
-
-    setIsAnalyzingImage(true);
-    setStatusMessage(null);
-
-    try {
-      const aiAnswers = await analyzeEnemBubbleSheet(capturedImage);
-      hasUnsavedEditsRef.current = true;
-      setCurrentAnswers(aiAnswers);
-      setLastAnalyzedImage(capturedImage);
-      const stats = calculateEnemStatistics(aiAnswers, simulation.official_answers);
-      setStatusMessage({
-        text: `Cartão lido e corrigido pela IA com sucesso! ${stats.totalCorrect} de 45 acertos (${stats.score.toFixed(1)} pts). Clique abaixo para confirmar e salvar a nota.`,
-        type: 'success'
-      });
-    } catch (err: any) {
-      setStatusMessage({
-        text: err.message || 'Não foi possível ler as marcações na imagem com precisão. Verifique a iluminação e tente uma nova foto.',
-        type: 'error'
-      });
-    } finally {
-      setIsAnalyzingImage(false);
-    }
-  };
-
-  // Salvar a submissão do aluno (sempre vinculada ao pool compartilhado SHARED_SIMULATION_ID)
-  const handleSaveSubmission = async () => {
-    if (!selectedClassId || !selectedStudentId) {
-      setStatusMessage({
-        text: 'Selecione a turma e o aluno antes de salvar.',
-        type: 'error'
-      });
-      return;
-    }
-
-    const studentObj = students.find(s => s.id === selectedStudentId);
-    if (!studentObj) return;
-
-    setIsSaving(true);
     const classObj = classes.find(c => c.id === selectedClassId) || allClassesLookup.find(c => c.id === selectedClassId);
+    const stats = calculateEnemStatistics(answers, simulation.official_answers);
 
-    const newSub: EnemSubmission = {
-      id: `${SHARED_SIMULATION_ID}_${selectedStudentId}`,
+    return {
+      id: `${SHARED_SIMULATION_ID}_${studentObj.id}`,
       simulation_id: SHARED_SIMULATION_ID,
-      student_id: selectedStudentId,
+      student_id: studentObj.id,
       student_name: studentObj.name,
       roll_number: studentObj.roll_number,
       class_id: selectedClassId,
       class_name: classObj?.name,
       reviewer_name: isReviewerMode ? reviewerName : 'Administrador',
-      answers: currentAnswers,
-      total_correct: currentStats.totalCorrect,
-      score_points: currentStats.score,
-      blank_count: currentStats.totalBlank,
-      multiple_count: currentStats.totalMultiple,
+      answers,
+      total_correct: stats.totalCorrect,
+      score_points: stats.score,
+      blank_count: stats.totalBlank,
+      multiple_count: stats.totalMultiple,
       created_at: new Date().toISOString()
     };
+  };
 
-    const updated = await saveStoredSubmission(newSub);
-    hasUnsavedEditsRef.current = false;
-    setSubmissions(updated);
-    setIsSaving(false);
+  // Correção em cascata dos slots do ENEM (Opção A: Gemini 3.8 Flash LOW + 1440px + Salvamento Automático)
+  const handleGradeEnemBatch = async () => {
+    const readySlots = enemSlots
+      .map((slot, index) => ({ slot, slotVisualIndex: index + 1 }))
+      .filter(item => item.slot.studentId && item.slot.imagePreview && item.slot.status !== 'done');
 
-    setStatusMessage({
-      text: `Nota de "${studentObj.name}" salva e sincronizada para toda a equipe! (${correctCount}/45 acertos = ${calculatedScore.toFixed(1)} pts)`,
-      type: 'success'
+    if (readySlots.length === 0) {
+      setStatusMessage({
+        text: 'Selecione um aluno e carregue/fotografe o cartão-resposta em pelo menos um slot antes de corrigir.',
+        type: 'error'
+      });
+      return;
+    }
+
+    setIsProcessingBatch(true);
+    setStatusMessage(null);
+    setCurrentBatchProgress(null);
+
+    const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+    const CONCURRENCY = 2;
+    let currentIndex = 0;
+    let completedCount = 0;
+    let successCount = 0;
+
+    const processSlot = async (item: { slot: EnemSlotItem; slotVisualIndex: number }) => {
+      const { slot, slotVisualIndex } = item;
+      const studentObj = students.find(s => s.id === slot.studentId);
+      const studentName = studentObj?.name || `Slot #${slotVisualIndex}`;
+
+      setCurrentBatchProgress({
+        currentStep: completedCount + 1,
+        totalSteps: readySlots.length,
+        studentName,
+        slotIndex: slotVisualIndex
+      });
+
+      updateEnemSlot(slot.id, { status: 'processing', error: null });
+
+      try {
+        const aiAnswers = await analyzeEnemBubbleSheet(slot.imagePreview!);
+        const newSub = buildSubmissionFromSlot(slot, aiAnswers);
+        if (newSub) {
+          const updatedSubs = await saveStoredSubmission(newSub);
+          setSubmissions(updatedSubs);
+        }
+
+        updateEnemSlot(slot.id, {
+          answers: aiAnswers,
+          status: 'done',
+          error: null,
+          savedSubmissionId: newSub?.id || null
+        });
+        successCount++;
+      } catch (err: any) {
+        updateEnemSlot(slot.id, {
+          status: 'error',
+          error: err?.message || 'Falha ao ler cartão-resposta'
+        });
+      } finally {
+        completedCount++;
+        setCurrentBatchProgress({
+          currentStep: completedCount,
+          totalSteps: readySlots.length,
+          studentName,
+          slotIndex: slotVisualIndex
+        });
+        await delay(100);
+      }
+    };
+
+    const workerCount = Math.min(CONCURRENCY, readySlots.length);
+    const workers = Array.from({ length: workerCount }, async () => {
+      while (currentIndex < readySlots.length) {
+        const nextItem = readySlots[currentIndex++];
+        await processSlot(nextItem);
+      }
     });
 
-    // Avançar automaticamente para o próximo aluno pendente da turma
-    const nextUncorrected = students.find(s => 
-      s.id !== selectedStudentId && !updated.some(sub => sub.student_id === s.id)
-    );
-    if (nextUncorrected) {
-      setSelectedStudentId(nextUncorrected.id);
-      setCapturedImage(null);
-      setLastAnalyzedImage(null);
+    await Promise.all(workers);
+
+    setIsProcessingBatch(false);
+    setCurrentBatchProgress(null);
+
+    if (successCount > 0) {
+      setStatusMessage({
+        text: `Correção em cascata concluída! ${successCount} de ${readySlots.length} cartões reconhecidos e salvos automaticamente para toda a equipe.`,
+        type: 'success'
+      });
+    } else {
+      setStatusMessage({
+        text: 'Nenhum cartão pôde ser reconhecido. Verifique as fotos e tente novamente.',
+        type: 'error'
+      });
+    }
+  };
+
+  // Atualizar manualmente uma alternativa dentro de um slot e marcar para sincronização
+  const handleUpdateSlotAnswer = (slotId: string, qNum: number, nextOpt: EnemAnswerOption) => {
+    setEnemSlots(prev => prev.map(slot => {
+      if (slot.id !== slotId) return slot;
+      const baseAnswers: Record<number, EnemAnswerOption> = slot.answers || (() => {
+        const empty: Record<number, EnemAnswerOption> = {};
+        for (let q = 1; q <= 45; q++) empty[q] = 'BLANK';
+        return empty;
+      })();
+      return {
+        ...slot,
+        answers: {
+          ...baseAnswers,
+          [qNum]: nextOpt
+        }
+      };
+    }));
+  };
+
+  // Salvar / ressincronizar todos os slots com respostas (incluindo ajustes manuais)
+  const handleSaveAllEnemSlots = async () => {
+    const slotsToSave = enemSlots.filter(s => s.studentId && s.answers);
+    if (slotsToSave.length === 0) return;
+
+    setIsSavingBatch(true);
+    try {
+      let latestSubs = submissions;
+      for (const slot of slotsToSave) {
+        const newSub = buildSubmissionFromSlot(slot, slot.answers!);
+        if (newSub) {
+          latestSubs = await saveStoredSubmission(newSub);
+        }
+      }
+      setSubmissions(latestSubs);
+      setStatusMessage({
+        text: `${slotsToSave.length} correção(ões) sincronizada(s) com sucesso para toda a equipe!`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      setStatusMessage({
+        text: 'Erro ao sincronizar correções: ' + (err?.message || 'Tente novamente'),
+        type: 'error'
+      });
+    } finally {
+      setIsSavingBatch(false);
     }
   };
 
@@ -717,11 +992,6 @@ export default function EnemSimuladoView({
       const updatedList = await saveStoredSubmission(updatedSub);
       setSubmissions(updatedList);
 
-      if (selectedStudentId === verifyingSubmission.student_id) {
-        hasUnsavedEditsRef.current = false;
-        setCurrentAnswers(auditAnswers);
-      }
-
       setStatusMessage({
         text: `Gabarito de "${verifyingSubmission.student_name}" verificado e sincronizado com sucesso! (${auditStats.totalCorrect}/45 acertos = ${auditStats.score.toFixed(1)} pts)`,
         type: 'success'
@@ -749,16 +1019,18 @@ export default function EnemSimuladoView({
     const updated = await deleteStoredSubmission(sub.id, sub.student_id);
     setSubmissions(updated);
 
-    if (selectedStudentId === sub.student_id) {
-      hasUnsavedEditsRef.current = false;
-      setLastAnalyzedImage(null);
-      const initialAnswers: Record<number, EnemAnswerOption> = {};
-      for (let q = 1; q <= 45; q++) {
-        initialAnswers[q] = 'BLANK';
+    setEnemSlots(prev => prev.map(slot => {
+      if (slot.studentId === sub.student_id) {
+        return {
+          ...slot,
+          answers: null,
+          status: 'idle',
+          error: null,
+          savedSubmissionId: null
+        };
       }
-      setCurrentAnswers(initialAnswers);
-      setCapturedImage(null);
-    }
+      return slot;
+    }));
 
     setStatusMessage({
       text: `Nota do simulado de "${sub.student_name}" excluída com sucesso. Aluno liberado para nova correção.`,
@@ -775,8 +1047,11 @@ export default function EnemSimuladoView({
     );
   };
 
-  const selectedStudentObj = students.find(s => s.id === selectedStudentId);
   const selectedClassObj = classes.find(c => c.id === selectedClassId);
+  const readyEnemSlotsCount = enemSlots.filter(s => s.studentId && s.imagePreview && s.status !== 'done').length;
+  const doneEnemSlotsCount = enemSlots.filter(s => s.status === 'done' && s.answers).length;
+  const correctedInClassCount = students.filter(st => submissions.some(sub => sub.student_id === st.id)).length;
+  const pendingInClassCount = Math.max(0, students.length - correctedInClassCount);
 
   // Lista única de corretores que já realizaram correções para filtro opcional
   const uniqueReviewers = Array.from(
@@ -1108,23 +1383,51 @@ export default function EnemSimuladoView({
             </button>
           </div>
 
-          {/* Topo: Painel de Correção em 2 Colunas */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            {/* Coluna 1: Seleção de Turma do 3º Ano e Aluno */}
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-                <h2 className="text-lg font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
-                  <Users size={20} className="text-brand-blue dark:text-brand-yellow" />
-                  1. Dados do Aluno
-                </h2>
-                {isReviewerMode && (
-                  <span className="text-[11px] font-semibold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300">
-                    {submissions.filter(s => s.reviewer_name === reviewerName).length} corrigidos por você
-                  </span>
-                )}
+          {/* Input oculto para upload de múltiplas fotos distribuídas */}
+          <input
+            ref={batchFileInputRef}
+            type="file"
+            multiple
+            accept="image/*"
+            className="hidden"
+            onChange={handleBatchEnemPhotoUpload}
+          />
+
+          {/* Barra de Progresso Durante Correção em Cascata */}
+          {isProcessingBatch && currentBatchProgress && (
+            <div className="bg-gradient-to-r from-brand-blue-dark via-brand-blue to-indigo-900 text-white p-5 rounded-3xl shadow-xl border border-white/10 flex flex-col gap-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <Loader2 className="animate-spin text-brand-yellow shrink-0" size={24} />
+                  <div>
+                    <p className="text-xs font-bold uppercase text-brand-yellow tracking-wider flex items-center gap-1.5">
+                      <Sparkles size={14} />
+                      Correção ENEM em Cascata (Gemini 3.8 Flash • Precisão Baixa)
+                    </p>
+                    <p className="text-base font-black">
+                      Progresso: {currentBatchProgress.currentStep} de {currentBatchProgress.totalSteps} cartões concluídos
+                      {currentBatchProgress.studentName ? ` • ${currentBatchProgress.studentName}` : ''}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-sm font-black bg-white/10 px-3 py-1.5 rounded-xl shrink-0">
+                  {Math.round((currentBatchProgress.currentStep / currentBatchProgress.totalSteps) * 100)}%
+                </span>
               </div>
 
-              <div>
+              <div className="w-full bg-black/30 h-2.5 rounded-full overflow-hidden p-0.5">
+                <div
+                  className="bg-brand-yellow h-full rounded-full transition-all duration-300 shadow-md"
+                  style={{ width: `${(currentBatchProgress.currentStep / currentBatchProgress.totalSteps) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Configuração de Turma e Ações em Lote por Slots */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
+              <div className="flex-1 min-w-[240px]">
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
                     Turma (Apenas 3º Ano)
@@ -1135,14 +1438,24 @@ export default function EnemSimuladoView({
                     className="text-[11px] text-brand-blue dark:text-brand-yellow hover:underline flex items-center gap-1 font-semibold"
                     title="Recarregar turmas cadastradas"
                   >
-                    <RefreshCw size={11} className={isLoadingClasses ? "animate-spin" : ""} />
+                    <RefreshCw size={11} className={isLoadingClasses ? 'animate-spin' : ''} />
                     Atualizar Turmas
                   </button>
                 </div>
                 <select
                   value={selectedClassId}
-                  onChange={(e) => setSelectedClassId(e.target.value)}
-                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm font-semibold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-brand-yellow shadow-sm"
+                  onChange={(e) => {
+                    setSelectedClassId(e.target.value);
+                    setEnemSlots([{
+                      id: `enem-slot-${Date.now()}-1`,
+                      studentId: '',
+                      imagePreview: null,
+                      answers: null,
+                      status: 'idle',
+                      error: null
+                    }]);
+                  }}
+                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm font-bold text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-brand-yellow shadow-sm"
                 >
                   {classes.length === 0 ? (
                     <option value="">Carregando turmas do 3º ano...</option>
@@ -1159,150 +1472,397 @@ export default function EnemSimuladoView({
                 </select>
               </div>
 
-              <div>
-                <label className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block mb-1.5">
-                  Aluno da Turma {students.length > 0 && `(${students.length} alunos)`}
-                </label>
-                <select
-                  value={selectedStudentId}
-                  onChange={(e) => setSelectedStudentId(e.target.value)}
-                  disabled={!selectedClassId || students.length === 0}
-                  className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-sm font-medium text-slate-800 dark:text-slate-100 focus:ring-2 focus:ring-brand-yellow shadow-sm disabled:opacity-50"
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <span className="px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-200 dark:border-emerald-900">
+                  ✓ {correctedInClassCount} Corrigido(s)
+                </span>
+                <span className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 font-bold border border-amber-200 dark:border-amber-900">
+                  ⏳ {pendingInClassCount} Pendente(s)
+                </span>
+                {isReviewerMode && (
+                  <span className="px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-brand-yellow font-bold border border-blue-200 dark:border-blue-900">
+                    {submissions.filter(s => s.reviewer_name === reviewerName).length} por você
+                  </span>
+                )}
+              </div>
+            </div>
+
+            {/* Barra de Ações Rápidas dos Slots */}
+            <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleFillEnemSlots(true)}
+                  disabled={!selectedClassId || students.length === 0 || isProcessingBatch}
+                  className="px-4 py-2.5 bg-brand-blue text-white rounded-xl text-xs font-bold hover:bg-brand-blue-dark flex items-center gap-2 shadow-sm disabled:opacity-50 transition-all active:scale-95"
+                  title="Cria slots em ordem alfabética apenas para os alunos pendentes desta turma"
                 >
-                  <option value="">
-                    {isLoadingStudents ? 'Carregando lista de alunos...' : 'Selecione o aluno para correção...'}
-                  </option>
-                  {students.map(s => {
-                    const sub = submissions.find(
-                      item => item.student_id === s.id
-                    );
-                    return (
-                      <option key={s.id} value={s.id}>
-                        {s.roll_number ? `Nº ${s.roll_number} - ` : ''}{s.name} {sub ? `✓ [Nota: ${sub.score_points.toFixed(1)} pts - ${sub.reviewer_name || 'Corrigido'}]` : '• (Pendente)'}
-                      </option>
-                    );
-                  })}
-                </select>
+                  <Users size={15} />
+                  Preencher Pendentes ({pendingInClassCount})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => handleFillEnemSlots(false)}
+                  disabled={!selectedClassId || students.length === 0 || isProcessingBatch}
+                  className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center gap-2 disabled:opacity-50 transition-all active:scale-95"
+                  title="Cria slots para todos os alunos da turma em ordem alfabética"
+                >
+                  <Users size={15} className="text-brand-blue dark:text-brand-yellow" />
+                  Preencher Todos ({students.length})
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => batchFileInputRef.current?.click()}
+                  disabled={isProcessingBatch}
+                  className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                  title="Selecione várias fotos de cartões da galeria para distribuir na sequência dos slots"
+                >
+                  <Upload size={15} className="text-brand-yellow" />
+                  Upload em Lote (Distribuir Fotos)
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => startCamera()}
+                  disabled={isProcessingBatch}
+                  className="px-4 py-2.5 bg-amber-500/10 text-amber-700 dark:text-amber-400 border border-amber-500/30 rounded-xl text-xs font-bold hover:bg-amber-500/20 flex items-center gap-2 transition-all active:scale-95 disabled:opacity-50"
+                  title="Abre câmera contínua para fotografar aluno após aluno automaticamente"
+                >
+                  <Camera size={15} />
+                  Câmera Contínua
+                </button>
               </div>
 
-              {selectedStudentObj ? (
-                <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-2xl border border-slate-100 dark:border-slate-800 text-xs space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <span className="font-bold text-sm text-slate-900 dark:text-white">
-                      {selectedStudentObj.roll_number ? `Nº ${selectedStudentObj.roll_number} - ` : ''}{selectedStudentObj.name}
-                    </span>
-                    {submissions.some(sub => sub.student_id === selectedStudentObj.id) ? (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200">
-                        Já Corrigido
-                      </span>
-                    ) : (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 border border-amber-200">
-                        Aguardando Correção
-                      </span>
-                    )}
-                  </div>
-                  <div className="text-slate-500 dark:text-slate-400">
-                    Turma: <strong className="text-slate-700 dark:text-slate-200">{selectedClassObj?.name}</strong>
-                  </div>
-                </div>
-              ) : (
-                <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/40 text-xs text-amber-800 dark:text-amber-300">
-                  Selecione uma turma e um aluno para iniciar a leitura do cartão-resposta.
-                </div>
-              )}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleClearCompletedEnemSlots}
+                  disabled={isProcessingBatch}
+                  className="px-3 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center gap-1.5 transition-colors disabled:opacity-50"
+                  title="Remove os slots já concluídos"
+                >
+                  <RotateCcw size={14} />
+                  Limpar Concluídos
+                </button>
+                <button
+                  type="button"
+                  onClick={handleResetAllEnemSlots}
+                  disabled={isProcessingBatch}
+                  className="px-3 py-2 text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/30 rounded-xl text-xs font-bold transition-colors disabled:opacity-50"
+                  title="Limpa fotos e leituras de todos os slots"
+                >
+                  Resetar Tudo
+                </button>
+              </div>
             </div>
+          </div>
 
-            {/* Coluna 2: Captura do Cartão-Resposta e Correção com IA */}
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-                <h2 className="text-lg font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
-                  <Camera size={20} className="text-brand-blue dark:text-brand-yellow" />
-                  2. Cartão-Resposta & Leitura IA
-                </h2>
-              </div>
+          {/* Lista Sequencial de Slots do Simulado ENEM */}
+          <div className="space-y-4">
+            {enemSlots.map((slot, index) => {
+              const slotStats = slot.answers
+                ? calculateEnemStatistics(slot.answers, simulation.official_answers)
+                : null;
+              const isExpanded = !!expandedSlotIds[slot.id];
 
-              {capturedImage ? (
-                <div className="space-y-3">
-                  <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black aspect-[4/3] max-h-56 flex items-center justify-center">
-                    <img src={capturedImage} alt="Cartão resposta" className="w-full h-full object-contain" />
-                    <button
-                      onClick={() => { setCapturedImage(null); setLastAnalyzedImage(null); }}
-                      className="absolute top-2 right-2 p-1.5 bg-rose-600 text-white rounded-full hover:bg-rose-700 shadow-md transition-all"
-                      title="Remover imagem"
-                    >
-                      <Trash2 size={16} />
-                    </button>
+              return (
+                <div
+                  key={slot.id}
+                  className={`bg-white dark:bg-slate-900 rounded-3xl shadow-sm border transition-all overflow-hidden ${
+                    slot.status === 'processing'
+                      ? 'border-brand-yellow ring-4 ring-brand-yellow/20'
+                      : slot.status === 'done'
+                        ? 'border-emerald-200 dark:border-emerald-900/50'
+                        : slot.status === 'error'
+                          ? 'border-rose-200 dark:border-rose-900/50'
+                          : 'border-slate-100 dark:border-slate-800'
+                  }`}
+                >
+                  {/* Cabeçalho do Slot */}
+                  <div className="p-4 sm:p-5 flex flex-wrap items-center justify-between gap-4 border-b border-slate-50 dark:border-slate-800">
+                    <div className="flex items-center gap-3 flex-1 min-w-[240px]">
+                      <div
+                        className={`w-9 h-9 rounded-2xl flex items-center justify-center font-black text-xs shrink-0 shadow-sm ${
+                          slot.status === 'done'
+                            ? 'bg-emerald-500 text-white'
+                            : slot.status === 'processing'
+                              ? 'bg-brand-yellow text-brand-blue-dark animate-pulse'
+                              : slot.status === 'error'
+                                ? 'bg-rose-500 text-white'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                        }`}
+                      >
+                        {index + 1}
+                      </div>
+
+                      <select
+                        value={slot.studentId}
+                        onChange={(e) => updateEnemSlot(slot.id, { studentId: e.target.value })}
+                        disabled={!selectedClassId || isLoadingStudents || slot.status === 'processing'}
+                        className="flex-1 max-w-md p-2.5 bg-slate-50 dark:bg-slate-800 rounded-xl font-bold text-brand-blue-dark dark:text-brand-yellow focus:ring-2 focus:ring-brand-yellow text-sm border-none disabled:opacity-50"
+                      >
+                        <option value="">
+                          {isLoadingStudents ? 'Carregando alunos...' : 'Selecionar Aluno (Ordem Alfabética)...'}
+                        </option>
+                        {students.map(s => {
+                          const existingSub = submissions.find(item => item.student_id === s.id);
+                          return (
+                            <option key={s.id} value={s.id}>
+                              {s.name}{s.roll_number ? ` (Nº ${s.roll_number})` : ''} {existingSub ? `✓ [${existingSub.score_points.toFixed(1)} pts]` : '• (Pendente)'}
+                            </option>
+                          );
+                        })}
+                      </select>
+                    </div>
+
+                    {/* Captura, Prévia e Resultados do Slot */}
+                    <div className="flex items-center flex-wrap gap-3">
+                      {slot.imagePreview && (
+                        <div className="relative group/thumb">
+                          <div className="w-11 h-11 rounded-xl border-2 border-slate-200 dark:border-slate-700 overflow-hidden shadow-sm bg-black">
+                            <img src={slot.imagePreview} className="w-full h-full object-cover" alt="Cartão-resposta" />
+                          </div>
+                          {slot.status !== 'processing' && (
+                            <button
+                              type="button"
+                              onClick={() => updateEnemSlot(slot.id, { imagePreview: null, answers: null, status: 'idle', error: null })}
+                              className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-rose-600 text-white rounded-full flex items-center justify-center shadow"
+                              title="Remover imagem"
+                            >
+                              <X size={10} />
+                            </button>
+                          )}
+                        </div>
+                      )}
+
+                      {slot.status !== 'processing' && (
+                        <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-slate-800/60 p-1.5 rounded-2xl border border-slate-100 dark:border-slate-800">
+                          <button
+                            type="button"
+                            onClick={() => startCamera(slot.id)}
+                            className="p-2 bg-amber-500 text-white rounded-xl hover:bg-amber-600 flex items-center gap-1.5 text-xs font-bold transition-all shadow-sm active:scale-95"
+                            title="Tirar foto deste cartão"
+                          >
+                            <Camera size={15} />
+                            <span className="hidden sm:inline">Câmera</span>
+                          </button>
+
+                          <label
+                            className="p-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-600 flex items-center gap-1 text-xs font-bold transition-all cursor-pointer"
+                            title="Câmera nativa do smartphone"
+                          >
+                            <input
+                              type="file"
+                              accept="image/*"
+                              capture="environment"
+                              className="hidden"
+                              onChange={(e) => {
+                                if (e.target.files && e.target.files.length > 0) {
+                                  handleSlotFileUpload(slot.id, Array.from(e.target.files));
+                                }
+                                e.target.value = '';
+                              }}
+                            />
+                            <span className="text-[11px]">Celular</span>
+                          </label>
+
+                          <EnemSlotDropzone
+                            onFiles={(files) => handleSlotFileUpload(slot.id, files)}
+                            disabled={slot.status === 'processing'}
+                          />
+                        </div>
+                      )}
+
+                      {slot.status === 'processing' && (
+                        <div className="flex items-center gap-2 text-brand-blue dark:text-brand-yellow font-bold text-xs bg-brand-yellow/15 px-3 py-2 rounded-xl border border-brand-yellow/30">
+                          <Loader2 className="animate-spin" size={15} />
+                          <span>Lendo 45Q...</span>
+                        </div>
+                      )}
+
+                      {slotStats && (
+                        <div className="flex items-center gap-2.5 pl-2 border-l border-slate-100 dark:border-slate-800">
+                          <div className="text-right">
+                            <span className="text-[10px] font-bold uppercase text-slate-400 block">
+                              {slotStats.totalCorrect} / 45 acertos
+                            </span>
+                            <span className={`inline-block px-2.5 py-0.5 rounded-lg text-xs font-black border ${getScoreBadgeColor(slotStats.score)}`}>
+                              {slotStats.score.toFixed(1)} pts
+                            </span>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => setExpandedSlotIds(prev => ({ ...prev, [slot.id]: !prev[slot.id] }))}
+                            className="px-2.5 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 flex items-center gap-1 transition-colors"
+                            title="Ver ou editar as 45 marcações deste aluno"
+                          >
+                            <Eye size={14} />
+                            <span>{isExpanded ? 'Ocultar' : '45Q'}</span>
+                            {isExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                          </button>
+                        </div>
+                      )}
+
+                      {enemSlots.length > 1 && slot.status !== 'processing' && (
+                        <button
+                          type="button"
+                          onClick={() => removeEnemSlot(slot.id)}
+                          className="p-2 text-slate-300 dark:text-slate-600 hover:text-rose-600 dark:hover:text-rose-400 rounded-xl transition-colors"
+                          title="Remover Slot"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
                   </div>
 
-                  <button
-                    onClick={handleAnalyzeWithAI}
-                    disabled={isAnalyzingImage}
-                    className="w-full py-3 px-4 bg-gradient-to-r from-brand-blue to-indigo-600 text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:opacity-90 transition-all shadow-md disabled:opacity-50"
-                  >
-                    {isAnalyzingImage ? (
-                      <>
-                        <Loader2 className="animate-spin" size={18} />
-                        Lendo bolinhas e calculando pontuação...
-                      </>
-                    ) : (
-                      <>
-                        <Sparkles size={18} className="text-brand-yellow" />
-                        Reconhecer e Corrigir via IA
-                      </>
-                    )}
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <button
-                      onClick={startCamera}
-                      className="py-3 px-4 bg-brand-blue text-white rounded-xl font-bold flex items-center justify-center gap-2 hover:bg-brand-blue-dark transition-all shadow-sm"
-                    >
-                      <Camera size={18} />
-                      Tirar Foto
-                    </button>
+                  {/* Mensagem de erro do slot */}
+                  {slot.error && (
+                    <div className="mx-4 my-3 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/50 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+                      <AlertCircle size={15} className="shrink-0" />
+                      <span>Slot #{index + 1}: {slot.error}</span>
+                    </div>
+                  )}
 
-                    <label className="py-3 px-4 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-brand-blue text-slate-700 dark:text-slate-300 rounded-xl font-semibold flex items-center justify-center gap-2 cursor-pointer transition-all">
-                      <Upload size={18} />
-                      Carregar Foto
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        className="hidden" 
-                        onChange={handleImageUpload} 
-                      />
-                    </label>
-                  </div>
-                </div>
-              )}
+                  {/* Matriz Expansível de 45 Questões para Inspeção / Ajuste */}
+                  {slot.answers && isExpanded && slotStats && (
+                    <div className="p-4 sm:p-5 bg-slate-50/70 dark:bg-slate-950/40 border-t border-slate-100 dark:border-slate-800 space-y-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                        <span className="font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                          Cartão-Resposta Lido (Clique em uma letra para ajustar)
+                        </span>
+                        <div className="flex items-center gap-3">
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                            {slotStats.totalCorrect} certas
+                          </span>
+                          <span className="font-bold text-rose-600 dark:text-rose-400">
+                            {slotStats.totalWrong + slotStats.totalBlank + slotStats.totalMultiple} erradas
+                          </span>
+                        </div>
+                      </div>
 
-              {/* Placar Direto do Simulado (Sem indicação de brancos ou duplas) */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/70 border border-slate-100 dark:border-slate-700 flex items-center justify-between">
-                <div>
-                  <span className="text-[11px] uppercase font-bold text-slate-400 block">Total de Acertos</span>
-                  <div className="text-2xl font-black text-brand-blue-dark dark:text-white">
-                    {currentStats.totalCorrect} <span className="text-sm font-medium text-slate-400">/ 45 questões</span>
-                  </div>
-                </div>
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        {[0, 1, 2].map(colIdx => {
+                          const startQ = colIdx * 15 + 1;
+                          return (
+                            <div key={colIdx} className="bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-1">
+                              <div className="flex items-center justify-between text-[10px] font-bold uppercase text-slate-400 pb-1 border-b border-slate-100 dark:border-slate-800">
+                                <span>Q{startQ} a Q{startQ + 14}</span>
+                                <span>Gab. | Marcado</span>
+                              </div>
+                              {Array.from({ length: 15 }, (_, i) => {
+                                const qNum = startQ + i;
+                                const officialAns = simulation.official_answers[qNum] || 'A';
+                                const studentAns = slot.answers?.[qNum] || 'BLANK';
+                                const isCorrect = isEnemQuestionCorrect(studentAns, officialAns);
 
-                <div className="text-right">
-                  <span className="text-[11px] uppercase font-bold text-slate-400 block">Nota do Simulado</span>
-                  <div className={`inline-block px-3.5 py-1.5 rounded-xl text-base font-extrabold border ${getScoreBadgeColor(calculatedScore)}`}>
-                    {calculatedScore.toFixed(1)} pts
-                  </div>
-                </div>
-              </div>
+                                return (
+                                  <div
+                                    key={qNum}
+                                    className={`px-2 py-1 rounded-lg flex items-center justify-between gap-1 text-xs ${
+                                      isCorrect
+                                        ? 'bg-emerald-50/60 dark:bg-emerald-950/20'
+                                        : 'bg-rose-50/50 dark:bg-rose-950/20'
+                                    }`}
+                                  >
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="w-5 font-bold text-slate-500 text-[11px]">
+                                        {qNum.toString().padStart(2, '0')}
+                                      </span>
+                                      <span className="w-5 h-5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-mono font-bold flex items-center justify-center text-slate-700 dark:text-slate-300">
+                                        {officialAns}
+                                      </span>
+                                    </div>
 
+                                    <div className="flex items-center gap-0.5">
+                                      {(['A', 'B', 'C', 'D', 'E'] as EnemAnswerOption[]).map(opt => {
+                                        const isSelected = studentAns === opt;
+                                        return (
+                                          <button
+                                            key={opt}
+                                            type="button"
+                                            onClick={() => handleUpdateSlotAnswer(slot.id, qNum, opt)}
+                                            className={`w-6 h-6 rounded-md text-[11px] font-bold transition-all ${
+                                              isSelected
+                                                ? isCorrect
+                                                  ? 'bg-emerald-600 text-white shadow-xs'
+                                                  : 'bg-rose-600 text-white shadow-xs'
+                                                : 'text-slate-500 hover:bg-slate-100 dark:hover:bg-slate-800'
+                                            }`}
+                                          >
+                                            {opt}
+                                          </button>
+                                        );
+                                      })}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleUpdateSlotAnswer(slot.id, qNum, studentAns === 'BLANK' ? 'DUPLA' : 'BLANK')}
+                                        className={`w-6 h-6 rounded-md text-[10px] font-bold ml-0.5 ${
+                                          studentAns === 'BLANK'
+                                            ? 'bg-slate-700 text-white'
+                                            : studentAns === 'DUPLA'
+                                              ? 'bg-amber-600 text-white'
+                                              : 'text-slate-300 hover:text-slate-500'
+                                        }`}
+                                        title={studentAns === 'BLANK' ? 'Em branco' : studentAns === 'DUPLA' ? 'Dupla marcação' : 'Marcar em branco'}
+                                      >
+                                        {studentAns === 'BLANK' ? '—' : studentAns === 'DUPLA' ? '×' : '•'}
+                                      </button>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Botão para adicionar mais um slot manual */}
+            {enemSlots.length < 60 && !isProcessingBatch && (
               <button
-                onClick={handleSaveSubmission}
-                disabled={isSaving || !selectedStudentId}
-                className="w-full py-3.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-50"
+                type="button"
+                onClick={() => addEnemSlot()}
+                className="w-full py-3.5 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-3xl text-slate-500 dark:text-slate-400 font-bold hover:border-brand-blue dark:hover:border-brand-yellow hover:text-brand-blue dark:hover:text-brand-yellow hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-all flex items-center justify-center gap-2 text-sm"
               >
-                {isSaving ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
-                Confirmar e Salvar Nota do Aluno
+                <Plus size={18} />
+                Adicionar Slot para Aluno
               </button>
-            </div>
+            )}
+          </div>
+
+          {/* Barra Flutuante de Execução e Sincronização em Lote */}
+          <div className="flex flex-col sm:flex-row gap-3 pt-2 sticky bottom-4 z-20 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-2xl">
+            <button
+              type="button"
+              onClick={handleGradeEnemBatch}
+              disabled={isProcessingBatch || readyEnemSlotsCount === 0}
+              className="flex-1 py-3.5 px-5 bg-brand-blue text-white rounded-2xl font-bold hover:bg-brand-blue-dark shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 text-sm transition-all"
+            >
+              {isProcessingBatch ? <Loader2 className="animate-spin" size={18} /> : <Sparkles size={18} className="text-brand-yellow" />}
+              {isProcessingBatch
+                ? 'Corrigindo Cartões em Cascata...'
+                : `Iniciar Correção em Cascata (${readyEnemSlotsCount} cartão(ões) pronto(s))`}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleSaveAllEnemSlots}
+              disabled={isSavingBatch || doneEnemSlotsCount === 0}
+              className="flex-1 py-3.5 px-5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-bold shadow-lg flex items-center justify-center gap-2 disabled:opacity-50 text-sm transition-all"
+            >
+              {isSavingBatch ? <Loader2 className="animate-spin" size={18} /> : <Save size={18} />}
+              {isSavingBatch
+                ? 'Sincronizando...'
+                : `Salvar / Sincronizar Alterações (${doneEnemSlotsCount})`}
+            </button>
           </div>
 
           {/* Fim da Aba: Relação Completa dos Alunos Corrigidos nesta Turma */}
@@ -1351,10 +1911,10 @@ export default function EnemSimuladoView({
                     );
 
                     return (
-                      <tr 
-                        key={student.id} 
+                      <tr
+                        key={student.id}
                         className={`hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
-                          selectedStudentId === student.id ? 'bg-amber-50/60 dark:bg-amber-950/20' : ''
+                          enemSlots.some(slotItem => slotItem.studentId === student.id) ? 'bg-amber-50/60 dark:bg-amber-950/20' : ''
                         }`}
                       >
                         <td className="py-3 px-3 font-semibold text-slate-500">
@@ -1415,10 +1975,8 @@ export default function EnemSimuladoView({
                             </div>
                           ) : (
                             <button
-                              onClick={() => {
-                                setSelectedStudentId(student.id);
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                              }}
+                              type="button"
+                              onClick={() => handleFocusOrCreateSlotForStudent(student.id)}
                               className="px-2.5 py-1 text-xs font-semibold text-brand-blue hover:text-brand-blue-dark dark:text-brand-yellow hover:underline"
                             >
                               Corrigir este aluno →
@@ -1797,34 +2355,103 @@ export default function EnemSimuladoView({
         </div>
       )}
 
-      {/* Modal de Câmera */}
+      {/* Modal de Câmera Contínua para Slots ENEM */}
       {isCameraOpen && (
-        <div className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4">
-          <div className="w-full max-w-lg bg-black rounded-3xl overflow-hidden relative border border-white/20">
-            <video 
-              ref={videoRef} 
-              autoPlay 
-              playsInline 
-              className="w-full h-auto aspect-[3/4] object-cover"
-            />
-            <div className="absolute bottom-6 inset-x-0 flex items-center justify-center gap-6">
-              <button
-                onClick={stopCamera}
-                className="p-3 bg-white/20 text-white rounded-full hover:bg-white/30 backdrop-blur-md"
-              >
-                <XCircle size={24} />
-              </button>
-              <button
-                onClick={capturePhoto}
-                className="w-16 h-16 bg-white rounded-full border-4 border-brand-yellow flex items-center justify-center shadow-2xl active:scale-95 transition-all"
-              >
-                <div className="w-12 h-12 bg-white rounded-full"></div>
-              </button>
+        <div className="fixed inset-0 z-50 bg-black/95 flex flex-col items-center justify-center p-3 sm:p-6 backdrop-blur-md">
+          <div className="w-full max-w-xl bg-slate-900 rounded-3xl overflow-hidden relative border border-white/20 shadow-2xl flex flex-col">
+            <div className="p-4 bg-slate-900/90 border-b border-white/10 flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <div className="w-3 h-3 rounded-full bg-red-500 animate-pulse shrink-0" />
+                <span className="text-white text-xs font-bold uppercase tracking-wider truncate">
+                  {(() => {
+                    const currentSlot = enemSlots.find(s => s.id === activeCameraSlotId);
+                    const slotIdx = enemSlots.findIndex(s => s.id === activeCameraSlotId);
+                    const studentName = students.find(st => st.id === currentSlot?.studentId)?.name || 'Aluno não selecionado';
+                    return `Slot #${slotIdx + 1}: ${studentName}`;
+                  })()}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={switchCameraFacing}
+                  className="p-2 bg-white/10 text-white rounded-xl hover:bg-white/20 transition-colors"
+                  title="Alternar Câmera"
+                >
+                  <SwitchCamera size={18} />
+                </button>
+                <button
+                  type="button"
+                  onClick={stopCamera}
+                  className="p-2 bg-white/10 text-white rounded-xl hover:bg-rose-600 transition-colors"
+                  title="Fechar Câmera"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+            </div>
+
+            <div className="relative aspect-[3/4] max-h-[60vh] bg-black flex items-center justify-center overflow-hidden">
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-6 border border-white/30 rounded-2xl pointer-events-none flex flex-col justify-between p-3">
+                <span className="text-[10px] text-white/60 uppercase tracking-widest font-mono">Enquadre as 45 questões</span>
+                <span className="text-[10px] text-white/60 text-right uppercase tracking-widest font-mono">Boa iluminação</span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-slate-900 border-t border-white/10 flex flex-col gap-3">
+              <div className="flex items-center justify-around">
+                <button
+                  type="button"
+                  onClick={() => capturePhoto(false)}
+                  className="flex flex-col items-center gap-1 text-slate-300 hover:text-white transition-colors text-[11px] font-bold"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center">
+                    <Camera size={18} />
+                  </div>
+                  Refazer Este
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => capturePhoto(true)}
+                  className="w-20 h-20 rounded-full border-4 border-brand-yellow bg-white flex items-center justify-center shadow-2xl active:scale-95 transition-transform"
+                  title="Fotografar e avançar para o próximo slot"
+                >
+                  <div className="w-16 h-16 rounded-full bg-brand-yellow/30 flex items-center justify-center">
+                    <Camera size={28} className="text-brand-blue-dark" />
+                  </div>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const currentIndex = enemSlots.findIndex(s => s.id === activeCameraSlotId);
+                    if (currentIndex !== -1 && currentIndex + 1 < enemSlots.length) {
+                      setActiveCameraSlotId(enemSlots[currentIndex + 1].id);
+                    } else {
+                      stopCamera();
+                    }
+                  }}
+                  className="flex flex-col items-center gap-1 text-slate-300 hover:text-white transition-colors text-[11px] font-bold"
+                >
+                  <div className="w-12 h-12 rounded-2xl bg-white/10 border border-white/20 flex items-center justify-center">
+                    <ExternalLink size={18} />
+                  </div>
+                  Pular Aluno ➡️
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 text-center font-medium">
+                Toque no botão central amarelo para salvar o cartão e avançar para o próximo aluno da fila!
+              </p>
             </div>
           </div>
-          <p className="text-white/70 text-xs mt-3 text-center">
-            Enquadre as 45 questões do cartão-resposta em ambiente bem iluminado.
-          </p>
         </div>
       )}
 
@@ -2144,6 +2771,30 @@ export default function EnemSimuladoView({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function EnemSlotDropzone({ onFiles, disabled }: { onFiles: (f: File[]) => void; disabled?: boolean }) {
+  const dropOptions: any = {
+    onDrop: onFiles,
+    accept: { 'image/*': ['.jpeg', '.jpg', '.png', '.webp'] },
+    multiple: false,
+    disabled
+  };
+  const { getRootProps, getInputProps } = useDropzone(dropOptions);
+
+  return (
+    <div
+      {...getRootProps()}
+      className={`p-2 bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-xl hover:bg-slate-300 dark:hover:bg-slate-600 flex items-center gap-1.5 text-xs font-bold cursor-pointer transition-colors ${
+        disabled ? 'opacity-50 cursor-not-allowed' : ''
+      }`}
+      title="Carregar foto da galeria ou arquivo"
+    >
+      <input {...getInputProps()} />
+      <Upload size={14} className="text-slate-600 dark:text-slate-300" />
+      <span className="hidden sm:inline text-[11px]">Galeria</span>
     </div>
   );
 }
