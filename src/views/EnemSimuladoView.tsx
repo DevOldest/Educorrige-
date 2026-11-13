@@ -104,6 +104,8 @@ export default function EnemSimuladoView({
   const [isCameraOpen, setIsCameraOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const [stream, setStream] = useState<MediaStream | null>(null);
+  const hasUnsavedEditsRef = useRef<boolean>(false);
+  const lastLoadedStudentIdRef = useRef<string>('');
 
   // Edição do gabarito oficial (individual por corretor se for corretor)
   const [editingAnswers, setEditingAnswers] = useState<Record<number, EnemAnswerOption>>(simulation.official_answers);
@@ -225,22 +227,35 @@ export default function EnemSimuladoView({
     }
   }, [selectedClassId]);
 
-  // Se o aluno mudar, verificar se já tem submissão gravada (independente de qual professor corrigiu)
+  // Carregar respostas do aluno selecionado sem apagar correção em andamento durante sincronizações em segundo plano
   useEffect(() => {
-    setLastAnalyzedImage(null);
-    if (selectedStudentId) {
-      const existing = submissions.find(
-        s => s.student_id === selectedStudentId
-      );
+    const studentChanged = lastLoadedStudentIdRef.current !== selectedStudentId;
+
+    if (studentChanged) {
+      lastLoadedStudentIdRef.current = selectedStudentId;
+      hasUnsavedEditsRef.current = false;
+      setLastAnalyzedImage(null);
+
+      if (selectedStudentId) {
+        const existing = submissions.find(s => s.student_id === selectedStudentId);
+        if (existing) {
+          setCurrentAnswers(existing.answers);
+        } else {
+          const initialAnswers: Record<number, EnemAnswerOption> = {};
+          for (let q = 1; q <= 45; q++) {
+            initialAnswers[q] = 'BLANK';
+          }
+          setCurrentAnswers(initialAnswers);
+        }
+      }
+      return;
+    }
+
+    // Se o aluno não mudou (apenas chegou atualização remota de submissions), só atualiza se não houver edição/leitura não salva
+    if (selectedStudentId && !hasUnsavedEditsRef.current) {
+      const existing = submissions.find(s => s.student_id === selectedStudentId);
       if (existing) {
         setCurrentAnswers(existing.answers);
-      } else {
-        // Inicializar com respostas em branco
-        const initialAnswers: Record<number, EnemAnswerOption> = {};
-        for (let q = 1; q <= 45; q++) {
-          initialAnswers[q] = 'BLANK';
-        }
-        setCurrentAnswers(initialAnswers);
       }
     }
   }, [selectedStudentId, submissions]);
@@ -423,13 +438,13 @@ export default function EnemSimuladoView({
   const correctCount = currentStats.totalCorrect;
   const calculatedScore = currentStats.score;
 
-  // Upload de imagem do cartão com compressão instantânea (1024px) para máxima economia
+  // Upload de imagem do cartão com alta nitidez (1440px) para leitura precisa de todas as 225 bolinhas
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
       setLastAnalyzedImage(null);
       try {
-        const compressed = await compressImageForAI(file, 1024, 0.80);
+        const compressed = await compressImageForAI(file, 1440, 0.85);
         setCapturedImage(`data:${compressed.mimeType};base64,${compressed.base64}`);
       } catch (err) {
         const reader = new FileReader();
@@ -472,9 +487,9 @@ export default function EnemSimuladoView({
 
   const capturePhoto = () => {
     if (videoRef.current) {
-      let width = videoRef.current.videoWidth || 1024;
-      let height = videoRef.current.videoHeight || 768;
-      const maxDim = 1024;
+      let width = videoRef.current.videoWidth || 1440;
+      let height = videoRef.current.videoHeight || 1080;
+      const maxDim = 1440;
       if (width > maxDim || height > maxDim) {
         if (width > height) {
           height = Math.round((height * maxDim) / width);
@@ -491,7 +506,7 @@ export default function EnemSimuladoView({
       const ctx = canvas.getContext('2d');
       if (ctx) {
         ctx.drawImage(videoRef.current, 0, 0, width, height);
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
         setLastAnalyzedImage(null);
         setCapturedImage(dataUrl);
         stopCamera();
@@ -499,7 +514,7 @@ export default function EnemSimuladoView({
     }
   };
 
-  // Análise com IA (Flash-Lite + trava anti-clique repetido na mesma foto)
+  // Análise com IA (Gemini 3.8 Flash LOW + trava anti-clique repetido na mesma foto)
   const handleAnalyzeWithAI = async () => {
     if (!capturedImage) {
       setStatusMessage({
@@ -511,7 +526,7 @@ export default function EnemSimuladoView({
 
     if (lastAnalyzedImage === capturedImage) {
       setStatusMessage({
-        text: 'Esta foto já foi analisada pela IA. Ajuste as letras manualmente abaixo ou carregue uma nova foto.',
+        text: 'Esta foto já foi analisada pela IA. Confirme e salve a nota abaixo ou carregue uma nova foto.',
         type: 'info'
       });
       return;
@@ -522,6 +537,7 @@ export default function EnemSimuladoView({
 
     try {
       const aiAnswers = await analyzeEnemBubbleSheet(capturedImage);
+      hasUnsavedEditsRef.current = true;
       setCurrentAnswers(aiAnswers);
       setLastAnalyzedImage(capturedImage);
       const stats = calculateEnemStatistics(aiAnswers, simulation.official_answers);
@@ -573,6 +589,7 @@ export default function EnemSimuladoView({
     };
 
     const updated = await saveStoredSubmission(newSub);
+    hasUnsavedEditsRef.current = false;
     setSubmissions(updated);
     setIsSaving(false);
 
@@ -588,6 +605,7 @@ export default function EnemSimuladoView({
     if (nextUncorrected) {
       setSelectedStudentId(nextUncorrected.id);
       setCapturedImage(null);
+      setLastAnalyzedImage(null);
     }
   };
 
@@ -700,6 +718,7 @@ export default function EnemSimuladoView({
       setSubmissions(updatedList);
 
       if (selectedStudentId === verifyingSubmission.student_id) {
+        hasUnsavedEditsRef.current = false;
         setCurrentAnswers(auditAnswers);
       }
 
@@ -731,6 +750,8 @@ export default function EnemSimuladoView({
     setSubmissions(updated);
 
     if (selectedStudentId === sub.student_id) {
+      hasUnsavedEditsRef.current = false;
+      setLastAnalyzedImage(null);
       const initialAnswers: Record<number, EnemAnswerOption> = {};
       for (let q = 1; q <= 45; q++) {
         initialAnswers[q] = 'BLANK';

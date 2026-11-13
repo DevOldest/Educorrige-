@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Search, Filter, FileText, Download, User, Calendar, ChevronRight, BarChart3, Users, CheckCircle2, Trash2, Loader2, Printer } from 'lucide-react';
 import { motion } from 'motion/react';
-import { supabase } from '../lib/supabase';
+import { supabase, getSafeAuthUser } from '../lib/supabase';
 import { cn } from '../lib/utils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -377,7 +377,7 @@ export default function ReportsView() {
     if (!supabase) return;
     setIsGeneratingDetailed(true);
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSafeAuthUser();
       const { ai, GEMINI_LITE_MODEL } = await import('../lib/gemini');
       
       const prompt = `

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X, Search, ArrowRightLeft, Check, UserCheck, School } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
-import { supabase } from '../lib/supabase';
+import { supabase, getSafeAuthUser } from '../lib/supabase';
 import { ThinkingLevel } from '@google/genai';
 import { ai, GEMINI_LITE_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
@@ -562,7 +562,7 @@ export default function ClassesView() {
     if (!previewData || !supabase) return;
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSafeAuthUser();
       
       const { data: classData, error: classError } = await supabase
         .from('classes')

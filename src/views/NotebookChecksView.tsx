@@ -11,7 +11,7 @@ import {
   BookOpen
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { supabase } from '../lib/supabase';
+import { supabase, getSafeAuthUser } from '../lib/supabase';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -134,7 +134,7 @@ export default function NotebookChecksView() {
     setIsSaving(true);
 
     try {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSafeAuthUser();
 
       // 1. Save maxStamps setting
       const settingsTitle = `__notebook_settings_${selectedClassId}__`;

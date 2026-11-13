@@ -32,12 +32,75 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
-import { supabase } from '../lib/supabase';
-import { ThinkingLevel } from '@google/genai';
-import { ai, GEMINI_MODEL, GEMINI_LITE_MODEL } from '../lib/gemini';
+import { supabase, getSafeAuthUser } from '../lib/supabase';
+import { ThinkingLevel, Type, type Schema } from '@google/genai';
+import { ai, GEMINI_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 import { compressImageForAI, formatBytes } from '../lib/imageOptimizer';
+
+const GRADING_RESPONSE_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: {
+    c: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          q: { type: Type.INTEGER },
+          a: { type: Type.STRING },
+          s: { type: Type.NUMBER },
+          f: { type: Type.STRING },
+        },
+        required: ['q', 'a', 's', 'f'],
+      },
+    },
+    t: { type: Type.NUMBER },
+  },
+  required: ['c', 't'],
+};
+
+function evaluateObjectiveAnswerMatch(studentAnsRaw: string, expectedAnsRaw: string): boolean | null {
+  const expectedClean = String(expectedAnsRaw || '').trim().toUpperCase();
+  const studentClean = String(studentAnsRaw || '').trim().toUpperCase();
+
+  // Apenas aplica comparação automática estrita quando o gabarito esperado é uma letra simples (A-E ou V/F)
+  const expectedSingleMatch = expectedClean.match(/^(?:LETRA\s+|ALTERNATIVA\s+)?([A-EVF])[).:\-\s]*$/i);
+  if (!expectedSingleMatch) {
+    return null;
+  }
+
+  const expectedLetter = expectedSingleMatch[1].toUpperCase();
+
+  if (
+    !studentClean ||
+    studentClean.includes('EM BRANCO') ||
+    studentClean === 'BLANK' ||
+    studentClean === '-' ||
+    studentClean.includes('NÃO RESPOND') ||
+    studentClean.includes('NAO RESPOND') ||
+    studentClean.includes('DUPLA') ||
+    studentClean.includes('RASURA') ||
+    studentClean.includes('MÚLTIPLA') ||
+    studentClean.includes('MULTIPLA')
+  ) {
+    return false;
+  }
+
+  // Extrai letras de alternativa mencionadas (ex: "B", "B)", "Alternativa B")
+  const explicitMatch = studentClean.match(/^(?:LETRA\s+|ALTERNATIVA\s+|OPÇÃO\s+|OPCAO\s+)?([A-EVF])(?:[).\-\s:]+.*)?$/i);
+  if (explicitMatch) {
+    const candidate = explicitMatch[1].toUpperCase();
+    // Verifica se o texto não indica duas alternativas distintas (ex: "A e B")
+    const multiOptionPattern = /\b([A-E])\s*(?:E|,|\/)\s*([A-E])\b/i;
+    if (multiOptionPattern.test(studentClean)) {
+      return false;
+    }
+    return candidate === expectedLetter;
+  }
+
+  return null;
+}
 
 interface SlotItem {
   id: string;
@@ -73,7 +136,6 @@ export default function GradingView() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [targetScale, setTargetScale] = useState(10);
   const [useConvertedScore, setUseConvertedScore] = useState(true);
-  const [aiPrecisionMode, setAiPrecisionMode] = useState<'auto' | 'high' | 'lite'>('auto');
 
   // Progresso em tempo real da correção em cascata
   const [currentProgress, setCurrentProgress] = useState<{
@@ -413,9 +475,9 @@ export default function GradingView() {
   const capturePhotoFromCamera = (advanceToNextSlot: boolean = false) => {
     if (!videoRef.current || !activeCameraSlotId) return;
     const video = videoRef.current;
-    let width = video.videoWidth || 1200;
-    let height = video.videoHeight || 900;
-    const maxDim = 1200;
+    let width = video.videoWidth || 1400;
+    let height = video.videoHeight || 1050;
+    const maxDim = 1400;
     if (width > maxDim || height > maxDim) {
       if (width > height) {
         height = Math.round((height * maxDim) / width);
@@ -458,7 +520,7 @@ export default function GradingView() {
           stopCamera();
         }
       }
-    }, 'image/jpeg', 0.80);
+    }, 'image/jpeg', 0.84);
   };
 
   const handleResetBatch = () => {
@@ -535,31 +597,10 @@ export default function GradingView() {
 
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-      // Roteamento inteligente: provas 100% objetivas usam Flash-Lite (minimal); mistas/dissertativas usam 3.8-flash em LOW
-      const hasEssayQuestions = questions.some(
-        q => String(q.question_type || 'objetiva').toLowerCase() === 'dissertativa'
-      );
-
-      let activeModel = GEMINI_MODEL;
-      let activeThinkingLevel = ThinkingLevel.LOW;
-
-      if (aiPrecisionMode === 'lite') {
-        activeModel = GEMINI_LITE_MODEL;
-        activeThinkingLevel = hasEssayQuestions ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL;
-      } else if (aiPrecisionMode === 'high') {
-        activeModel = GEMINI_MODEL;
-        activeThinkingLevel = ThinkingLevel.MEDIUM;
-      } else {
-        if (hasEssayQuestions) {
-          activeModel = GEMINI_MODEL;
-          activeThinkingLevel = ThinkingLevel.LOW;
-        } else {
-          activeModel = GEMINI_LITE_MODEL;
-          activeThinkingLevel = ThinkingLevel.MINIMAL;
-        }
-      }
-
-      const imageMaxDimension = hasEssayQuestions ? 1200 : 1024;
+      // Motor padrão da Área Individual: Gemini 3.8 Flash em ThinkingLevel.MEDIUM
+      const activeModel = GEMINI_MODEL;
+      const activeThinkingLevel = ThinkingLevel.MEDIUM;
+      const imageMaxDimension = 1400;
       const maxPossibleTotal = questions.reduce((sum, q) => sum + (Number(q.max_score) || 1.0), 0);
 
       // Fila concorrente controlada para alta velocidade em Tier 1
@@ -585,9 +626,9 @@ export default function GradingView() {
 
         const tryProcessing = async (attempt: number = 0): Promise<void> => {
           try {
-            // Compressão instantânea no navegador antes do envio (1200px para manuscritas, 1024px para objetivas)
+            // Compressão de alta nitidez (1400px) para preservar letra manuscrita e marcações objetivas
             const imageParts = await Promise.all(slot.files.map(async (file: File) => {
-              const compressed = await compressImageForAI(file, imageMaxDimension, 0.80);
+              const compressed = await compressImageForAI(file, imageMaxDimension, 0.84);
               return {
                 inlineData: {
                   mimeType: compressed.mimeType,
@@ -601,24 +642,29 @@ export default function GradingView() {
               return `Q${q.question_number} (${q.question_type || 'objetiva'}, máx ${q.max_score || 1.0}): "${q.expected_answer}"${crit}`;
             }).join('\n');
 
-            const prompt = `Corretor pedagógico. Analise as imagens e corrija segundo o GABARITO:
+            const prompt = `Corretor pedagógico de alta precisão. Analise atentamente todas as imagens da atividade do aluno e corrija todas as questões conforme o GABARITO OFICIAL:
 ${gabaritoLines}
 
-REGRAS:
-1. Identifique a resposta marcada ou escrita pelo aluno em cada questão (se em branco/ilegível, a="(Em branco)", s=0).
-2. Atribua a nota "s" entre 0 e o máximo da questão (acerto parcial proporcional apenas em dissertativas).
-3. ECONOMIA DE RESPOSTA:
-   - Em questões OBJETIVAS: deixe "f" vazio ("") quando acertar, ou apenas "Errou" se errar. Não repita o gabarito nem o valor máximo.
-   - Em questões DISSERTATIVAS: escreva em "f" um feedback curto e preciso (máx 90 caracteres).
-4. Retorne ESTRITAMENTE JSON compacto neste formato:
-{"c":[{"q":1,"a":"A","s":1.0,"f":""}],"t":8.5}`;
+REGRAS ESTRITAS:
+1. Inclua TODAS as questões do gabarito (${questions.map(q => q.question_number).join(', ')}), exatamente uma entrada por número "q".
+2. Transcreva fielmente a resposta marcada ou escrita pelo aluno em "a". Se não houver resposta, estiver em branco ou ilegível, use a="(Em branco)" e s=0.
+3. EM QUESTÕES OBJETIVAS:
+   - Identifique apenas a alternativa marcada (ex: "A", "B", "C", "D", "E") ou "DUPLA" se houver duas alternativas marcadas/rasura.
+   - Não dê nota parcial: s é o valor máximo se acertar exatamente, ou 0 se errar/em branco/dupla.
+   - Deixe "f" vazio ("") se acertar ou apenas "Incorreto." se errar.
+4. EM QUESTÕES DISSERTATIVAS:
+   - Atribua nota "s" justa entre 0 e o máximo da questão segundo o critério pedagógico.
+   - Escreva em "f" um feedback direto e preciso (máx 100 caracteres).
+5. Retorne ESTRITAMENTE JSON no esquema solicitado.`;
 
             const response = await ai.models.generateContent({
               model: activeModel,
               contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }],
               config: {
-                temperature: 0.1,
+                temperature: 0,
+                seed: 42,
                 responseMimeType: 'application/json',
+                responseSchema: GRADING_RESPONSE_SCHEMA,
                 thinkingConfig: {
                   thinkingLevel: activeThinkingLevel
                 }
@@ -633,30 +679,56 @@ REGRAS:
               let normalizedResult: any;
 
               if (Array.isArray(raw.c)) {
-                const corrections = raw.c.map((item: any) => {
+                const aiByQuestion = new Map<number, any>();
+                for (const item of raw.c) {
                   const qNum = Number(item.q);
-                  const refQ = questions.find(q => Number(q.question_number) === qNum);
-                  const maxScore = Number(refQ?.max_score) || 1.0;
-                  const score = Math.max(0, Math.min(maxScore, Number(item.s) || 0));
+                  if (!Number.isNaN(qNum) && !aiByQuestion.has(qNum)) {
+                    aiByQuestion.set(qNum, item);
+                  }
+                }
+
+                const corrections = questions.map((refQ: any) => {
+                  const qNum = Number(refQ.question_number);
+                  const item = aiByQuestion.get(qNum);
+                  const maxScore = Number(refQ.max_score) || 1.0;
+                  const isObjective = String(refQ.question_type || 'objetiva').toLowerCase() === 'objetiva';
+                  const studentAns = item ? String(item.a || '(Em branco)').trim() : '(Em branco)';
+
+                  let score = item ? Math.max(0, Math.min(maxScore, Number(item.s) || 0)) : 0;
+
+                  if (isObjective) {
+                    const deterministicMatch = evaluateObjectiveAnswerMatch(studentAns, refQ.expected_answer ?? '');
+                    if (deterministicMatch !== null) {
+                      score = deterministicMatch ? maxScore : 0;
+                    } else {
+                      // Para objetivas de texto livre, evita nota parcial acidental
+                      score = score >= maxScore * 0.99 ? maxScore : 0;
+                    }
+                  }
+
                   const defaultFeedback = score >= maxScore ? 'Correto.' : score > 0 ? 'Parcial.' : 'Incorreto.';
+                  const aiFeedback = item?.f && String(item.f).trim() ? String(item.f).trim() : '';
 
                   return {
                     question_number: qNum,
-                    expected_answer: refQ?.expected_answer ?? '',
-                    student_answer: String(item.a || '(Em branco)'),
+                    expected_answer: refQ.expected_answer ?? '',
+                    student_answer: studentAns || '(Em branco)',
                     ai_score: score,
                     max_score: maxScore,
-                    feedback: (item.f && String(item.f).trim()) ? String(item.f).trim() : defaultFeedback,
+                    feedback: isObjective ? defaultFeedback : (aiFeedback || defaultFeedback),
                     is_correct: score >= maxScore
                   };
                 });
 
-                const computedTotal = corrections.reduce((sum: number, c: any) => sum + (Number(c.ai_score) || 0), 0);
+                const computedTotal = Math.round(
+                  corrections.reduce((sum: number, c: any) => sum + (Number(c.ai_score) || 0), 0) * 100
+                ) / 100;
+
                 normalizedResult = {
                   ai_model: activeModel,
                   corrections,
                   summary: {
-                    ai_total_score: typeof raw.t === 'number' ? raw.t : computedTotal,
+                    ai_total_score: computedTotal,
                     max_total_score: maxPossibleTotal || 10.0,
                     total_questions: questions.length
                   }
@@ -770,10 +842,8 @@ REGRAS:
 
     let userId = 'admin_user';
     try {
-      if (supabase) {
-        const { data: authData } = await supabase.auth.getUser();
-        if (authData?.user?.id) userId = authData.user.id;
-      }
+      const authUser = await getSafeAuthUser();
+      if (authUser?.id) userId = authUser.id;
     } catch (e) {
       console.warn('Could not get auth user:', e);
     }
@@ -880,7 +950,7 @@ REGRAS:
 
   async function fileToBase64(file: File): Promise<string> {
     try {
-      const res = await compressImageForAI(file, 1200, 0.80);
+      const res = await compressImageForAI(file, 1400, 0.84);
       return res.base64;
     } catch {
       return new Promise((resolve, reject) => {
@@ -1082,7 +1152,7 @@ REGRAS:
               <div>
                 <p className="text-xs font-bold uppercase text-brand-yellow tracking-wider flex items-center gap-1.5">
                   <Sparkles size={14} />
-                  Roteamento Inteligente Ativo (Qualidade + Economia)
+                  Correção Padrão Ativa (Gemini 3.8 Flash • Precisão Média)
                 </p>
                 <p className="text-base font-black">
                   Progresso: {currentProgress.currentStep} de {currentProgress.totalSteps} atividades concluídas
@@ -1178,20 +1248,6 @@ REGRAS:
                 className="w-12 p-1 text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded text-center font-bold text-brand-blue dark:text-brand-yellow transition-colors"
               />
             </div>
-          </div>
-
-          <div className="flex flex-col gap-2 min-w-[190px]">
-            <label className="text-[10px] font-bold text-slate-400 uppercase">Motor de Correção IA</label>
-            <select
-              value={aiPrecisionMode}
-              onChange={(e) => setAiPrecisionMode(e.target.value as 'auto' | 'high' | 'lite')}
-              className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-brand-yellow h-[46px]"
-              title="Inteligente usa Flash-Lite em objetivas e 3.8 Flash (LOW) em dissertativas/mistas"
-            >
-              <option value="auto">Inteligente (Padrão)</option>
-              <option value="high">Alta Precisão (Letra Difícil)</option>
-              <option value="lite">Máxima Economia (Lite)</option>
-            </select>
           </div>
         </div>
 

@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Plus, FileText, Search, Trash2, Edit2, CheckCircle2, AlertCircle, FileUp, Loader2, X } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
-import { supabase } from '../lib/supabase';
+import { supabase, getSafeAuthUser } from '../lib/supabase';
 import { ThinkingLevel } from '@google/genai';
 import { ai, GEMINI_LITE_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
@@ -485,7 +485,7 @@ export default function AnswerKeysView() {
     }
 
     setIsLoading(true);
-    const { data: { user } } = await supabase.auth.getUser();
+    const user = await getSafeAuthUser();
 
     try {
       let assessmentId = editingAssessment?.id;
