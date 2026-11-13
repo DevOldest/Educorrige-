@@ -1,6 +1,7 @@
 import { EnemSimulation, EnemSubmission, EnemAnswerOption } from '../types';
 import { supabase } from './supabase';
-import { ai, GEMINI_MODEL } from './gemini';
+import { ThinkingLevel } from '@google/genai';
+import { ai, GEMINI_LITE_MODEL } from './gemini';
 
 // Regra de pontuação por faixas do Simulado ENEM:
 // 1 a 10: 1.0 pt
@@ -106,7 +107,10 @@ export const DEFAULT_SIMULATION: EnemSimulation = {
   }, {} as Record<number, EnemAnswerOption>)
 };
 
-// Obter ID determinístico do Simulado por usuário/corretor
+// ID canônico único para o pool global de correções (garante visibilidade entre Admin e todos os Corretores)
+export const SHARED_SIMULATION_ID = DEFAULT_SIMULATION.id;
+
+// Obter ID determinístico do Gabarito Individual por usuário/corretor
 export function getSimulationIdForUser(reviewerName?: string): string {
   if (!reviewerName || !reviewerName.trim() || reviewerName.toLowerCase() === 'administrador' || reviewerName.toLowerCase() === 'admin') {
     return DEFAULT_SIMULATION.id;
@@ -138,12 +142,16 @@ export function getStoredSimulation(reviewerName?: string): EnemSimulation {
 
   // Se for corretor e ainda não tiver gabarito próprio salvo, inicializa com cópia do gabarito mestre
   let baseAnswers = { ...DEFAULT_SIMULATION.official_answers };
+  let masterAccessCode = DEFAULT_SIMULATION.access_code;
   try {
     const masterRaw = localStorage.getItem(`${LOCAL_STORAGE_SIM_KEY}_${DEFAULT_SIMULATION.id}`) || localStorage.getItem(LOCAL_STORAGE_SIM_KEY);
     if (masterRaw) {
       const parsedMaster = JSON.parse(masterRaw);
       if (parsedMaster.official_answers) {
         baseAnswers = { ...parsedMaster.official_answers };
+      }
+      if (parsedMaster.access_code) {
+        masterAccessCode = parsedMaster.access_code;
       }
     }
   } catch (e) {
@@ -153,6 +161,7 @@ export function getStoredSimulation(reviewerName?: string): EnemSimulation {
   return {
     ...DEFAULT_SIMULATION,
     id: targetId,
+    access_code: masterAccessCode,
     title: reviewerName && reviewerName.toLowerCase() !== 'administrador' 
       ? `Gabarito de ${reviewerName}` 
       : DEFAULT_SIMULATION.title,
@@ -166,30 +175,88 @@ export async function fetchRemoteSimulation(reviewerName?: string): Promise<Enem
   if (!supabase) return local;
 
   try {
+    // Busca tanto o gabarito mestre (para código de acesso atualizado e fallback) quanto o individual do corretor
+    const idsToFetch = targetId === DEFAULT_SIMULATION.id
+      ? [DEFAULT_SIMULATION.id]
+      : [DEFAULT_SIMULATION.id, targetId];
+
     const { data, error } = await supabase
       .from('enem_simulations')
       .select('*')
-      .eq('id', targetId)
-      .maybeSingle();
+      .in('id', idsToFetch);
 
-    if (!error && data) {
-      const merged: EnemSimulation = {
-        id: data.id,
-        title: data.title || local.title,
-        area: data.area || local.area,
-        total_questions: data.total_questions || 45,
-        access_code: data.access_code || local.access_code,
-        official_answers: data.official_answers || local.official_answers,
-        created_at: data.created_at
-      };
-      saveStoredSimulationLocal(merged, reviewerName);
-      return merged;
+    if (!error && Array.isArray(data) && data.length > 0) {
+      const masterRow = data.find(r => r.id === DEFAULT_SIMULATION.id);
+      if (masterRow) {
+        const masterMerged: EnemSimulation = {
+          id: masterRow.id,
+          title: masterRow.title || DEFAULT_SIMULATION.title,
+          area: masterRow.area || DEFAULT_SIMULATION.area,
+          total_questions: masterRow.total_questions || 45,
+          access_code: masterRow.access_code || DEFAULT_SIMULATION.access_code,
+          official_answers: masterRow.official_answers || DEFAULT_SIMULATION.official_answers,
+          created_at: masterRow.created_at
+        };
+        saveStoredSimulationLocal(masterMerged);
+      }
+
+      const targetRow = data.find(r => r.id === targetId);
+      if (targetRow) {
+        const merged: EnemSimulation = {
+          id: targetRow.id,
+          title: targetRow.title || local.title,
+          area: targetRow.area || local.area,
+          total_questions: targetRow.total_questions || 45,
+          access_code: masterRow?.access_code || targetRow.access_code || local.access_code,
+          official_answers: targetRow.official_answers || local.official_answers,
+          created_at: targetRow.created_at
+        };
+        saveStoredSimulationLocal(merged, reviewerName);
+        return merged;
+      } else if (masterRow && targetId !== DEFAULT_SIMULATION.id) {
+        // Se o corretor ainda não salvou gabarito próprio no banco, preserva o local dele ou usa o mestre como ponto de partida
+        const hasLocalCustom = !!localStorage.getItem(`${LOCAL_STORAGE_SIM_KEY}_${targetId}`);
+        const initialReviewerSim: EnemSimulation = {
+          ...local,
+          id: targetId,
+          access_code: masterRow.access_code || local.access_code,
+          official_answers: hasLocalCustom ? local.official_answers : (masterRow.official_answers || local.official_answers)
+        };
+        return initialReviewerSim;
+      }
     }
   } catch (e) {
     console.warn('Supabase offline ou tabela enem_simulations inexistente. Usando local:', e);
   }
 
   return local;
+}
+
+// Buscar mapa de todos os gabaritos (Admin e Corretores) para auditoria fiel de qualquer correção
+export async function fetchAllSimulationsMap(): Promise<Record<string, Record<number, EnemAnswerOption>>> {
+  const map: Record<string, Record<number, EnemAnswerOption>> = {};
+  const masterLocal = getStoredSimulation();
+  map[DEFAULT_SIMULATION.id] = masterLocal.official_answers;
+
+  if (!supabase) return map;
+
+  try {
+    const { data, error } = await supabase
+      .from('enem_simulations')
+      .select('id, official_answers');
+
+    if (!error && Array.isArray(data)) {
+      for (const row of data) {
+        if (row.id && row.official_answers) {
+          map[row.id] = row.official_answers;
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('Não foi possível carregar mapa completo de gabaritos:', e);
+  }
+
+  return map;
 }
 
 // Salvar simulado configurado localmente
@@ -203,6 +270,26 @@ function saveStoredSimulationLocal(sim: EnemSimulation, reviewerName?: string): 
     }
   } catch (e) {
     console.error('Erro ao salvar simulado local:', e);
+  }
+}
+
+// Garante que o registro mestre exista em enem_simulations (evita erro de chave estrangeira em enem_submissions)
+async function ensureMasterSimulationExists(): Promise<void> {
+  if (!supabase) return;
+  try {
+    const masterSim = getStoredSimulation();
+    await supabase
+      .from('enem_simulations')
+      .upsert({
+        id: DEFAULT_SIMULATION.id,
+        title: masterSim.title || DEFAULT_SIMULATION.title,
+        area: masterSim.area || DEFAULT_SIMULATION.area,
+        total_questions: 45,
+        access_code: masterSim.access_code || DEFAULT_SIMULATION.access_code,
+        official_answers: masterSim.official_answers || DEFAULT_SIMULATION.official_answers
+      }, { onConflict: 'id' });
+  } catch (e) {
+    // Ignorar silenciosamente se já existir ou sem permissão
   }
 }
 
@@ -222,7 +309,7 @@ export async function saveStoredSimulation(sim: EnemSimulation, reviewerName?: s
   if (!supabase) return;
 
   try {
-    await supabase
+    const { error } = await supabase
       .from('enem_simulations')
       .upsert({
         id: toSave.id,
@@ -230,12 +317,40 @@ export async function saveStoredSimulation(sim: EnemSimulation, reviewerName?: s
         area: toSave.area,
         total_questions: toSave.total_questions,
         access_code: toSave.access_code,
-        official_answers: toSave.official_answers,
-        updated_at: new Date().toISOString()
+        official_answers: toSave.official_answers
       }, { onConflict: 'id' });
+
+    if (error) {
+      console.warn('Aviso ao salvar enem_simulations:', error.message);
+    }
   } catch (e) {
     console.warn('Erro ao sincronizar enem_simulations com Supabase:', e);
   }
+}
+
+// Deduplica submissões mantendo sempre a mais recente por aluno (student_id)
+function deduplicateSubmissionsByStudent(list: EnemSubmission[]): EnemSubmission[] {
+  const byStudent = new Map<string, EnemSubmission>();
+
+  for (const item of list) {
+    if (!item || !item.student_id) continue;
+    const existing = byStudent.get(item.student_id);
+    if (!existing) {
+      byStudent.set(item.student_id, item);
+    } else {
+      const existingTime = new Date(existing.updated_at || existing.created_at || 0).getTime();
+      const itemTime = new Date(item.updated_at || item.created_at || 0).getTime();
+      if (itemTime >= existingTime) {
+        byStudent.set(item.student_id, item);
+      }
+    }
+  }
+
+  return Array.from(byStudent.values()).sort((a, b) => {
+    const timeA = new Date(a.updated_at || a.created_at || 0).getTime();
+    const timeB = new Date(b.updated_at || b.created_at || 0).getTime();
+    return timeB - timeA;
+  });
 }
 
 // Obter submissões locais
@@ -243,7 +358,10 @@ export function getStoredSubmissions(): EnemSubmission[] {
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_SUBMISSIONS_KEY);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        return deduplicateSubmissionsByStudent(parsed);
+      }
     }
   } catch (e) {
     console.error('Erro ao ler submissões locais:', e);
@@ -251,27 +369,109 @@ export function getStoredSubmissions(): EnemSubmission[] {
   return [];
 }
 
-// Buscar submissões no Supabase com sincronização
-export async function fetchRemoteSubmissions(simulationId?: string, reviewerName?: string): Promise<EnemSubmission[]> {
+// Persiste uma submissão no Supabase usando sempre o SHARED_SIMULATION_ID canônico
+async function persistSubmissionRemote(sub: EnemSubmission): Promise<boolean> {
+  if (!supabase) return false;
+
+  const canonicalId = `${SHARED_SIMULATION_ID}_${sub.student_id}`;
+  const basePayload = {
+    simulation_id: SHARED_SIMULATION_ID,
+    student_id: sub.student_id,
+    student_name: sub.student_name,
+    roll_number: sub.roll_number ?? null,
+    class_id: sub.class_id,
+    reviewer_name: sub.reviewer_name,
+    answers: sub.answers,
+    total_correct: sub.total_correct,
+    score_points: sub.score_points
+  };
+
+  try {
+    let { error } = await supabase
+      .from('enem_submissions')
+      .upsert(basePayload, { onConflict: 'simulation_id,student_id' });
+
+    // Se falhar por FK (registro mestre ainda não criado em enem_simulations), cria o mestre e tenta novamente
+    if (error && (error.code === '23503' || error.message?.toLowerCase().includes('foreign key'))) {
+      await ensureMasterSimulationExists();
+      const retryFk = await supabase
+        .from('enem_submissions')
+        .upsert(basePayload, { onConflict: 'simulation_id,student_id' });
+      error = retryFk.error;
+    }
+
+    // Se a coluna 'id' for TEXT sem valor default (erro NOT NULL 23502), envia id explícito
+    if (error && (error.code === '23502' || error.message?.toLowerCase().includes('null value in column "id"'))) {
+      const retryWithId = await supabase
+        .from('enem_submissions')
+        .upsert({ id: canonicalId, ...basePayload }, { onConflict: 'simulation_id,student_id' });
+      error = retryWithId.error;
+
+      if (error && (error.code === '42P10' || error.message?.toLowerCase().includes('on conflict'))) {
+        const retryByIdOnly = await supabase
+          .from('enem_submissions')
+          .upsert({ id: canonicalId, ...basePayload }, { onConflict: 'id' });
+        error = retryByIdOnly.error;
+      }
+    }
+
+    // Fallback caso não haja constraint única composta (42P10): verifica existência e faz update ou insert
+    if (error && (error.code === '42P10' || error.message?.toLowerCase().includes('on conflict'))) {
+      const { data: existingRows } = await supabase
+        .from('enem_submissions')
+        .select('id')
+        .eq('simulation_id', SHARED_SIMULATION_ID)
+        .eq('student_id', sub.student_id)
+        .limit(1);
+
+      if (existingRows && existingRows.length > 0) {
+        const upd = await supabase
+          .from('enem_submissions')
+          .update(basePayload)
+          .eq('id', existingRows[0].id);
+        error = upd.error;
+      } else {
+        const ins = await supabase
+          .from('enem_submissions')
+          .insert(basePayload);
+        error = ins.error;
+      }
+    }
+
+    if (error) {
+      console.warn('Erro retornado pelo Supabase ao salvar enem_submissions:', error);
+      return false;
+    }
+
+    // Remove eventuais registros antigos deste mesmo aluno que estavam vinculados a simulation_id individual ('sim-enem-*')
+    await supabase
+      .from('enem_submissions')
+      .delete()
+      .eq('student_id', sub.student_id)
+      .neq('simulation_id', SHARED_SIMULATION_ID);
+
+    return true;
+  } catch (e) {
+    console.warn('Falha de rede ao salvar submissão no Supabase:', e);
+    return false;
+  }
+}
+
+// Buscar TODAS as submissões do Simulado ENEM no Supabase (visível para Admin e todos os Corretores)
+export async function fetchRemoteSubmissions(_simulationId?: string, _reviewerName?: string): Promise<EnemSubmission[]> {
   const local = getStoredSubmissions();
   if (!supabase) return local;
 
   try {
-    let query = supabase.from('enem_submissions').select('*');
-
-    if (reviewerName && reviewerName.toLowerCase() !== 'administrador') {
-      const targetSimId = getSimulationIdForUser(reviewerName);
-      query = query.or(`reviewer_name.eq."${reviewerName}",simulation_id.eq."${targetSimId}"`);
-    } else if (simulationId) {
-      query = query.eq('simulation_id', simulationId);
-    }
-
-    const { data, error } = await query.order('created_at', { ascending: false });
+    const { data, error } = await supabase
+      .from('enem_submissions')
+      .select('*')
+      .order('created_at', { ascending: false });
 
     if (!error && data) {
-      const formatted: EnemSubmission[] = data.map((d: any) => ({
-        id: d.id,
-        simulation_id: d.simulation_id,
+      const remoteFormatted: EnemSubmission[] = data.map((d: any) => ({
+        id: d.id || `${SHARED_SIMULATION_ID}_${d.student_id}`,
+        simulation_id: d.simulation_id || SHARED_SIMULATION_ID,
         student_id: d.student_id,
         student_name: d.student_name,
         roll_number: d.roll_number,
@@ -282,14 +482,49 @@ export async function fetchRemoteSubmissions(simulationId?: string, reviewerName
         score_points: Number(d.score_points || 0),
         blank_count: d.blank_count,
         multiple_count: d.multiple_count,
-        created_at: d.created_at
+        created_at: d.created_at,
+        updated_at: d.updated_at
       }));
 
+      const remoteStudentIds = new Set(remoteFormatted.map(r => r.student_id));
+
+      // Resgate automático: se este navegador tiver correções locais feitas com ID individual ('sim-enem-*')
+      // que não haviam subido ao banco (ex: por falha de FK anterior), envia agora para todos verem!
+      const unsyncedLocal = local.filter(
+        item => item.simulation_id && item.simulation_id !== SHARED_SIMULATION_ID && !remoteStudentIds.has(item.student_id)
+      );
+
+      if (unsyncedLocal.length > 0) {
+        for (const pending of unsyncedLocal) {
+          await persistSubmissionRemote(pending);
+          remoteFormatted.push({
+            ...pending,
+            id: `${SHARED_SIMULATION_ID}_${pending.student_id}`,
+            simulation_id: SHARED_SIMULATION_ID
+          });
+        }
+      }
+
+      // Migra automaticamente registros remotos que estavam com simulation_id 'sim-enem-*' para o ID compartilhado
+      const nonCanonicalRemote = remoteFormatted.filter(
+        r => r.simulation_id && r.simulation_id !== SHARED_SIMULATION_ID
+      );
+      if (nonCanonicalRemote.length > 0) {
+        Promise.all(nonCanonicalRemote.map(r => persistSubmissionRemote(r))).catch(() => {});
+      }
+
+      const unified = deduplicateSubmissionsByStudent(
+        remoteFormatted.map(r => ({
+          ...r,
+          simulation_id: SHARED_SIMULATION_ID
+        }))
+      );
+
       try {
-        localStorage.setItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(formatted));
+        localStorage.setItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(unified));
       } catch (e) {}
 
-      return formatted;
+      return unified;
     }
   } catch (e) {
     console.warn('Supabase offline ou tabela enem_submissions inexistente. Usando local:', e);
@@ -298,20 +533,27 @@ export async function fetchRemoteSubmissions(simulationId?: string, reviewerName
   return local;
 }
 
-// Salvar submissão de aluno (local + Supabase)
+// Salvar submissão de aluno (local + Supabase compartilhado para todos)
 export async function saveStoredSubmission(sub: EnemSubmission): Promise<EnemSubmission[]> {
+  const canonicalSub: EnemSubmission = {
+    ...sub,
+    id: sub.id || `${SHARED_SIMULATION_ID}_${sub.student_id}`,
+    simulation_id: SHARED_SIMULATION_ID,
+    updated_at: new Date().toISOString()
+  };
+
   const current = getStoredSubmissions();
-  const existingIdx = current.findIndex(
-    s => s.simulation_id === sub.simulation_id && s.student_id === sub.student_id
-  );
+  const existingIdx = current.findIndex(s => s.student_id === canonicalSub.student_id);
 
   let updated: EnemSubmission[];
   if (existingIdx >= 0) {
     updated = [...current];
-    updated[existingIdx] = sub;
+    updated[existingIdx] = canonicalSub;
   } else {
-    updated = [sub, ...current];
+    updated = [canonicalSub, ...current];
   }
+
+  updated = deduplicateSubmissionsByStudent(updated);
 
   try {
     localStorage.setItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(updated));
@@ -319,35 +561,23 @@ export async function saveStoredSubmission(sub: EnemSubmission): Promise<EnemSub
     console.error('Erro ao salvar submissão:', e);
   }
 
-  if (supabase) {
-    try {
-      await supabase
-        .from('enem_submissions')
-        .upsert({
-          id: sub.id,
-          simulation_id: sub.simulation_id,
-          student_id: sub.student_id,
-          student_name: sub.student_name,
-          roll_number: sub.roll_number,
-          class_id: sub.class_id,
-          reviewer_name: sub.reviewer_name,
-          answers: sub.answers,
-          total_correct: sub.total_correct,
-          score_points: sub.score_points,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'simulation_id, student_id' });
-    } catch (e) {
-      console.warn('Erro ao salvar submissão no Supabase:', e);
-    }
-  }
+  await persistSubmissionRemote(canonicalSub);
 
   return updated;
 }
 
-// Excluir submissão
-export async function deleteStoredSubmission(subId: string): Promise<EnemSubmission[]> {
+// Excluir submissão (remove tanto pelo student_id quanto pelo ID da submissão)
+export async function deleteStoredSubmission(subId: string, studentId?: string): Promise<EnemSubmission[]> {
   const current = getStoredSubmissions();
-  const updated = current.filter(s => s.id !== subId);
+  const targetSub = current.find(s => s.id === subId);
+  const resolvedStudentId = studentId || targetSub?.student_id;
+
+  const updated = current.filter(s => {
+    if (s.id === subId) return false;
+    if (resolvedStudentId && s.student_id === resolvedStudentId) return false;
+    return true;
+  });
+
   try {
     localStorage.setItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(updated));
   } catch (e) {
@@ -356,7 +586,11 @@ export async function deleteStoredSubmission(subId: string): Promise<EnemSubmiss
 
   if (supabase) {
     try {
-      await supabase.from('enem_submissions').delete().eq('id', subId);
+      if (resolvedStudentId) {
+        await supabase.from('enem_submissions').delete().eq('student_id', resolvedStudentId);
+      } else {
+        await supabase.from('enem_submissions').delete().eq('id', subId);
+      }
     } catch (e) {
       console.warn('Erro ao deletar submissão no Supabase:', e);
     }
@@ -365,41 +599,27 @@ export async function deleteStoredSubmission(subId: string): Promise<EnemSubmiss
   return updated;
 }
 
-// Processar imagem do cartão resposta via IA (Gemini Vision)
+// Processar imagem do cartão resposta via IA (Gemini Flash-Lite com Thinking Mínimo e saída compacta)
 export async function analyzeEnemBubbleSheet(imageBase64: string): Promise<Record<number, EnemAnswerOption>> {
   if (!ai) {
     throw new Error('Chave da API de IA não configurada.');
   }
 
-  const prompt = `Você é um leitor óptico de altíssima precisão (OMR) para Cartões-Resposta de Simulado ENEM contendo exatamente 45 questões (numeradas de 1 a 45).
-Cada questão tem opções de alternativas em bolinhas: A, B, C, D, E.
-
-Analise com extremo rigor a imagem deste cartão de respostas do aluno.
-Para cada uma das questões de 1 a 45, identifique com precisão a marcação do estudante seguindo ESTAS REGRAS OFICIAIS DO ENEM:
-
-REGRAS:
-1. Retorne ESTRITAMENTE um JSON válido sem marcações markdown extras, no formato:
-{
-  "answers": {
-    "1": "A",
-    "2": "C",
-    "3": "DUPLA",
-    "4": "BLANK",
-    ...
-    "45": "D"
-  }
-}
-2. QUESTÕES NÃO SINALIZADAS: Se a questão não estiver preenchida (em branco, nenhuma alternativa marcada), coloque "BLANK".
-3. DUAS OU MAIS MARCAÇÕES / TODAS MARCADAS: Se o aluno marcou duas alternativas (ex: A e B), marcou três ou mais, marcou todas as alternativas ou cometeu rasura com mais de uma bolinha preenchida, coloque "DUPLA".
-4. MARCAÇÃO ÚNICA: Se o aluno marcou claramente apenas uma alternativa, coloque a respectiva letra maiúscula: "A", "B", "C", "D" ou "E".
-5. Preencha todas as 45 questões (de 1 a 45).`;
+  const prompt = `Leitor óptico (OMR) de Cartão-Resposta ENEM com 45 questões (1 a 45), alternativas A, B, C, D, E.
+Retorne ESTRITAMENTE um JSON válido com uma lista de exatamente 45 strings na chave "a" (ordem da questão 1 até a 45):
+{"a":["A","C","DUPLA","BLANK",...]}
+Regras:
+- Nenhuma bolinha marcada = "BLANK"
+- Duas ou mais bolinhas marcadas / rasura = "DUPLA"
+- Apenas uma bolinha marcada = "A", "B", "C", "D" ou "E"
+Sem texto extra.`;
 
   const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
 
   const executeWithRetry = async (attempt: number = 0): Promise<string> => {
     try {
       const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: GEMINI_LITE_MODEL,
         contents: [
           {
             role: 'user',
@@ -416,7 +636,10 @@ REGRAS:
         ],
         config: {
           temperature: 0.1,
-          responseMimeType: 'application/json'
+          responseMimeType: 'application/json',
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.MINIMAL
+          }
         }
       });
       return response.text || '{}';
@@ -432,21 +655,40 @@ REGRAS:
     }
   };
 
+  const normalizeOption = (raw: unknown): EnemAnswerOption => {
+    const val = String(raw || 'BLANK').trim().toUpperCase();
+    if (['A', 'B', 'C', 'D', 'E'].includes(val)) {
+      return val as EnemAnswerOption;
+    }
+    if (val === 'DUPLA' || val === 'ANULADA' || val === 'MULTIPLE' || val === 'RASURA') {
+      return 'DUPLA';
+    }
+    return 'BLANK';
+  };
+
   try {
     const text = await executeWithRetry();
     const parsed = JSON.parse(text);
     const answers: Record<number, EnemAnswerOption> = {};
 
+    const compactArray = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.a)
+      ? parsed.a
+      : Array.isArray(parsed?.answers)
+      ? parsed.answers
+      : null;
+
+    if (compactArray) {
+      for (let q = 1; q <= 45; q++) {
+        answers[q] = normalizeOption(compactArray[q - 1]);
+      }
+      return answers;
+    }
+
     const rawAnswers = parsed.answers || parsed;
     for (let q = 1; q <= 45; q++) {
-      const val = String(rawAnswers[q] || rawAnswers[String(q)] || 'BLANK').trim().toUpperCase();
-      if (['A', 'B', 'C', 'D', 'E'].includes(val)) {
-        answers[q] = val as EnemAnswerOption;
-      } else if (val === 'DUPLA' || val === 'ANULADA' || val === 'MULTIPLE' || val === 'RASURA') {
-        answers[q] = 'DUPLA';
-      } else {
-        answers[q] = 'BLANK';
-      }
+      answers[q] = normalizeOption(rawAnswers[q] || rawAnswers[String(q)]);
     }
 
     return answers;

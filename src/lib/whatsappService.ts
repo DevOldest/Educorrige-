@@ -1,4 +1,5 @@
-import { ai, GEMINI_MODEL } from './gemini';
+import { ThinkingLevel } from '@google/genai';
+import { ai, GEMINI_LITE_MODEL } from './gemini';
 import { supabase } from './supabase';
 import { WeeklyStudyMessage, ExtractedCampaign, WeeklyMessageStatus } from '../types';
 
@@ -426,7 +427,7 @@ Responda OBRIGATORIAMENTE em JSON válido com esta estrutura exata:
 
   try {
     const response = await ai.models.generateContent({
-      model: GEMINI_MODEL,
+      model: GEMINI_LITE_MODEL,
       contents: [
         {
           role: 'user',
@@ -442,7 +443,10 @@ Responda OBRIGATORIAMENTE em JSON válido com esta estrutura exata:
         }
       ],
       config: {
-        responseMimeType: 'application/json'
+        responseMimeType: 'application/json',
+        thinkingConfig: {
+          thinkingLevel: ThinkingLevel.MINIMAL
+        }
       }
     });
 

@@ -18,7 +18,10 @@ const getApiKey = () => {
 
 const apiKey = getApiKey();
 
-// Use standard high-throughput stable Flash model
+// Modelo robusto para questões dissertativas e provas mistas (usado com ThinkingLevel.LOW por padrão)
 export const GEMINI_MODEL = "gemini-3.8-flash";
+
+// Modelo ultraeconômico para leitura de cartões-resposta (ENEM), provas 100% objetivas, extração de PDF e relatórios
+export const GEMINI_LITE_MODEL = "gemini-3.1-flash-lite";
 
 export const ai = apiKey ? new GoogleGenAI({ apiKey }) : null;
