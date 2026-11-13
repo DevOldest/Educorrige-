@@ -3,7 +3,8 @@ import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X, Search, ArrowRi
 import { motion } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
-import { ai, GEMINI_MODEL } from '../lib/gemini';
+import { ThinkingLevel } from '@google/genai';
+import { ai, GEMINI_LITE_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -498,7 +499,7 @@ export default function ClassesView() {
         try {
           if (!ai) throw new Error("IA não configurada.");
           const response = await ai.models.generateContent({
-            model: GEMINI_MODEL,
+            model: GEMINI_LITE_MODEL,
             contents: [{
               role: 'user',
               parts: [
@@ -507,7 +508,10 @@ export default function ClassesView() {
               ]
             }],
             config: {
-              responseMimeType: "application/json"
+              responseMimeType: "application/json",
+              thinkingConfig: {
+                thinkingLevel: ThinkingLevel.MINIMAL
+              }
             }
           });
 

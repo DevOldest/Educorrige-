@@ -3,7 +3,8 @@ import { Plus, FileText, Search, Trash2, Edit2, CheckCircle2, AlertCircle, FileU
 import { motion } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
-import { ai, GEMINI_MODEL } from '../lib/gemini';
+import { ThinkingLevel } from '@google/genai';
+import { ai, GEMINI_LITE_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -199,14 +200,20 @@ export default function AnswerKeysView() {
         try {
           if (!ai) throw new Error("IA não configurada.");
           const response = await ai.models.generateContent({
-            model: GEMINI_MODEL,
+            model: GEMINI_LITE_MODEL,
             contents: [{
               role: 'user',
               parts: [
                 { text: prompt },
                 { inlineData: { mimeType: "application/pdf", data: base64 } }
               ]
-            }]
+            }],
+            config: {
+              responseMimeType: 'application/json',
+              thinkingConfig: {
+                thinkingLevel: ThinkingLevel.MINIMAL
+              }
+            }
           });
 
           const responseText = response.text || '';
@@ -313,13 +320,19 @@ export default function AnswerKeysView() {
       `;
 
       const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: GEMINI_LITE_MODEL,
         contents: [{
           role: 'user',
           parts: [
             { text: prompt }
           ]
-        }]
+        }],
+        config: {
+          responseMimeType: 'application/json',
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.MINIMAL
+          }
+        }
       });
 
       const responseText = response.text || '';

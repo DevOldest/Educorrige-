@@ -33,7 +33,8 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
 import { supabase } from '../lib/supabase';
-import { ai, GEMINI_MODEL } from '../lib/gemini';
+import { ThinkingLevel } from '@google/genai';
+import { ai, GEMINI_MODEL, GEMINI_LITE_MODEL } from '../lib/gemini';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 import { compressImageForAI, formatBytes } from '../lib/imageOptimizer';
@@ -72,6 +73,7 @@ export default function GradingView() {
   const [isSavingBatch, setIsSavingBatch] = useState(false);
   const [targetScale, setTargetScale] = useState(10);
   const [useConvertedScore, setUseConvertedScore] = useState(true);
+  const [aiPrecisionMode, setAiPrecisionMode] = useState<'auto' | 'high' | 'lite'>('auto');
 
   // Progresso em tempo real da correção em cascata
   const [currentProgress, setCurrentProgress] = useState<{
@@ -411,12 +413,25 @@ export default function GradingView() {
   const capturePhotoFromCamera = (advanceToNextSlot: boolean = false) => {
     if (!videoRef.current || !activeCameraSlotId) return;
     const video = videoRef.current;
+    let width = video.videoWidth || 1200;
+    let height = video.videoHeight || 900;
+    const maxDim = 1200;
+    if (width > maxDim || height > maxDim) {
+      if (width > height) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+    }
+
     const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth || 1280;
-    canvas.height = video.videoHeight || 720;
+    canvas.width = width;
+    canvas.height = height;
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    ctx.drawImage(video, 0, 0, width, height);
 
     canvas.toBlob((blob) => {
       if (!blob) return;
@@ -443,7 +458,7 @@ export default function GradingView() {
           stopCamera();
         }
       }
-    }, 'image/jpeg', 0.92);
+    }, 'image/jpeg', 0.80);
   };
 
   const handleResetBatch = () => {
@@ -520,8 +535,34 @@ export default function GradingView() {
 
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
+      // Roteamento inteligente: provas 100% objetivas usam Flash-Lite (minimal); mistas/dissertativas usam 3.8-flash em LOW
+      const hasEssayQuestions = questions.some(
+        q => String(q.question_type || 'objetiva').toLowerCase() === 'dissertativa'
+      );
+
+      let activeModel = GEMINI_MODEL;
+      let activeThinkingLevel = ThinkingLevel.LOW;
+
+      if (aiPrecisionMode === 'lite') {
+        activeModel = GEMINI_LITE_MODEL;
+        activeThinkingLevel = hasEssayQuestions ? ThinkingLevel.LOW : ThinkingLevel.MINIMAL;
+      } else if (aiPrecisionMode === 'high') {
+        activeModel = GEMINI_MODEL;
+        activeThinkingLevel = ThinkingLevel.MEDIUM;
+      } else {
+        if (hasEssayQuestions) {
+          activeModel = GEMINI_MODEL;
+          activeThinkingLevel = ThinkingLevel.LOW;
+        } else {
+          activeModel = GEMINI_LITE_MODEL;
+          activeThinkingLevel = ThinkingLevel.MINIMAL;
+        }
+      }
+
+      const imageMaxDimension = hasEssayQuestions ? 1200 : 1024;
+      const maxPossibleTotal = questions.reduce((sum, q) => sum + (Number(q.max_score) || 1.0), 0);
+
       // Fila concorrente controlada para alta velocidade em Tier 1
-      // 2 workers em paralelo dobram a velocidade de correção sem sobrecarregar a cota
       const CONCURRENCY = 2;
       let currentIndex = 0;
       let completedCount = 0;
@@ -544,9 +585,9 @@ export default function GradingView() {
 
         const tryProcessing = async (attempt: number = 0): Promise<void> => {
           try {
-            // Compressão instantânea no navegador antes do envio (reduz ~95% de payload e tokens de imagem)
+            // Compressão instantânea no navegador antes do envio (1200px para manuscritas, 1024px para objetivas)
             const imageParts = await Promise.all(slot.files.map(async (file: File) => {
-              const compressed = await compressImageForAI(file, 1600, 0.82);
+              const compressed = await compressImageForAI(file, imageMaxDimension, 0.80);
               return {
                 inlineData: {
                   mimeType: compressed.mimeType,
@@ -555,50 +596,32 @@ export default function GradingView() {
               };
             }));
 
-            const prompt = `
-              Você é um corretor pedagógico e analista óptico de provas e atividades escolares.
-              Analise as imagens enviadas e compare estritamente com o GABARITO OFICIAL fornecido.
+            const gabaritoLines = questions.map(q => {
+              const crit = q.criteria ? ` | Critério: ${q.criteria}` : '';
+              return `Q${q.question_number} (${q.question_type || 'objetiva'}, máx ${q.max_score || 1.0}): "${q.expected_answer}"${crit}`;
+            }).join('\n');
 
-              GABARITO OFICIAL:
-              ${questions.map(q => `Questão ${q.question_number} (${q.question_type || 'objetiva'}): Resposta Esperada: "${q.expected_answer}" | Pontuação Máxima: ${q.max_score || 1.0} pts`).join('\n')}
+            const prompt = `Corretor pedagógico. Analise as imagens e corrija segundo o GABARITO:
+${gabaritoLines}
 
-              ALUNO(S): ${studentNames}
-              ATIVIDADE: ${selectedAssessmentId}
-
-              DIRETRIZES DE COMPARAÇÃO E CORREÇÃO:
-              1. Identifique a resposta marcada ou escrita pelo aluno para cada questão.
-              2. Compare com a Resposta Esperada do Gabarito.
-              3. Atribua a nota (ai_score) proporcional: acerto total = max_score, erro = 0.0, acerto parcial = pontuação proporcional.
-              4. Forneça o feedback sintético: "Correto", "Incorreto" ou "Parcial".
-              5. Se a resposta estiver em branco ou ilegível, student_answer: "(Em branco)", ai_score: 0.0.
-
-              RETORNE ESTRITAMENTE O JSON ABAIXO:
-              {
-                "corrections": [
-                  {
-                    "question_number": 1,
-                    "expected_answer": "A",
-                    "student_answer": "A",
-                    "ai_score": 1.0,
-                    "max_score": 1.0,
-                    "feedback": "Correto.",
-                    "is_correct": true
-                  }
-                ],
-                "summary": {
-                  "ai_total_score": 10.0,
-                  "max_total_score": 10.0,
-                  "total_questions": ${questions.length}
-                }
-              }
-            `;
+REGRAS:
+1. Identifique a resposta marcada ou escrita pelo aluno em cada questão (se em branco/ilegível, a="(Em branco)", s=0).
+2. Atribua a nota "s" entre 0 e o máximo da questão (acerto parcial proporcional apenas em dissertativas).
+3. ECONOMIA DE RESPOSTA:
+   - Em questões OBJETIVAS: deixe "f" vazio ("") quando acertar, ou apenas "Errou" se errar. Não repita o gabarito nem o valor máximo.
+   - Em questões DISSERTATIVAS: escreva em "f" um feedback curto e preciso (máx 90 caracteres).
+4. Retorne ESTRITAMENTE JSON compacto neste formato:
+{"c":[{"q":1,"a":"A","s":1.0,"f":""}],"t":8.5}`;
 
             const response = await ai.models.generateContent({
-              model: GEMINI_MODEL,
+              model: activeModel,
               contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }],
               config: {
                 temperature: 0.1,
-                responseMimeType: 'application/json'
+                responseMimeType: 'application/json',
+                thinkingConfig: {
+                  thinkingLevel: activeThinkingLevel
+                }
               }
             });
 
@@ -606,11 +629,49 @@ export default function GradingView() {
             const jsonMatch = responseText.match(/\{[\s\S]*\}/);
             
             if (jsonMatch) {
-              const parsedResult = JSON.parse(jsonMatch[0]);
-              updateSlot(slot.id, { result: parsedResult, status: 'done', error: null });
+              const raw = JSON.parse(jsonMatch[0]);
+              let normalizedResult: any;
+
+              if (Array.isArray(raw.c)) {
+                const corrections = raw.c.map((item: any) => {
+                  const qNum = Number(item.q);
+                  const refQ = questions.find(q => Number(q.question_number) === qNum);
+                  const maxScore = Number(refQ?.max_score) || 1.0;
+                  const score = Math.max(0, Math.min(maxScore, Number(item.s) || 0));
+                  const defaultFeedback = score >= maxScore ? 'Correto.' : score > 0 ? 'Parcial.' : 'Incorreto.';
+
+                  return {
+                    question_number: qNum,
+                    expected_answer: refQ?.expected_answer ?? '',
+                    student_answer: String(item.a || '(Em branco)'),
+                    ai_score: score,
+                    max_score: maxScore,
+                    feedback: (item.f && String(item.f).trim()) ? String(item.f).trim() : defaultFeedback,
+                    is_correct: score >= maxScore
+                  };
+                });
+
+                const computedTotal = corrections.reduce((sum: number, c: any) => sum + (Number(c.ai_score) || 0), 0);
+                normalizedResult = {
+                  ai_model: activeModel,
+                  corrections,
+                  summary: {
+                    ai_total_score: typeof raw.t === 'number' ? raw.t : computedTotal,
+                    max_total_score: maxPossibleTotal || 10.0,
+                    total_questions: questions.length
+                  }
+                };
+              } else {
+                normalizedResult = {
+                  ...raw,
+                  ai_model: activeModel
+                };
+              }
+
+              updateSlot(slot.id, { result: normalizedResult, status: 'done', error: null });
               
               // SALVAMENTO AUTOMÁTICO IMEDIATO DO SLOT APÓS CORREÇÃO
-              await saveSingleSlot({ ...slot, result: parsedResult });
+              await saveSingleSlot({ ...slot, result: normalizedResult });
             } else {
               throw new Error('Retorno da IA em formato inválido');
             }
@@ -761,7 +822,7 @@ export default function GradingView() {
               if (ans) {
                 await supabase.from('ai_corrections').insert([{
                   student_answer_id: ans.id,
-                  ai_model: GEMINI_MODEL,
+                  ai_model: result.ai_model || GEMINI_MODEL,
                   correction_feedback: corr.feedback || '',
                   score_given: finalItemScore,
                   justification: corr.feedback || '',
@@ -819,7 +880,7 @@ export default function GradingView() {
 
   async function fileToBase64(file: File): Promise<string> {
     try {
-      const res = await compressImageForAI(file, 1600, 0.82);
+      const res = await compressImageForAI(file, 1200, 0.80);
       return res.base64;
     } catch {
       return new Promise((resolve, reject) => {
@@ -1021,7 +1082,7 @@ export default function GradingView() {
               <div>
                 <p className="text-xs font-bold uppercase text-brand-yellow tracking-wider flex items-center gap-1.5">
                   <Sparkles size={14} />
-                  Processamento Acelerado (Compressão Ativa + Gemini 3.8 Flash)
+                  Roteamento Inteligente Ativo (Qualidade + Economia)
                 </p>
                 <p className="text-base font-black">
                   Progresso: {currentProgress.currentStep} de {currentProgress.totalSteps} atividades concluídas
@@ -1117,6 +1178,20 @@ export default function GradingView() {
                 className="w-12 p-1 text-xs border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 rounded text-center font-bold text-brand-blue dark:text-brand-yellow transition-colors"
               />
             </div>
+          </div>
+
+          <div className="flex flex-col gap-2 min-w-[190px]">
+            <label className="text-[10px] font-bold text-slate-400 uppercase">Motor de Correção IA</label>
+            <select
+              value={aiPrecisionMode}
+              onChange={(e) => setAiPrecisionMode(e.target.value as 'auto' | 'high' | 'lite')}
+              className="w-full p-2.5 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-xs font-bold text-slate-700 dark:text-slate-200 focus:ring-2 focus:ring-brand-yellow h-[46px]"
+              title="Inteligente usa Flash-Lite em objetivas e 3.8 Flash (LOW) em dissertativas/mistas"
+            >
+              <option value="auto">Inteligente (Padrão)</option>
+              <option value="high">Alta Precisão (Letra Difícil)</option>
+              <option value="lite">Máxima Economia (Lite)</option>
+            </select>
           </div>
         </div>
 

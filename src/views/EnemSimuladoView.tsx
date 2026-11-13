@@ -46,6 +46,7 @@ import {
   getScoreBadgeColor, 
   getStoredSimulation, 
   fetchRemoteSimulation,
+  fetchAllSimulationsMap,
   saveStoredSimulation, 
   getStoredSubmissions, 
   fetchRemoteSubmissions,
@@ -54,7 +55,9 @@ import {
   analyzeEnemBubbleSheet,
   calculateEnemStatistics,
   isEnemQuestionCorrect,
-  DEFAULT_SIMULATION
+  DEFAULT_SIMULATION,
+  SHARED_SIMULATION_ID,
+  getSimulationIdForUser
 } from '../lib/enemService';
 import { compressImageForAI } from '../lib/imageOptimizer';
 
@@ -69,13 +72,18 @@ export default function EnemSimuladoView({
   reviewerName = 'Professor Corretor',
   onExitReviewerMode 
 }: EnemSimuladoViewProps) {
-  // Configurações e dados (individual por corretor se for corretor)
+  // Configurações e dados (gabarito individual por corretor; correções compartilhadas para todos)
   const [simulation, setSimulation] = useState<EnemSimulation>(() => getStoredSimulation(isReviewerMode ? reviewerName : undefined));
+  const [simulationsMap, setSimulationsMap] = useState<Record<string, Record<number, EnemAnswerOption>>>(() => ({
+    [SHARED_SIMULATION_ID]: getStoredSimulation().official_answers
+  }));
   const [submissions, setSubmissions] = useState<EnemSubmission[]>(getStoredSubmissions);
   const [classes, setClasses] = useState<Class[]>([]);
+  const [allClassesLookup, setAllClassesLookup] = useState<Class[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [isLoadingClasses, setIsLoadingClasses] = useState(false);
   const [isLoadingStudents, setIsLoadingStudents] = useState(false);
+  const [isSyncingSubmissions, setIsSyncingSubmissions] = useState(false);
 
   // Aba ativa ('grading' | 'answer-key' | 'settings' | 'results')
   const [activeTab, setActiveTab] = useState<'grading' | 'answer-key' | 'settings' | 'results'>('grading');
@@ -87,6 +95,7 @@ export default function EnemSimuladoView({
   const [selectedStudentId, setSelectedStudentId] = useState<string>('');
   const [currentAnswers, setCurrentAnswers] = useState<Record<number, EnemAnswerOption>>({});
   const [capturedImage, setCapturedImage] = useState<string | null>(null);
+  const [lastAnalyzedImage, setLastAnalyzedImage] = useState<string | null>(null);
   const [isAnalyzingImage, setIsAnalyzingImage] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string; type: 'success' | 'error' | 'info' } | null>(null);
@@ -101,32 +110,110 @@ export default function EnemSimuladoView({
   const [tempAccessCode, setTempAccessCode] = useState(simulation.access_code);
   const [isCopiedCode, setIsCopiedCode] = useState(false);
 
-  // Filtro de resultados
+  // Filtros de resultados (compartilhados para Admin e Corretores)
   const [filterClassId, setFilterClassId] = useState<string>('all');
+  const [filterReviewer, setFilterReviewer] = useState<string>('all');
 
   // Modal de Verificação / Auditoria do Gabarito do Aluno (Disponível para Admin e Corretores)
   const [verifyingSubmission, setVerifyingSubmission] = useState<EnemSubmission | null>(null);
   const [auditAnswers, setAuditAnswers] = useState<Record<number, EnemAnswerOption>>({});
   const [isSavingAudit, setIsSavingAudit] = useState(false);
+  const [pendingDeleteSubmission, setPendingDeleteSubmission] = useState<EnemSubmission | null>(null);
 
-  // Carregar turmas e sincronizar dados com Supabase
+  // Função central de sincronização de correções e gabaritos com o Supabase
+  const syncAllRemoteData = async (silent = true) => {
+    if (!silent) setIsSyncingSubmissions(true);
+    const targetReviewer = isReviewerMode ? reviewerName : undefined;
+
+    try {
+      const [sim, subs, allSims] = await Promise.all([
+        fetchRemoteSimulation(targetReviewer),
+        fetchRemoteSubmissions(),
+        fetchAllSimulationsMap()
+      ]);
+
+      setSimulation(sim);
+      if (silent === false) {
+        setTempAccessCode(sim.access_code);
+      }
+      setSubmissions(subs);
+      setSimulationsMap(prev => ({
+        ...prev,
+        ...allSims,
+        [getSimulationIdForUser(targetReviewer)]: sim.official_answers
+      }));
+
+      if (!silent) {
+        setStatusMessage({
+          text: `Sincronização concluída! ${subs.length} correção(ões) carregada(s) para toda a equipe.`,
+          type: 'success'
+        });
+      }
+    } catch (e) {
+      console.warn('Falha ao sincronizar dados remotos:', e);
+    } finally {
+      if (!silent) setIsSyncingSubmissions(false);
+    }
+  };
+
+  // Carregar turmas e sincronizar dados com Supabase + Realtime + Polling leve
   useEffect(() => {
     fetchClasses();
 
     const targetReviewer = isReviewerMode ? reviewerName : undefined;
-
-    // Sincronizar dados do Simulado do Supabase
     fetchRemoteSimulation(targetReviewer).then(sim => {
       setSimulation(sim);
       setEditingAnswers(sim.official_answers);
       setTempAccessCode(sim.access_code);
-
-      // Sincronizar submissões do Supabase
-      fetchRemoteSubmissions(sim.id, targetReviewer).then(subs => {
-        setSubmissions(subs);
-      });
+      setSimulationsMap(prev => ({
+        ...prev,
+        [getSimulationIdForUser(targetReviewer)]: sim.official_answers
+      }));
     });
+
+    fetchRemoteSubmissions().then(subs => setSubmissions(subs));
+    fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map })));
+
+    const handleFocus = () => {
+      fetchRemoteSubmissions().then(subs => setSubmissions(subs));
+      fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map })));
+    };
+    window.addEventListener('focus', handleFocus);
+
+    const pollInterval = setInterval(() => {
+      fetchRemoteSubmissions().then(subs => setSubmissions(subs));
+    }, 20000);
+
+    let realtimeChannel: any = null;
+    if (supabase) {
+      realtimeChannel = supabase
+        .channel('enem_submissions_shared_sync')
+        .on(
+          'postgres_changes',
+          { event: '*', schema: 'public', table: 'enem_submissions' },
+          () => {
+            fetchRemoteSubmissions().then(subs => setSubmissions(subs));
+          }
+        )
+        .subscribe();
+    }
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      clearInterval(pollInterval);
+      if (realtimeChannel && supabase) {
+        supabase.removeChannel(realtimeChannel);
+      }
+    };
   }, [isReviewerMode, reviewerName]);
+
+  // Atualizar lista de correções sempre que alternar para aba de Correção ou Resultados
+  useEffect(() => {
+    if (activeTab === 'grading' || activeTab === 'results') {
+      fetchRemoteSubmissions().then(subs => setSubmissions(subs));
+      fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map })));
+    }
+  }, [activeTab]);
 
   // Carregar alunos quando turma for selecionada
   useEffect(() => {
@@ -138,11 +225,12 @@ export default function EnemSimuladoView({
     }
   }, [selectedClassId]);
 
-  // Se o aluno mudar, verificar se já tem submissão gravada para carregar
+  // Se o aluno mudar, verificar se já tem submissão gravada (independente de qual professor corrigiu)
   useEffect(() => {
+    setLastAnalyzedImage(null);
     if (selectedStudentId) {
       const existing = submissions.find(
-        s => s.simulation_id === simulation.id && s.student_id === selectedStudentId
+        s => s.student_id === selectedStudentId
       );
       if (existing) {
         setCurrentAnswers(existing.answers);
@@ -155,7 +243,7 @@ export default function EnemSimuladoView({
         setCurrentAnswers(initialAnswers);
       }
     }
-  }, [selectedStudentId, simulation.id, submissions]);
+  }, [selectedStudentId, submissions]);
 
   // Função utilitária para filtrar estritamente turmas do 3º ano do Ensino Médio
   const isThirdYearClass = (c: Class): boolean => {
@@ -232,6 +320,9 @@ export default function EnemSimuladoView({
     }
 
     // 3. Filtrar turmas do 3º ano
+    if (rawList.length > 0) {
+      setAllClassesLookup(rawList);
+    }
     let filtered = rawList.filter(isThirdYearClass);
 
     // Ordenar de forma natural (ex: 3°A, 3°B, 3ºC, 3ºD)
@@ -317,7 +408,7 @@ export default function EnemSimuladoView({
     if (studentList.length > 0) {
       // Priorizar o primeiro aluno ainda não corrigido
       const firstUncorrected = studentList.find(s => 
-        !submissions.some(sub => sub.simulation_id === simulation.id && sub.student_id === s.id)
+        !submissions.some(sub => sub.student_id === s.id)
       );
       setSelectedStudentId(firstUncorrected ? firstUncorrected.id : studentList[0].id);
     } else {
@@ -332,12 +423,13 @@ export default function EnemSimuladoView({
   const correctCount = currentStats.totalCorrect;
   const calculatedScore = currentStats.score;
 
-  // Upload de imagem do cartão com compressão instantânea para a IA
+  // Upload de imagem do cartão com compressão instantânea (1024px) para máxima economia
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (file) {
+      setLastAnalyzedImage(null);
       try {
-        const compressed = await compressImageForAI(file, 1600, 0.82);
+        const compressed = await compressImageForAI(file, 1024, 0.80);
         setCapturedImage(`data:${compressed.mimeType};base64,${compressed.base64}`);
       } catch (err) {
         const reader = new FileReader();
@@ -362,7 +454,10 @@ export default function EnemSimuladoView({
       }
     } catch (err) {
       console.error('Erro ao acessar câmera:', err);
-      alert('Não foi possível acessar a câmera. Você pode usar a opção de upload de imagem.');
+      setStatusMessage({
+        text: 'Não foi possível acessar a câmera. Você pode usar a opção "Carregar Foto".',
+        type: 'error'
+      });
       setIsCameraOpen(false);
     }
   };
@@ -377,23 +472,48 @@ export default function EnemSimuladoView({
 
   const capturePhoto = () => {
     if (videoRef.current) {
+      let width = videoRef.current.videoWidth || 1024;
+      let height = videoRef.current.videoHeight || 768;
+      const maxDim = 1024;
+      if (width > maxDim || height > maxDim) {
+        if (width > height) {
+          height = Math.round((height * maxDim) / width);
+          width = maxDim;
+        } else {
+          width = Math.round((width * maxDim) / height);
+          height = maxDim;
+        }
+      }
+
       const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth;
-      canvas.height = videoRef.current.videoHeight;
+      canvas.width = width;
+      canvas.height = height;
       const ctx = canvas.getContext('2d');
       if (ctx) {
-        ctx.drawImage(videoRef.current, 0, 0);
-        const dataUrl = canvas.toDataURL('image/jpeg');
+        ctx.drawImage(videoRef.current, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.80);
+        setLastAnalyzedImage(null);
         setCapturedImage(dataUrl);
         stopCamera();
       }
     }
   };
 
-  // Análise com IA
+  // Análise com IA (Flash-Lite + trava anti-clique repetido na mesma foto)
   const handleAnalyzeWithAI = async () => {
     if (!capturedImage) {
-      alert('Tire uma foto ou carregue a imagem do cartão-resposta antes de analisar.');
+      setStatusMessage({
+        text: 'Tire uma foto ou carregue a imagem do cartão-resposta antes de analisar.',
+        type: 'error'
+      });
+      return;
+    }
+
+    if (lastAnalyzedImage === capturedImage) {
+      setStatusMessage({
+        text: 'Esta foto já foi analisada pela IA. Ajuste as letras manualmente abaixo ou carregue uma nova foto.',
+        type: 'info'
+      });
       return;
     }
 
@@ -403,6 +523,7 @@ export default function EnemSimuladoView({
     try {
       const aiAnswers = await analyzeEnemBubbleSheet(capturedImage);
       setCurrentAnswers(aiAnswers);
+      setLastAnalyzedImage(capturedImage);
       const stats = calculateEnemStatistics(aiAnswers, simulation.official_answers);
       setStatusMessage({
         text: `Cartão lido e corrigido pela IA com sucesso! ${stats.totalCorrect} de 45 acertos (${stats.score.toFixed(1)} pts). Clique abaixo para confirmar e salvar a nota.`,
@@ -418,10 +539,13 @@ export default function EnemSimuladoView({
     }
   };
 
-  // Salvar a submissão do aluno
+  // Salvar a submissão do aluno (sempre vinculada ao pool compartilhado SHARED_SIMULATION_ID)
   const handleSaveSubmission = async () => {
     if (!selectedClassId || !selectedStudentId) {
-      alert('Selecione a turma e o aluno.');
+      setStatusMessage({
+        text: 'Selecione a turma e o aluno antes de salvar.',
+        type: 'error'
+      });
       return;
     }
 
@@ -429,15 +553,17 @@ export default function EnemSimuladoView({
     if (!studentObj) return;
 
     setIsSaving(true);
+    const classObj = classes.find(c => c.id === selectedClassId) || allClassesLookup.find(c => c.id === selectedClassId);
 
     const newSub: EnemSubmission = {
-      id: `${simulation.id}_${selectedStudentId}`,
-      simulation_id: simulation.id,
+      id: `${SHARED_SIMULATION_ID}_${selectedStudentId}`,
+      simulation_id: SHARED_SIMULATION_ID,
       student_id: selectedStudentId,
       student_name: studentObj.name,
       roll_number: studentObj.roll_number,
       class_id: selectedClassId,
-      reviewer_name: reviewerName,
+      class_name: classObj?.name,
+      reviewer_name: isReviewerMode ? reviewerName : 'Administrador',
       answers: currentAnswers,
       total_correct: currentStats.totalCorrect,
       score_points: currentStats.score,
@@ -451,13 +577,13 @@ export default function EnemSimuladoView({
     setIsSaving(false);
 
     setStatusMessage({
-      text: `Nota de "${studentObj.name}" salva com sucesso! (${correctCount}/45 acertos = ${calculatedScore.toFixed(1)} pts)`,
+      text: `Nota de "${studentObj.name}" salva e sincronizada para toda a equipe! (${correctCount}/45 acertos = ${calculatedScore.toFixed(1)} pts)`,
       type: 'success'
     });
 
     // Avançar automaticamente para o próximo aluno pendente da turma
     const nextUncorrected = students.find(s => 
-      s.id !== selectedStudentId && !updated.some(sub => sub.simulation_id === simulation.id && sub.student_id === s.id)
+      s.id !== selectedStudentId && !updated.some(sub => sub.student_id === s.id)
     );
     if (nextUncorrected) {
       setSelectedStudentId(nextUncorrected.id);
@@ -473,7 +599,10 @@ export default function EnemSimuladoView({
       .replace(/[^ABCDE*]/g, '');
 
     if (cleanLetters.length === 0) {
-      alert('Nenhuma alternativa válida (A, B, C, D, E) encontrada no texto.');
+      setStatusMessage({
+        text: 'Nenhuma alternativa válida (A, B, C, D, E) encontrada no texto.',
+        type: 'error'
+      });
       return;
     }
 
@@ -505,6 +634,10 @@ export default function EnemSimuladoView({
       access_code: tempAccessCode.trim() || DEFAULT_SIMULATION.access_code
     };
     setSimulation(updatedSim);
+    setSimulationsMap(prev => ({
+      ...prev,
+      [getSimulationIdForUser(targetReviewer)]: editingAnswers
+    }));
     await saveStoredSimulation(updatedSim, targetReviewer);
     setStatusMessage({
       text: isReviewerMode
@@ -535,8 +668,16 @@ export default function EnemSimuladoView({
     setAuditAnswers({});
   };
 
+  // Gabarito de referência exato do professor que corrigiu a submissão em auditoria
+  const auditOfficialAnswers: Record<number, EnemAnswerOption> = verifyingSubmission
+    ? (simulationsMap[getSimulationIdForUser(verifyingSubmission.reviewer_name)] ||
+       (verifyingSubmission.reviewer_name === reviewerName ? simulation.official_answers : undefined) ||
+       simulationsMap[SHARED_SIMULATION_ID] ||
+       simulation.official_answers)
+    : simulation.official_answers;
+
   const auditStats = verifyingSubmission
-    ? calculateEnemStatistics(auditAnswers, simulation.official_answers)
+    ? calculateEnemStatistics(auditAnswers, auditOfficialAnswers)
     : null;
 
   const handleSaveAudit = async () => {
@@ -545,6 +686,7 @@ export default function EnemSimuladoView({
     setIsSavingAudit(true);
     const updatedSub: EnemSubmission = {
       ...verifyingSubmission,
+      simulation_id: SHARED_SIMULATION_ID,
       answers: auditAnswers,
       total_correct: auditStats.totalCorrect,
       score_points: auditStats.score,
@@ -562,53 +704,76 @@ export default function EnemSimuladoView({
       }
 
       setStatusMessage({
-        text: `Gabarito de "${verifyingSubmission.student_name}" verificado e atualizado com sucesso! (${auditStats.totalCorrect}/45 acertos = ${auditStats.score.toFixed(1)} pts)`,
+        text: `Gabarito de "${verifyingSubmission.student_name}" verificado e sincronizado com sucesso! (${auditStats.totalCorrect}/45 acertos = ${auditStats.score.toFixed(1)} pts)`,
         type: 'success'
       });
       handleCloseAuditModal();
     } catch (err: any) {
-      alert('Erro ao salvar auditoria: ' + (err?.message || 'Tente novamente'));
+      setStatusMessage({
+        text: 'Erro ao salvar auditoria: ' + (err?.message || 'Tente novamente'),
+        type: 'error'
+      });
     } finally {
       setIsSavingAudit(false);
     }
   };
 
-  const handleDeleteSubmission = async (sub: EnemSubmission) => {
-    if (confirm(`Deseja excluir a nota do simulado de "${sub.student_name}"?\n\nEsta nota será removida e o aluno voltará para o status "Pendente" para uma nova correção.`)) {
-      const updated = await deleteStoredSubmission(sub.id);
-      setSubmissions(updated);
+  const handleDeleteSubmission = (sub: EnemSubmission) => {
+    setPendingDeleteSubmission(sub);
+  };
 
-      if (selectedStudentId === sub.student_id) {
-        const initialAnswers: Record<number, EnemAnswerOption> = {};
-        for (let q = 1; q <= 45; q++) {
-          initialAnswers[q] = 'BLANK';
-        }
-        setCurrentAnswers(initialAnswers);
-        setCapturedImage(null);
+  const confirmDeleteSubmission = async () => {
+    if (!pendingDeleteSubmission) return;
+    const sub = pendingDeleteSubmission;
+    setPendingDeleteSubmission(null);
+
+    const updated = await deleteStoredSubmission(sub.id, sub.student_id);
+    setSubmissions(updated);
+
+    if (selectedStudentId === sub.student_id) {
+      const initialAnswers: Record<number, EnemAnswerOption> = {};
+      for (let q = 1; q <= 45; q++) {
+        initialAnswers[q] = 'BLANK';
       }
-
-      setStatusMessage({
-        text: `Nota do simulado de "${sub.student_name}" excluída com sucesso. Aluno liberado para nova correção.`,
-        type: 'info'
-      });
+      setCurrentAnswers(initialAnswers);
+      setCapturedImage(null);
     }
+
+    setStatusMessage({
+      text: `Nota do simulado de "${sub.student_name}" excluída com sucesso. Aluno liberado para nova correção.`,
+      type: 'info'
+    });
+  };
+
+  const resolveClassName = (classId: string, fallbackName?: string): string => {
+    return (
+      classes.find(c => c.id === classId)?.name ||
+      allClassesLookup.find(c => c.id === classId)?.name ||
+      fallbackName ||
+      '3º Ano'
+    );
   };
 
   const selectedStudentObj = students.find(s => s.id === selectedStudentId);
   const selectedClassObj = classes.find(c => c.id === selectedClassId);
 
-  // Submissões filtradas exclusivamente para as turmas de 3º ano
-  const thirdYearClassIds = new Set(classes.map(c => c.id));
-  const thirdYearSubmissions = submissions.filter(s => thirdYearClassIds.has(s.class_id));
+  // Lista única de corretores que já realizaram correções para filtro opcional
+  const uniqueReviewers = Array.from(
+    new Set(submissions.map(s => s.reviewer_name).filter((r): r is string => Boolean(r && r.trim())))
+  );
 
-  const filteredSubmissions = filterClassId === 'all' 
-    ? thirdYearSubmissions 
-    : thirdYearSubmissions.filter(s => s.class_id === filterClassId);
+  // Todas as correções do simulado ficam disponíveis para Admin e Corretores
+  const filteredSubmissions = submissions.filter(s => {
+    const matchClass = filterClassId === 'all' || s.class_id === filterClassId;
+    const matchReviewer = filterReviewer === 'all' || s.reviewer_name === filterReviewer;
+    return matchClass && matchReviewer;
+  });
 
-  // Exportação profissional de Relatório em PDF para o Administrador
+  // Exportação profissional de Relatório em PDF (Exclusivo do Administrador)
   const exportSimuladoPDF = (targetClassId?: string) => {
+    if (isReviewerMode) return;
     const listToExport = targetClassId && targetClassId !== 'all'
-      ? thirdYearSubmissions.filter(s => s.class_id === targetClassId)
+      ? submissions.filter(s => s.class_id === targetClassId)
       : filteredSubmissions;
 
     if (listToExport.length === 0) {
@@ -622,10 +787,10 @@ export default function EnemSimuladoView({
     try {
       const doc = new jsPDF();
       const targetClassName = targetClassId && targetClassId !== 'all'
-        ? (classes.find(c => c.id === targetClassId)?.name || 'Turma Selecionada')
+        ? resolveClassName(targetClassId, 'Turma Selecionada')
         : (filterClassId === 'all'
             ? 'Todas as Turmas do 3º Ano'
-            : (classes.find(c => c.id === filterClassId)?.name || 'Turma Selecionada'));
+            : resolveClassName(filterClassId, 'Turma Selecionada'));
 
       // Cabeçalho institucional do documento
       doc.setFillColor(10, 37, 64);
@@ -637,7 +802,7 @@ export default function EnemSimuladoView({
 
       doc.setFontSize(10);
       doc.setTextColor(226, 232, 240);
-      doc.text(`${simulation.title} | Turma: ${targetClassName} | Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 105, 23, { align: 'center' });
+      doc.text(`${DEFAULT_SIMULATION.title} | Turma: ${targetClassName} | Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 105, 23, { align: 'center' });
 
       // Estatísticas gerais
       const totalCorrigidos = listToExport.length;
@@ -658,10 +823,13 @@ export default function EnemSimuladoView({
       doc.text(`Maior Nota: ${maiorNota} pts`, 166, 49);
 
       // Tabela ordenada por nota decrescente
-      const sortedList = [...listToExport].sort((a, b) => b.score_points - a.score_points);
+      const sortedList = [...listToExport].sort((a, b) => {
+        if (b.score_points !== a.score_points) return b.score_points - a.score_points;
+        return b.total_correct - a.total_correct;
+      });
 
       const tableData = sortedList.map((item, index) => {
-        const cls = classes.find(c => c.id === item.class_id)?.name || item.class_name || '-';
+        const cls = resolveClassName(item.class_id, item.class_name);
         const dateStr = item.created_at ? new Date(item.created_at).toLocaleDateString('pt-BR') : '-';
         return [
           `${index + 1}º`,
@@ -759,7 +927,18 @@ export default function EnemSimuladoView({
           )}
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+          <button
+            type="button"
+            onClick={() => syncAllRemoteData(false)}
+            disabled={isSyncingSubmissions}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 disabled:opacity-50"
+            title="Sincronizar todas as correções da equipe agora"
+          >
+            <RefreshCw size={14} className={isSyncingSubmissions ? 'animate-spin text-brand-blue' : ''} />
+            <span>Sincronizar</span>
+          </button>
+
           {isReviewerMode ? (
             <div className="flex flex-wrap items-center gap-2">
               <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
@@ -792,7 +971,7 @@ export default function EnemSimuladoView({
                       : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
                   }`}
                 >
-                  Alunos Corrigidos ({submissions.length})
+                  Resultados ({submissions.length})
                 </button>
               </div>
 
@@ -806,7 +985,7 @@ export default function EnemSimuladoView({
               </button>
             </div>
           ) : (
-            <div className="flex items-center gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
+            <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
               <button
                 onClick={() => setActiveTab('grading')}
                 className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
@@ -835,7 +1014,7 @@ export default function EnemSimuladoView({
                     : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
                 }`}
               >
-                Resultados ({submissions.length})
+                Resultados & PDF ({submissions.length})
               </button>
               <button
                 onClick={() => setActiveTab('settings')}
@@ -974,11 +1153,11 @@ export default function EnemSimuladoView({
                   </option>
                   {students.map(s => {
                     const sub = submissions.find(
-                      item => item.simulation_id === simulation.id && item.student_id === s.id
+                      item => item.student_id === s.id
                     );
                     return (
                       <option key={s.id} value={s.id}>
-                        {s.roll_number ? `Nº ${s.roll_number} - ` : ''}{s.name} {sub ? `✓ [Nota: ${sub.score_points.toFixed(1)} pts]` : '• (Pendente)'}
+                        {s.roll_number ? `Nº ${s.roll_number} - ` : ''}{s.name} {sub ? `✓ [Nota: ${sub.score_points.toFixed(1)} pts - ${sub.reviewer_name || 'Corrigido'}]` : '• (Pendente)'}
                       </option>
                     );
                   })}
@@ -991,7 +1170,7 @@ export default function EnemSimuladoView({
                     <span className="font-bold text-sm text-slate-900 dark:text-white">
                       {selectedStudentObj.roll_number ? `Nº ${selectedStudentObj.roll_number} - ` : ''}{selectedStudentObj.name}
                     </span>
-                    {submissions.some(sub => sub.simulation_id === simulation.id && sub.student_id === selectedStudentObj.id) ? (
+                    {submissions.some(sub => sub.student_id === selectedStudentObj.id) ? (
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-800 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200">
                         Já Corrigido
                       </span>
@@ -1026,7 +1205,7 @@ export default function EnemSimuladoView({
                   <div className="relative rounded-2xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-black aspect-[4/3] max-h-56 flex items-center justify-center">
                     <img src={capturedImage} alt="Cartão resposta" className="w-full h-full object-contain" />
                     <button
-                      onClick={() => setCapturedImage(null)}
+                      onClick={() => { setCapturedImage(null); setLastAnalyzedImage(null); }}
                       className="absolute top-2 right-2 p-1.5 bg-rose-600 text-white rounded-full hover:bg-rose-700 shadow-md transition-all"
                       title="Remover imagem"
                     >
@@ -1113,6 +1292,9 @@ export default function EnemSimuladoView({
                   <Users size={22} className="text-brand-blue dark:text-brand-yellow" />
                   Alunos corrigidos nesta turma ({submissions.filter(s => s.class_id === selectedClassId).length} de {students.length})
                 </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Lista compartilhada em tempo real entre o Administrador e todos os Professores Corretores.
+                </p>
               </div>
 
               {!isReviewerMode && (
@@ -1144,7 +1326,7 @@ export default function EnemSimuladoView({
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {students.map((student) => {
                     const sub = submissions.find(
-                      item => item.simulation_id === simulation.id && item.student_id === student.id
+                      item => item.student_id === student.id
                     );
 
                     return (
@@ -1377,39 +1559,52 @@ export default function EnemSimuladoView({
       {/* ABA 3: RESULTADOS GERAIS E RELATÓRIO */}
       {activeTab === 'results' && (
         <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-100 dark:border-slate-800 space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-4">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-4">
             <div>
               <h2 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white">
-                {isReviewerMode ? `Alunos Corrigidos por ${reviewerName}` : 'Relatório Geral do Simulado ENEM'}
+                {isReviewerMode ? 'Acompanhamento de Resultados' : 'Relatório Geral do Simulado ENEM'}
               </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                {isReviewerMode 
-                  ? 'Acompanhe as notas dos alunos que você corrigiu, verifique gabaritos ou audite marcações.' 
-                  : 'Acompanhe o desempenho de todos os alunos e exporte os dados consolidados.'}
+                {isReviewerMode
+                  ? 'Acompanhe as correções da equipe, confira os acertos/erros de cada aluno e audite os cartões.'
+                  : 'Todas as correções da equipe ficam disponíveis aqui para consulta e exportação em PDF.'}
               </p>
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <select
                 value={filterClassId}
                 onChange={(e) => setFilterClassId(e.target.value)}
                 className="p-2.5 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
               >
-                <option value="all">Todos os 3º Anos</option>
+                <option value="all">Todas as Turmas (3º Ano)</option>
                 {classes.map(c => (
                   <option key={c.id} value={c.id}>{c.name}</option>
                 ))}
               </select>
 
-              <button
-                onClick={() => exportSimuladoPDF(filterClassId)}
-                disabled={filteredSubmissions.length === 0}
-                className="py-2.5 px-4 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-50"
-                title="Gerar e baixar relatório em PDF"
+              <select
+                value={filterReviewer}
+                onChange={(e) => setFilterReviewer(e.target.value)}
+                className="p-2.5 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
               >
-                <Download size={14} />
-                Baixar / Imprimir PDF
-              </button>
+                <option value="all">Todos os Corretores</option>
+                {uniqueReviewers.map(rev => (
+                  <option key={rev} value={rev}>{rev}</option>
+                ))}
+              </select>
+
+              {!isReviewerMode && (
+                <button
+                  onClick={() => exportSimuladoPDF(filterClassId)}
+                  disabled={filteredSubmissions.length === 0}
+                  className="py-2.5 px-4 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-50"
+                  title="Gerar e baixar relatório em PDF"
+                >
+                  <Download size={14} />
+                  Baixar / Imprimir PDF
+                </button>
+              )}
             </div>
           </div>
 
@@ -1464,7 +1659,7 @@ export default function EnemSimuladoView({
               </thead>
               <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                 {filteredSubmissions.map(sub => {
-                  const className = classes.find(c => c.id === sub.class_id)?.name || 'Turma';
+                  const className = resolveClassName(sub.class_id, sub.class_name);
                   return (
                     <tr key={sub.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
                       <td className="py-3 px-2 font-medium text-slate-800 dark:text-white">
@@ -1633,11 +1828,12 @@ export default function EnemSimuladoView({
                       </span>
                     )}
                     <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 font-medium border border-blue-200 dark:border-blue-800">
-                      {classes.find(c => c.id === verifyingSubmission.class_id)?.name || '3º Ano'}
+                      {resolveClassName(verifyingSubmission.class_id, verifyingSubmission.class_name)}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
-                    Corretor: <span className="font-semibold text-slate-700 dark:text-slate-300">{verifyingSubmission.reviewer_name || 'Desconhecido'}</span>
+                    Corretor: <span className="font-semibold text-slate-700 dark:text-slate-300">{verifyingSubmission.reviewer_name || 'Administrador'}</span>
+                    {' '}&bull; Gabarito aplicado: <span className="font-semibold text-brand-blue dark:text-brand-yellow">{verifyingSubmission.reviewer_name && verifyingSubmission.reviewer_name.toLowerCase() !== 'administrador' ? `Gabarito de ${verifyingSubmission.reviewer_name}` : 'Gabarito Mestre'}</span>
                   </p>
                 </div>
               </div>
@@ -1732,7 +1928,7 @@ export default function EnemSimuladoView({
 
                       {Array.from({ length: 15 }, (_, i) => {
                         const qNum = startQ + i;
-                        const officialAns = simulation.official_answers[qNum] || 'A';
+                        const officialAns = auditOfficialAnswers[qNum] || 'A';
                         const studentAns = auditAnswers[qNum] || 'BLANK';
                         const isCorrect = isEnemQuestionCorrect(studentAns, officialAns);
                         const isMultiple = studentAns === 'DUPLA';
@@ -1885,6 +2081,44 @@ export default function EnemSimuladoView({
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de Confirmação de Exclusão de Correção */}
+      {pendingDeleteSubmission && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 w-full max-w-md p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 flex items-center justify-center shrink-0">
+                <Trash2 size={20} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-900 dark:text-white">Excluir correção?</h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">Esta ação atualiza a lista para todos os professores.</p>
+              </div>
+            </div>
+
+            <p className="text-sm text-slate-600 dark:text-slate-300">
+              Deseja remover a nota do simulado de <strong className="text-slate-900 dark:text-white">{pendingDeleteSubmission.student_name}</strong>? O aluno voltará para o status <strong>Pendente</strong>.
+            </p>
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setPendingDeleteSubmission(null)}
+                className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold text-xs transition-colors"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={confirmDeleteSubmission}
+                className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs transition-colors shadow-sm"
+              >
+                Sim, Excluir Nota
+              </button>
             </div>
           </div>
         </div>

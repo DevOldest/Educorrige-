@@ -12,7 +12,8 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { ai, GEMINI_MODEL } from '../lib/gemini';
+import { ThinkingLevel } from '@google/genai';
+import { ai, GEMINI_MODEL, GEMINI_LITE_MODEL } from '../lib/gemini';
 import { Type } from '@google/genai';
 
 export default function SystemTestsView() {
@@ -75,11 +76,16 @@ export default function SystemTestsView() {
     try {
       if (!ai) throw new Error("IA não disponível. Verifique a chave API.");
       const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
+        model: GEMINI_LITE_MODEL,
         contents: [{
           role: 'user',
           parts: [{ text: "Diga 'OK' se você estiver funcionando." }]
-        }]
+        }],
+        config: {
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.MINIMAL
+          }
+        }
       });
       const text = response.text || '';
       if (text.includes('OK')) {
@@ -141,7 +147,7 @@ export default function SystemTestsView() {
 
         {/* AI Integration Card */}
         <TestCard 
-          title={`Integração IA (${GEMINI_MODEL})`}
+          title={`Integração IA (${GEMINI_MODEL} + ${GEMINI_LITE_MODEL})`}
           icon={<Cpu size={24} />}
           status={tests.ai.status}
           message={tests.ai.message}

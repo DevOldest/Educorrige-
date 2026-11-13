@@ -5,6 +5,7 @@ import { supabase } from '../lib/supabase';
 import { cn } from '../lib/utils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { ThinkingLevel } from '@google/genai';
 import CustomModal from '../components/CustomModal';
 
 export default function ReportsView() {
@@ -322,10 +323,10 @@ export default function ReportsView() {
 
   const generateAIDataOnly = async (result: any) => {
     if (!supabase) return null;
-    const { ai, GEMINI_MODEL } = await import('../lib/gemini');
+    const { ai, GEMINI_LITE_MODEL } = await import('../lib/gemini');
     
     const prompt = `
-      Como Especialista Pedagógico e Analista de BNCC, gere um relatório detalhado e humanizado.
+      Como Especialista Pedagógico e Analista de BNCC, gere um relatório conciso (máx 120 caracteres por questão e parecer geral de até 2 frases).
       Aluno: ${result.students?.name} | Nota: ${result.total_score} / ${result.max_score}
       
       RESPOSTAS:
@@ -341,8 +342,14 @@ export default function ReportsView() {
 
     try {
       const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }]
+        model: GEMINI_LITE_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: 'application/json',
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.MINIMAL
+          }
+        }
       });
 
       const responseText = response.text || '';
@@ -371,10 +378,10 @@ export default function ReportsView() {
     setIsGeneratingDetailed(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      const { ai, GEMINI_MODEL } = await import('../lib/gemini');
+      const { ai, GEMINI_LITE_MODEL } = await import('../lib/gemini');
       
       const prompt = `
-        Como Especialista Pedagógico e Analista de BNCC, gere um relatório detalhado e humanizado para este aluno.
+        Como Especialista Pedagógico e Analista de BNCC, gere um relatório objetivo e humanizado para este aluno.
         
         INFORMAÇÕES DA ATIVIDADE:
         Aluno: ${result.students?.name}
@@ -390,10 +397,9 @@ export default function ReportsView() {
         `).join('\n')}
         
         REQUISITOS DO RELATÓRIO:
-        1. Para cada questão, escreva um "comentario_pedagogico" (curto e direto) explicando por que o aluno acertou, errou ou teve nota parcial.
-        2. Para cada Habilidade BNCC mencionada em toda a atividade, forneça uma "descricao_curta" (máx 150 caracteres) precisa conforme a base oficial.
-        3. Escreva um "parecer_geral" (comentário geral) sobre o desempenho, dificuldades e pontos fortes.
-        4. O tom deve ser profissional porém encorajador.
+        1. Para cada questão, escreva um "comentario_pedagogico" curto (máx 120 caracteres) explicando acerto, erro ou parcial.
+        2. Para cada Habilidade BNCC mencionada, forneça uma "descricao_curta" (máx 120 caracteres).
+        3. Escreva um "parecer_geral" direto (2 a 3 frases) sobre desempenho, dificuldades e pontos fortes.
 
         RETORNE APENAS JSON:
         {
@@ -415,8 +421,14 @@ export default function ReportsView() {
       `;
 
       const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }]
+        model: GEMINI_LITE_MODEL,
+        contents: [{ role: 'user', parts: [{ text: prompt }] }],
+        config: {
+          responseMimeType: 'application/json',
+          thinkingConfig: {
+            thinkingLevel: ThinkingLevel.MINIMAL
+          }
+        }
       });
 
       const responseText = response.text || '';
