@@ -254,6 +254,19 @@ export default function GradingView() {
           (a.name || '').localeCompare(b.name || '', 'pt-BR', { sensitivity: 'base' })
         );
         setStudents(sorted);
+
+        // Se houver apenas 1 slot vazio inicial, já pré-seleciona o primeiro aluno em ordem alfabética
+        if (sorted.length > 0) {
+          setBatchSlots(prev => {
+            if (prev.length === 1 && !prev[0].studentIds.some(Boolean) && prev[0].files.length === 0 && !prev[0].result) {
+              return [{
+                ...prev[0],
+                studentIds: [sorted[0].id]
+              }];
+            }
+            return prev;
+          });
+        }
       }
     } finally {
       setIsLoadingData(false);
@@ -280,19 +293,60 @@ export default function GradingView() {
     }
   }
 
-  // Adicionar um novo slot vazio
+  // Determina o próximo aluno na ordem alfabética da turma que ainda não está nos slots
+  const getNextAlphabeticalStudentId = (currentSlots: SlotItem[], studentPool: any[] = students): string => {
+    if (!studentPool || studentPool.length === 0) return '';
+    const usedIds = new Set(currentSlots.flatMap(s => s.studentIds).filter(Boolean));
+
+    let lastIdx = -1;
+    for (let i = currentSlots.length - 1; i >= 0; i--) {
+      const validIds = currentSlots[i].studentIds.filter(Boolean);
+      for (let j = validIds.length - 1; j >= 0; j--) {
+        const idx = studentPool.findIndex(st => st.id === validIds[j]);
+        if (idx !== -1) {
+          lastIdx = idx;
+          break;
+        }
+      }
+      if (lastIdx !== -1) break;
+    }
+
+    if (lastIdx !== -1) {
+      for (let i = lastIdx + 1; i < studentPool.length; i++) {
+        if (!usedIds.has(studentPool[i].id)) {
+          return studentPool[i].id;
+        }
+      }
+    }
+
+    for (let i = 0; i < studentPool.length; i++) {
+      if (!usedIds.has(studentPool[i].id)) {
+        return studentPool[i].id;
+      }
+    }
+
+    return '';
+  };
+
+  // Adicionar um novo slot já preenchido com o próximo aluno em ordem alfabética da turma
   const addSlot = () => {
-    if (batchSlots.length >= 60) return;
-    const newId = `slot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    setBatchSlots(prev => [...prev, { 
-      id: newId, 
-      studentIds: [''], 
-      files: [], 
-      previews: [], 
-      result: null, 
-      status: 'idle', 
-      error: null 
-    }]);
+    setBatchSlots(prev => {
+      if (prev.length >= 60) return prev;
+      const newId = `slot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const nextStudentId = getNextAlphabeticalStudentId(prev);
+      return [
+        ...prev,
+        {
+          id: newId,
+          studentIds: [nextStudentId],
+          files: [],
+          previews: [],
+          result: null,
+          status: 'idle',
+          error: null
+        }
+      ];
+    });
   };
 
   // Preencher slots apenas com os alunos PENDENTES da turma (em ordem alfabética)
@@ -745,7 +799,9 @@ export default function GradingView() {
     setBatchSlots(prev => {
       const remaining = prev.filter(s => s.status !== 'done');
       if (remaining.length === 0) {
-        return [{ id: `slot-${Date.now()}-1`, studentIds: [''], files: [], previews: [], result: null, status: 'idle', error: null }];
+        const firstPending = students.find(s => !classAssessmentResults[s.id]);
+        const fallbackId = firstPending ? firstPending.id : (students[0]?.id || '');
+        return [{ id: `slot-${Date.now()}-1`, studentIds: [fallbackId], files: [], previews: [], result: null, status: 'idle', error: null }];
       }
       return remaining;
     });
@@ -1426,7 +1482,18 @@ REGRAS ESTRITAS:
             <label className="text-xs font-bold uppercase text-slate-400">Turma</label>
             <select 
               value={selectedClassId}
-              onChange={(e) => setSelectedClassId(e.target.value)}
+              onChange={(e) => {
+                setSelectedClassId(e.target.value);
+                setBatchSlots([{
+                  id: `slot-${Date.now()}-1`,
+                  studentIds: [''],
+                  files: [],
+                  previews: [],
+                  result: null,
+                  status: 'idle',
+                  error: null
+                }]);
+              }}
               className="w-full p-3 bg-slate-50 dark:bg-slate-800 border-none rounded-xl focus:ring-2 focus:ring-brand-yellow dark:text-white font-bold"
             >
               <option value="">Selecionar Turma</option>

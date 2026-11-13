@@ -428,21 +428,58 @@ export default function EnemSimuladoView({
     setIsLoadingStudents(false);
   }
 
+  // Determina o próximo aluno na ordem alfabética da turma que ainda não está nos slots
+  const getNextAlphabeticalStudentId = (currentSlots: EnemSlotItem[], studentPool: Student[] = students): string => {
+    if (!studentPool || studentPool.length === 0) return '';
+    const usedIds = new Set(currentSlots.map(s => s.studentId).filter(Boolean));
+
+    let lastIdx = -1;
+    for (let i = currentSlots.length - 1; i >= 0; i--) {
+      const sid = currentSlots[i].studentId;
+      if (sid) {
+        const idx = studentPool.findIndex(st => st.id === sid);
+        if (idx !== -1) {
+          lastIdx = idx;
+          break;
+        }
+      }
+    }
+
+    if (lastIdx !== -1) {
+      for (let i = lastIdx + 1; i < studentPool.length; i++) {
+        if (!usedIds.has(studentPool[i].id)) {
+          return studentPool[i].id;
+        }
+      }
+    }
+
+    for (let i = 0; i < studentPool.length; i++) {
+      if (!usedIds.has(studentPool[i].id)) {
+        return studentPool[i].id;
+      }
+    }
+
+    return '';
+  };
+
   // Gerenciamento dos Slots de Correção do ENEM
   const addEnemSlot = (preselectStudentId: string = '') => {
-    if (enemSlots.length >= 60) return;
-    const newId = `enem-slot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
-    setEnemSlots(prev => [
-      ...prev,
-      {
-        id: newId,
-        studentId: preselectStudentId,
-        imagePreview: null,
-        answers: null,
-        status: 'idle',
-        error: null
-      }
-    ]);
+    setEnemSlots(prev => {
+      if (prev.length >= 60) return prev;
+      const newId = `enem-slot-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+      const nextStudentId = preselectStudentId || getNextAlphabeticalStudentId(prev);
+      return [
+        ...prev,
+        {
+          id: newId,
+          studentId: nextStudentId,
+          imagePreview: null,
+          answers: null,
+          status: 'idle',
+          error: null
+        }
+      ];
+    });
   };
 
   const removeEnemSlot = (slotId: string) => {
@@ -533,8 +570,10 @@ export default function EnemSimuladoView({
       // Preenche primeiro os slots que ainda não possuem foto
       for (let i = 0; i < updated.length && urlIdx < dataUrls.length; i++) {
         if (!updated[i].imagePreview) {
+          const assignedStudentId = updated[i].studentId || getNextAlphabeticalStudentId(updated);
           updated[i] = {
             ...updated[i],
+            studentId: assignedStudentId,
             imagePreview: dataUrls[urlIdx],
             answers: null,
             status: 'idle',
@@ -544,11 +583,12 @@ export default function EnemSimuladoView({
         }
       }
 
-      // Se sobrarem fotos, cria novos slots automaticamente
+      // Se sobrarem fotos, cria novos slots automaticamente já preenchidos com os próximos alunos em ordem alfabética
       while (urlIdx < dataUrls.length && updated.length < 60) {
+        const nextStudentId = getNextAlphabeticalStudentId(updated);
         updated.push({
           id: `enem-slot-${Date.now()}-${urlIdx}`,
-          studentId: '',
+          studentId: nextStudentId,
           imagePreview: dataUrls[urlIdx],
           answers: null,
           status: 'idle',
@@ -571,9 +611,11 @@ export default function EnemSimuladoView({
     setEnemSlots(prev => {
       const remaining = prev.filter(s => s.status !== 'done');
       if (remaining.length === 0) {
+        const firstPending = students.find(s => !submissions.some(sub => sub.student_id === s.id));
+        const fallbackId = firstPending ? firstPending.id : (students[0]?.id || '');
         return [{
           id: `enem-slot-${Date.now()}-1`,
-          studentId: '',
+          studentId: fallbackId,
           imagePreview: null,
           answers: null,
           status: 'idle',
