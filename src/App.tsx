@@ -24,7 +24,13 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
-import { supabase } from './lib/supabase';
+import {
+  supabase,
+  isSupabaseConfigured,
+  clearSupabaseAuthStorage,
+  isInvalidRefreshTokenError,
+  INVALID_REFRESH_TOKEN_EVENT,
+} from './lib/supabase';
 
 // Views
 import Dashboard from './views/Dashboard';
@@ -58,6 +64,7 @@ export default function App() {
     return null;
   });
   const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   
   // Sessão de Corretor Convidado (via código de acesso)
   const [reviewerSession, setReviewerSession] = useState<{ reviewerName: string } | null>(() => {
@@ -92,37 +99,75 @@ export default function App() {
     }
   }, [darkMode]);
 
-  const isSupabaseConfigured = !!import.meta.env.VITE_SUPABASE_URL && !!import.meta.env.VITE_SUPABASE_ANON_KEY;
-
   useEffect(() => {
+    const handleInvalidRefreshToken = () => {
+      clearSupabaseAuthStorage();
+      setSession((prev: any) => (prev?.isDemo ? prev : null));
+      if (!localStorage.getItem('local_demo_session')) {
+        setSessionNotice('Sua sessão anterior expirou. Faça login novamente ou entre pelo Modo Demonstração.');
+      }
+    };
+
+    window.addEventListener(INVALID_REFRESH_TOKEN_EVENT, handleInvalidRefreshToken);
+
     if (isSupabaseConfigured && supabase) {
+      let isMounted = true;
+
       supabase.auth.getSession()
-        .then(({ data: { session } }) => {
-          if (session) {
-            setSession(session);
+        .then(async ({ data, error }) => {
+          if (!isMounted) return;
+          if (error) {
+            if (isInvalidRefreshTokenError(error)) {
+              clearSupabaseAuthStorage();
+              await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+              setSession((prev: any) => (prev?.isDemo ? prev : null));
+              if (!localStorage.getItem('local_demo_session')) {
+                setSessionNotice('Sua sessão anterior expirou. Faça login novamente ou entre pelo Modo Demonstração.');
+              }
+            }
+          } else if (data?.session) {
+            setSession(data.session);
+            setSessionNotice(null);
           }
           setIsAuthLoading(false);
         })
-        .catch(err => {
-          console.warn('Falha na conexão com Supabase Auth (possível offline):', err);
+        .catch(async (err) => {
+          if (!isMounted) return;
+          if (isInvalidRefreshTokenError(err)) {
+            clearSupabaseAuthStorage();
+            await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
+            setSession((prev: any) => (prev?.isDemo ? prev : null));
+          } else {
+            console.warn('Falha na conexão com Supabase Auth (possível offline):', err);
+          }
           setIsAuthLoading(false);
         });
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-        if (session) {
-          setSession(session);
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+        if (nextSession) {
+          setSession(nextSession);
+          setSessionNotice(null);
+        } else if (event === 'SIGNED_OUT') {
+          if (!localStorage.getItem('local_demo_session')) {
+            setSession(null);
+          }
         }
       });
 
       seedUnits();
 
       return () => {
+        isMounted = false;
+        window.removeEventListener(INVALID_REFRESH_TOKEN_EVENT, handleInvalidRefreshToken);
         subscription.unsubscribe();
       };
     } else {
       setIsAuthLoading(false);
+      return () => {
+        window.removeEventListener(INVALID_REFRESH_TOKEN_EVENT, handleInvalidRefreshToken);
+      };
     }
-  }, [isSupabaseConfigured]);
+  }, []);
 
   async function seedUnits() {
     if (!supabase) return;
@@ -141,12 +186,34 @@ export default function App() {
     }
   }
 
+  const handleAdminLoginComplete = () => {
+    setSessionNotice(null);
+    const demo = localStorage.getItem('local_demo_session');
+    if (demo) {
+      try {
+        setSession(JSON.parse(demo));
+        return;
+      } catch {
+        // Ignore parse error
+      }
+    }
+    if (supabase) {
+      supabase.auth.getSession()
+        .then(({ data }) => {
+          if (data?.session) setSession(data.session);
+        })
+        .catch(() => {});
+    }
+  };
+
   const handleAdminLogout = async () => {
     localStorage.removeItem('local_demo_session');
+    clearSupabaseAuthStorage();
     setSession(null);
+    setSessionNotice(null);
     try {
       if (supabase) {
-        await supabase.auth.signOut();
+        await supabase.auth.signOut({ scope: 'local' });
       }
     } catch (e) {
       console.warn('Erro ao sair do Supabase:', e);
@@ -223,7 +290,13 @@ export default function App() {
 
   // Se não estiver logado com e-mail/senha e nem for corretor
   if (!session) {
-    return <Login onLogin={() => {}} onReviewerLogin={handleReviewerLogin} />;
+    return (
+      <Login
+        onLogin={handleAdminLoginComplete}
+        onReviewerLogin={handleReviewerLogin}
+        sessionNotice={sessionNotice}
+      />
+    );
   }
 
   const navItems = [
