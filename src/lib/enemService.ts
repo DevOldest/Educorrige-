@@ -1,7 +1,7 @@
 import { EnemSimulation, EnemSubmission, EnemAnswerOption } from '../types';
 import { supabase } from './supabase';
-import { ThinkingLevel } from '@google/genai';
-import { ai, GEMINI_LITE_MODEL } from './gemini';
+import { ThinkingLevel, Type, type Schema } from '@google/genai';
+import { ai, GEMINI_MODEL } from './gemini';
 
 // Regra de pontuação por faixas do Simulado ENEM:
 // 1 a 10: 1.0 pt
@@ -599,27 +599,48 @@ export async function deleteStoredSubmission(subId: string, studentId?: string):
   return updated;
 }
 
-// Processar imagem do cartão resposta via IA (Gemini Flash-Lite com Thinking Mínimo e saída compacta)
+const ENEM_ANSWER_ENUM = ['A', 'B', 'C', 'D', 'E', 'BLANK', 'DUPLA'];
+
+const ENEM_RESPONSE_SCHEMA: Schema = {
+  type: Type.OBJECT,
+  properties: Array.from({ length: 45 }, (_, i) => String(i + 1)).reduce(
+    (acc, key) => {
+      acc[key] = {
+        type: Type.STRING,
+        enum: ENEM_ANSWER_ENUM,
+      };
+      return acc;
+    },
+    {} as Record<string, Schema>
+  ),
+  required: Array.from({ length: 45 }, (_, i) => String(i + 1)),
+};
+
+// Processar imagem do cartão resposta via IA (Opção A: Gemini 3.8 Flash em ThinkingLevel.LOW com chaves numeradas 1..45)
 export async function analyzeEnemBubbleSheet(imageBase64: string): Promise<Record<number, EnemAnswerOption>> {
   if (!ai) {
     throw new Error('Chave da API de IA não configurada.');
   }
 
-  const prompt = `Leitor óptico (OMR) de Cartão-Resposta ENEM com 45 questões (1 a 45), alternativas A, B, C, D, E.
-Retorne ESTRITAMENTE um JSON válido com uma lista de exatamente 45 strings na chave "a" (ordem da questão 1 até a 45):
-{"a":["A","C","DUPLA","BLANK",...]}
-Regras:
-- Nenhuma bolinha marcada = "BLANK"
-- Duas ou mais bolinhas marcadas / rasura = "DUPLA"
-- Apenas uma bolinha marcada = "A", "B", "C", "D" ou "E"
-Sem texto extra.`;
+  const prompt = `Você é um leitor óptico (OMR) de precisão para Cartão-Resposta padrão ENEM com 45 questões numeradas de 1 a 45 (alternativas A, B, C, D, E).
+
+INSTRUÇÕES DE LEITURA:
+1. Leia coluna por coluna da esquerda para a direita sem pular nem deslocar números:
+   - Coluna 1: questões 1 a 15
+   - Coluna 2: questões 16 a 30
+   - Coluna 3: questões 31 a 45
+2. Para cada número impresso ("1" a "45"), verifique as 5 bolinhas (A, B, C, D, E) naquela linha exata:
+   - Se exatamente UMA bolinha estiver preenchida/marcada com caneta ou lápis: retorne "A", "B", "C", "D" ou "E".
+   - Se NENHUMA bolinha estiver marcada na linha (totalmente em branco): retorne "BLANK".
+   - Se DUAS OU MAIS bolinhas estiverem marcadas ou houver rasura evidente: retorne "DUPLA".
+3. Retorne ESTRITAMENTE um objeto JSON com as chaves "1" até "45" mapeando cada questão ao seu resultado.`;
 
   const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
 
   const executeWithRetry = async (attempt: number = 0): Promise<string> => {
     try {
       const response = await ai.models.generateContent({
-        model: GEMINI_LITE_MODEL,
+        model: GEMINI_MODEL,
         contents: [
           {
             role: 'user',
@@ -635,10 +656,12 @@ Sem texto extra.`;
           }
         ],
         config: {
-          temperature: 0.1,
+          temperature: 0,
+          seed: 42,
           responseMimeType: 'application/json',
+          responseSchema: ENEM_RESPONSE_SCHEMA,
           thinkingConfig: {
-            thinkingLevel: ThinkingLevel.MINIMAL
+            thinkingLevel: ThinkingLevel.LOW
           }
         }
       });
@@ -688,7 +711,7 @@ Sem texto extra.`;
 
     const rawAnswers = parsed.answers || parsed;
     for (let q = 1; q <= 45; q++) {
-      answers[q] = normalizeOption(rawAnswers[q] || rawAnswers[String(q)]);
+      answers[q] = normalizeOption(rawAnswers[q] ?? rawAnswers[String(q)]);
     }
 
     return answers;
