@@ -66,6 +66,18 @@ import {
   getSimulationIdForUser
 } from '../lib/enemService';
 import { compressImageForAI } from '../lib/imageOptimizer';
+import { safeGetItem, safeSetItem } from '../lib/safeStorage';
+
+function formatSubmissionDateTime(value?: string | null): string {
+  if (!value) return '-';
+  const dt = new Date(value);
+  if (Number.isNaN(dt.getTime())) return '-';
+  try {
+    return `${dt.toLocaleDateString('pt-BR')} ${dt.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+  } catch {
+    return '-';
+  }
+}
 
 interface EnemSimuladoViewProps {
   isReviewerMode?: boolean;
@@ -88,8 +100,19 @@ export default function EnemSimuladoView({
   reviewerName = 'Professor Corretor',
   onExitReviewerMode 
 }: EnemSimuladoViewProps) {
+  const safeReviewerName =
+    typeof reviewerName === 'string' && reviewerName.trim()
+      ? reviewerName.trim()
+      : 'Professor Corretor';
+
   // Configurações e dados (gabarito individual por corretor; correções compartilhadas para todos)
-  const [simulation, setSimulation] = useState<EnemSimulation>(() => getStoredSimulation(isReviewerMode ? reviewerName : undefined));
+  const [simulation, setSimulation] = useState<EnemSimulation>(() =>
+    getStoredSimulation(isReviewerMode ? safeReviewerName : undefined)
+  );
+  const safeOfficialAnswers: Record<number, EnemAnswerOption> =
+    simulation?.official_answers && typeof simulation.official_answers === 'object'
+      ? simulation.official_answers
+      : DEFAULT_SIMULATION.official_answers;
   const [simulationsMap, setSimulationsMap] = useState<Record<string, Record<number, EnemAnswerOption>>>(() => ({
     [SHARED_SIMULATION_ID]: getStoredSimulation().official_answers
   }));
@@ -138,8 +161,8 @@ export default function EnemSimuladoView({
   const [stream, setStream] = useState<MediaStream | null>(null);
 
   // Edição do gabarito oficial (individual por corretor se for corretor)
-  const [editingAnswers, setEditingAnswers] = useState<Record<number, EnemAnswerOption>>(simulation.official_answers);
-  const [tempAccessCode, setTempAccessCode] = useState(simulation.access_code);
+  const [editingAnswers, setEditingAnswers] = useState<Record<number, EnemAnswerOption>>(safeOfficialAnswers);
+  const [tempAccessCode, setTempAccessCode] = useState(simulation?.access_code || DEFAULT_SIMULATION.access_code);
   const [isCopiedCode, setIsCopiedCode] = useState(false);
 
   // Filtros de resultados (compartilhados para Admin e Corretores)
@@ -155,7 +178,7 @@ export default function EnemSimuladoView({
   // Função central de sincronização de correções e gabaritos com o Supabase
   const syncAllRemoteData = async (silent = true) => {
     if (!silent) setIsSyncingSubmissions(true);
-    const targetReviewer = isReviewerMode ? reviewerName : undefined;
+    const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
 
     try {
       const [sim, subs, allSims] = await Promise.all([
@@ -192,7 +215,7 @@ export default function EnemSimuladoView({
   useEffect(() => {
     fetchClasses();
 
-    const targetReviewer = isReviewerMode ? reviewerName : undefined;
+    const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
     fetchRemoteSimulation(targetReviewer).then(sim => {
       setSimulation(sim);
       setEditingAnswers(sim.official_answers);
@@ -201,43 +224,47 @@ export default function EnemSimuladoView({
         ...prev,
         [getSimulationIdForUser(targetReviewer)]: sim.official_answers
       }));
-    });
+    }).catch(() => {});
 
-    fetchRemoteSubmissions().then(subs => setSubmissions(subs));
-    fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map })));
+    fetchRemoteSubmissions().then(subs => setSubmissions(subs)).catch(() => {});
+    fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map }))).catch(() => {});
 
     const handleFocus = () => {
-      fetchRemoteSubmissions().then(subs => setSubmissions(subs));
-      fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map })));
+      fetchRemoteSubmissions().then(subs => setSubmissions(subs)).catch(() => {});
+      fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map }))).catch(() => {});
     };
     window.addEventListener('focus', handleFocus);
 
     const pollInterval = setInterval(() => {
-      fetchRemoteSubmissions().then(subs => setSubmissions(subs));
+      fetchRemoteSubmissions().then(subs => setSubmissions(subs)).catch(() => {});
     }, 20000);
 
     let realtimeChannel: any = null;
     if (supabase) {
-      realtimeChannel = supabase
-        .channel('enem_submissions_shared_sync')
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'enem_submissions' },
-          () => {
-            fetchRemoteSubmissions().then(subs => setSubmissions(subs));
-          }
-        )
-        .subscribe();
+      try {
+        realtimeChannel = supabase
+          .channel('enem_submissions_shared_sync')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'enem_submissions' },
+            () => {
+              fetchRemoteSubmissions().then(subs => setSubmissions(subs)).catch(() => {});
+            }
+          )
+          .subscribe();
+      } catch (e) {
+        console.warn('Realtime indisponível neste dispositivo:', e);
+      }
     }
 
     return () => {
       window.removeEventListener('focus', handleFocus);
       clearInterval(pollInterval);
       if (realtimeChannel && supabase) {
-        supabase.removeChannel(realtimeChannel);
+        supabase.removeChannel(realtimeChannel).catch(() => {});
       }
     };
-  }, [isReviewerMode, reviewerName]);
+  }, [isReviewerMode, safeReviewerName]);
 
   // Atualizar lista de correções sempre que alternar para aba de Correção ou Resultados
   useEffect(() => {
@@ -302,11 +329,9 @@ export default function EnemSimuladoView({
     try {
       if (supabase) {
         const { data, error } = await supabase.from('classes').select('*').order('name');
-        if (!error && data && data.length > 0) {
-          rawList = data;
-          try {
-            localStorage.setItem('cached_app_classes', JSON.stringify(data));
-          } catch (e) {}
+        if (!error && Array.isArray(data) && data.length > 0) {
+          rawList = data.filter((item): item is Class => Boolean(item && item.id));
+          safeSetItem('cached_app_classes', JSON.stringify(rawList));
         }
       }
     } catch (err) {
@@ -318,12 +343,12 @@ export default function EnemSimuladoView({
       const cacheKeys = ['cached_app_classes', 'educorrige_classes', 'app_classes', 'classes'];
       for (const k of cacheKeys) {
         try {
-          const cached = localStorage.getItem(k);
+          const cached = safeGetItem(k);
           if (cached) {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              rawList = parsed;
-              break;
+              rawList = parsed.filter((item): item is Class => Boolean(item && item.id));
+              if (rawList.length > 0) break;
             }
           }
         } catch (e) {}
@@ -337,7 +362,7 @@ export default function EnemSimuladoView({
     let filtered = rawList.filter(isThirdYearClass);
 
     // Ordenar de forma natural (ex: 3°A, 3°B, 3ºC, 3ºD)
-    filtered.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { numeric: true }));
+    filtered.sort((a, b) => (a?.name || '').localeCompare(b?.name || '', 'pt-BR', { numeric: true }));
 
     // Se existirem turmas cadastradas mas nenhuma com "3º" no título, disponibilizar todas para não travar
     if (filtered.length === 0 && rawList.length > 0) {
@@ -378,11 +403,9 @@ export default function EnemSimuladoView({
           .eq('class_id', classId)
           .order('roll_number', { ascending: true })
           .order('name', { ascending: true });
-        if (!error && data && data.length > 0) {
-          studentList = data;
-          try {
-            localStorage.setItem(`cached_students_${classId}`, JSON.stringify(data));
-          } catch (e) {}
+        if (!error && Array.isArray(data) && data.length > 0) {
+          studentList = data.filter((item): item is Student => Boolean(item && item.id));
+          safeSetItem(`cached_students_${classId}`, JSON.stringify(studentList));
         }
       }
     } catch (err) {
@@ -394,12 +417,12 @@ export default function EnemSimuladoView({
       const studentKeys = [`cached_students_${classId}`, `students_${classId}`];
       for (const k of studentKeys) {
         try {
-          const cached = localStorage.getItem(k);
+          const cached = safeGetItem(k);
           if (cached) {
             const parsed = JSON.parse(cached);
             if (Array.isArray(parsed) && parsed.length > 0) {
-              studentList = parsed;
-              break;
+              studentList = parsed.filter((item): item is Student => Boolean(item && item.id));
+              if (studentList.length > 0) break;
             }
           }
         } catch (e) {}
@@ -407,7 +430,7 @@ export default function EnemSimuladoView({
     }
 
     // Ordenar estudantes em ordem alfabética da turma
-    studentList.sort((a, b) => a.name.localeCompare(b.name, 'pt-BR', { sensitivity: 'base' }));
+    studentList.sort((a, b) => (a?.name || '').localeCompare(b?.name || '', 'pt-BR', { sensitivity: 'base' }));
 
     setStudents(studentList);
 
@@ -762,7 +785,7 @@ export default function EnemSimuladoView({
     if (!studentObj || !selectedClassId) return null;
 
     const classObj = classes.find(c => c.id === selectedClassId) || allClassesLookup.find(c => c.id === selectedClassId);
-    const stats = calculateEnemStatistics(answers, simulation.official_answers);
+    const stats = calculateEnemStatistics(answers, safeOfficialAnswers);
 
     return {
       id: `${SHARED_SIMULATION_ID}_${studentObj.id}`,
@@ -772,7 +795,7 @@ export default function EnemSimuladoView({
       roll_number: studentObj.roll_number,
       class_id: selectedClassId,
       class_name: classObj?.name,
-      reviewer_name: isReviewerMode ? reviewerName : 'Administrador',
+      reviewer_name: isReviewerMode ? safeReviewerName : 'Administrador',
       answers,
       total_correct: stats.totalCorrect,
       score_points: stats.score,
@@ -962,11 +985,11 @@ export default function EnemSimuladoView({
 
   // Salvar novo Gabarito Oficial (Individual por corretor se for corretor)
   const handleSaveOfficialAnswers = async () => {
-    const targetReviewer = isReviewerMode ? reviewerName : undefined;
+    const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
     const updatedSim: EnemSimulation = {
       ...simulation,
       official_answers: editingAnswers,
-      access_code: tempAccessCode.trim() || DEFAULT_SIMULATION.access_code
+      access_code: (tempAccessCode || '').trim() || DEFAULT_SIMULATION.access_code
     };
     setSimulation(updatedSim);
     setSimulationsMap(prev => ({
@@ -976,16 +999,30 @@ export default function EnemSimuladoView({
     await saveStoredSimulation(updatedSim, targetReviewer);
     setStatusMessage({
       text: isReviewerMode
-        ? `Seu gabarito pessoal de correção (${reviewerName}) foi salvo com sucesso!`
+        ? `Seu gabarito pessoal de correção (${safeReviewerName}) foi salvo com sucesso!`
         : 'Gabarito Oficial e Código de Acesso salvos com sucesso no banco de dados!',
       type: 'success'
     });
   };
 
-  const copyAccessCode = () => {
-    navigator.clipboard.writeText(simulation.access_code);
-    setIsCopiedCode(true);
-    setTimeout(() => setIsCopiedCode(false), 2000);
+  const copyAccessCode = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(simulation?.access_code || DEFAULT_SIMULATION.access_code);
+        setIsCopiedCode(true);
+        setTimeout(() => setIsCopiedCode(false), 2000);
+      } else {
+        setStatusMessage({
+          text: `Código de acesso atual: ${simulation?.access_code || DEFAULT_SIMULATION.access_code}`,
+          type: 'info'
+        });
+      }
+    } catch {
+      setStatusMessage({
+        text: `Código de acesso atual: ${simulation?.access_code || DEFAULT_SIMULATION.access_code}`,
+        type: 'info'
+      });
+    }
   };
 
   // Ações de Auditoria / Verificação e Exclusão (Admin e Corretores)
@@ -1006,10 +1043,10 @@ export default function EnemSimuladoView({
   // Gabarito de referência exato do professor que corrigiu a submissão em auditoria
   const auditOfficialAnswers: Record<number, EnemAnswerOption> = verifyingSubmission
     ? (simulationsMap[getSimulationIdForUser(verifyingSubmission.reviewer_name)] ||
-       (verifyingSubmission.reviewer_name === reviewerName ? simulation.official_answers : undefined) ||
+       (verifyingSubmission.reviewer_name === safeReviewerName ? safeOfficialAnswers : undefined) ||
        simulationsMap[SHARED_SIMULATION_ID] ||
-       simulation.official_answers)
-    : simulation.official_answers;
+       safeOfficialAnswers)
+    : safeOfficialAnswers;
 
   const auditStats = verifyingSubmission
     ? calculateEnemStatistics(auditAnswers, auditOfficialAnswers)
@@ -1144,9 +1181,9 @@ export default function EnemSimuladoView({
 
       // Estatísticas gerais
       const totalCorrigidos = listToExport.length;
-      const mediaAcertos = (listToExport.reduce((acc, s) => acc + s.total_correct, 0) / totalCorrigidos).toFixed(1);
-      const mediaNota = (listToExport.reduce((acc, s) => acc + s.score_points, 0) / totalCorrigidos).toFixed(2);
-      const maiorNota = Math.max(...listToExport.map(s => s.score_points)).toFixed(1);
+      const mediaAcertos = (listToExport.reduce((acc, s) => acc + Number(s.total_correct || 0), 0) / totalCorrigidos).toFixed(1);
+      const mediaNota = (listToExport.reduce((acc, s) => acc + Number(s.score_points || 0), 0) / totalCorrigidos).toFixed(2);
+      const maiorNota = Math.max(...listToExport.map(s => Number(s.score_points || 0))).toFixed(1);
 
       // Card de resumo
       doc.setFillColor(248, 250, 252);
@@ -1162,19 +1199,21 @@ export default function EnemSimuladoView({
 
       // Tabela ordenada por nota decrescente
       const sortedList = [...listToExport].sort((a, b) => {
-        if (b.score_points !== a.score_points) return b.score_points - a.score_points;
-        return b.total_correct - a.total_correct;
+        const diff = Number(b.score_points || 0) - Number(a.score_points || 0);
+        if (diff !== 0) return diff;
+        return Number(b.total_correct || 0) - Number(a.total_correct || 0);
       });
 
       const tableData = sortedList.map((item, index) => {
         const cls = resolveClassName(item.class_id, item.class_name);
-        const dateStr = item.created_at ? new Date(item.created_at).toLocaleDateString('pt-BR') : '-';
+        const dt = item.created_at ? new Date(item.created_at) : null;
+        const dateStr = dt && !Number.isNaN(dt.getTime()) ? dt.toLocaleDateString('pt-BR') : '-';
         return [
           `${index + 1}º`,
-          item.student_name,
+          item.student_name || 'Aluno',
           cls,
-          `${item.total_correct} / 45`,
-          `${item.score_points.toFixed(1)} pts`,
+          `${Number(item.total_correct || 0)} / 45`,
+          `${Number(item.score_points || 0).toFixed(1)} pts`,
           item.reviewer_name || 'Admin',
           dateStr
         ];
@@ -1260,7 +1299,7 @@ export default function EnemSimuladoView({
           </h1>
           {isReviewerMode && (
             <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-              Conectado como: {reviewerName}
+              Conectado como: {safeReviewerName}
             </p>
           )}
         </div>
@@ -1410,7 +1449,7 @@ export default function EnemSimuladoView({
               <div>
                 <span className="text-slate-500 dark:text-slate-400 block text-[11px]">Chave de Correção Utilizada:</span>
                 <span className="font-bold text-slate-800 dark:text-slate-100 text-xs">
-                  {isReviewerMode ? `Gabarito Pessoal de ${reviewerName}` : 'Gabarito Oficial Mestre (Admin)'}
+                  {isReviewerMode ? `Gabarito Pessoal de ${safeReviewerName}` : 'Gabarito Oficial Mestre (Admin)'}
                 </span>
               </div>
             </div>
@@ -1523,7 +1562,7 @@ export default function EnemSimuladoView({
                 </span>
                 {isReviewerMode && (
                   <span className="px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-brand-yellow font-bold border border-blue-200 dark:border-blue-900">
-                    {submissions.filter(s => s.reviewer_name === reviewerName).length} por você
+                    {submissions.filter(s => s.reviewer_name === safeReviewerName).length} por você
                   </span>
                 )}
               </div>
@@ -1605,7 +1644,7 @@ export default function EnemSimuladoView({
           <div className="space-y-4">
             {enemSlots.map((slot, index) => {
               const slotStats = slot.answers
-                ? calculateEnemStatistics(slot.answers, simulation.official_answers)
+                ? calculateEnemStatistics(slot.answers, safeOfficialAnswers)
                 : null;
               const isExpanded = !!expandedSlotIds[slot.id];
 
@@ -1652,7 +1691,7 @@ export default function EnemSimuladoView({
                           const existingSub = submissions.find(item => item.student_id === s.id);
                           return (
                             <option key={s.id} value={s.id}>
-                              {s.name}{s.roll_number ? ` (Nº ${s.roll_number})` : ''} {existingSub ? `✓ [${existingSub.score_points.toFixed(1)} pts]` : '• (Pendente)'}
+                              {s.name}{s.roll_number ? ` (Nº ${s.roll_number})` : ''} {existingSub ? `✓ [${Number(existingSub.score_points || 0).toFixed(1)} pts]` : '• (Pendente)'}
                             </option>
                           );
                         })}
@@ -1797,7 +1836,7 @@ export default function EnemSimuladoView({
                               </div>
                               {Array.from({ length: 15 }, (_, i) => {
                                 const qNum = startQ + i;
-                                const officialAns = simulation.official_answers[qNum] || 'A';
+                                const officialAns = safeOfficialAnswers[qNum] || 'A';
                                 const studentAns = slot.answers?.[qNum] || 'BLANK';
                                 const isCorrect = isEnemQuestionCorrect(studentAns, officialAns);
 
@@ -1977,12 +2016,12 @@ export default function EnemSimuladoView({
                           )}
                         </td>
                         <td className="py-3 px-3 text-center font-bold text-slate-700 dark:text-slate-300">
-                          {sub ? `${sub.total_correct} / 45` : '-'}
+                          {sub ? `${Number(sub.total_correct || 0)} / 45` : '-'}
                         </td>
                         <td className="py-3 px-3 text-center">
                           {sub ? (
-                            <span className={`px-2.5 py-0.5 rounded-full font-bold border text-xs ${getScoreBadgeColor(sub.score_points)}`}>
-                              {sub.score_points.toFixed(1)} pts
+                            <span className={`px-2.5 py-0.5 rounded-full font-bold border text-xs ${getScoreBadgeColor(Number(sub.score_points || 0))}`}>
+                              {Number(sub.score_points || 0).toFixed(1)} pts
                             </span>
                           ) : (
                             <span className="text-slate-400">-</span>
@@ -2049,14 +2088,14 @@ export default function EnemSimuladoView({
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-brand-yellow text-xs font-bold uppercase tracking-wider mb-2 border border-blue-200/60 dark:border-blue-900">
                 <Key size={13} />
-                {isReviewerMode ? `Gabarito Pessoal de ${reviewerName}` : 'Gabarito Oficial Master (Administrador)'}
+                {isReviewerMode ? `Gabarito Pessoal de ${safeReviewerName}` : 'Gabarito Oficial Master (Administrador)'}
               </div>
               <h2 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white">
                 {isReviewerMode ? `Seu Gabarito Exclusivo de Correção (45 Questões)` : 'Gabarito Oficial do Simulado (45 Questões)'}
               </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
                 {isReviewerMode 
-                  ? `Professor(a) ${reviewerName}, este gabarito é individual para você. Suas correções usarão estritamente estas respostas. Suas alterações não afetam outros corretores nem o administrador.`
+                  ? `Professor(a) ${safeReviewerName}, este gabarito é individual para você. Suas correções usarão estritamente estas respostas. Suas alterações não afetam outros corretores nem o administrador.`
                   : 'Defina a resposta correta de cada questão. Esse gabarito mestre serve como base padrão do simulado.'}
               </p>
             </div>
@@ -2242,7 +2281,7 @@ export default function EnemSimuladoView({
               <span className="text-xs text-slate-400 uppercase font-semibold">Média de Acertos</span>
               <div className="text-2xl font-bold text-brand-blue-dark dark:text-white mt-1">
                 {filteredSubmissions.length > 0 
-                  ? (filteredSubmissions.reduce((acc, s) => acc + s.total_correct, 0) / filteredSubmissions.length).toFixed(1)
+                  ? (filteredSubmissions.reduce((acc, s) => acc + Number(s.total_correct || 0), 0) / filteredSubmissions.length).toFixed(1)
                   : '0'} <span className="text-xs text-slate-400">/ 45</span>
               </div>
             </div>
@@ -2251,7 +2290,7 @@ export default function EnemSimuladoView({
               <span className="text-xs text-slate-400 uppercase font-semibold">Média da Nota</span>
               <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
                 {filteredSubmissions.length > 0 
-                  ? (filteredSubmissions.reduce((acc, s) => acc + s.score_points, 0) / filteredSubmissions.length).toFixed(2)
+                  ? (filteredSubmissions.reduce((acc, s) => acc + Number(s.score_points || 0), 0) / filteredSubmissions.length).toFixed(2)
                   : '0.00'} <span className="text-xs text-slate-400">pts</span>
               </div>
             </div>
@@ -2259,7 +2298,7 @@ export default function EnemSimuladoView({
             <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
               <span className="text-xs text-slate-400 uppercase font-semibold">Faixa Máxima (4.0 pts)</span>
               <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1">
-                {filteredSubmissions.filter(s => s.score_points >= 4.0).length} <span className="text-xs text-slate-400">alunos</span>
+                {filteredSubmissions.filter(s => Number(s.score_points || 0) >= 4.0).length} <span className="text-xs text-slate-400">alunos</span>
               </div>
             </div>
           </div>
@@ -2290,18 +2329,18 @@ export default function EnemSimuladoView({
                         {className}
                       </td>
                       <td className="py-3 px-2 text-center font-bold text-slate-700 dark:text-slate-300">
-                        {sub.total_correct} / 45
+                        {Number(sub.total_correct || 0)} / 45
                       </td>
                       <td className="py-3 px-2 text-center">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold border ${getScoreBadgeColor(sub.score_points)}`}>
-                          {sub.score_points.toFixed(1)} pts
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold border ${getScoreBadgeColor(Number(sub.score_points || 0))}`}>
+                          {Number(sub.score_points || 0).toFixed(1)} pts
                         </span>
                       </td>
                       <td className="py-3 px-2 text-xs text-slate-500">
                         {sub.reviewer_name}
                       </td>
                       <td className="py-3 px-2 text-center text-xs text-slate-400">
-                        {new Date(sub.created_at).toLocaleDateString('pt-BR')} {new Date(sub.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                        {formatSubmissionDateTime(sub.created_at)}
                       </td>
                       <td className="py-3 px-2 text-right">
                         <div className="flex items-center justify-end gap-1">
@@ -2523,7 +2562,7 @@ export default function EnemSimuladoView({
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
                     Corretor: <span className="font-semibold text-slate-700 dark:text-slate-300">{verifyingSubmission.reviewer_name || 'Administrador'}</span>
-                    {' '}&bull; Gabarito aplicado: <span className="font-semibold text-brand-blue dark:text-brand-yellow">{verifyingSubmission.reviewer_name && verifyingSubmission.reviewer_name.toLowerCase() !== 'administrador' ? `Gabarito de ${verifyingSubmission.reviewer_name}` : 'Gabarito Mestre'}</span>
+                    {' '}&bull; Gabarito aplicado: <span className="font-semibold text-brand-blue dark:text-brand-yellow">{verifyingSubmission.reviewer_name && typeof verifyingSubmission.reviewer_name === 'string' && verifyingSubmission.reviewer_name.toLowerCase() !== 'administrador' ? `Gabarito de ${verifyingSubmission.reviewer_name}` : 'Gabarito Mestre'}</span>
                   </p>
                 </div>
               </div>
