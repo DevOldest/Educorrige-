@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, Suspense, lazy } from 'react';
 import { 
   Users, 
   FileText, 
@@ -31,60 +31,91 @@ import {
   isInvalidRefreshTokenError,
   INVALID_REFRESH_TOKEN_EVENT,
 } from './lib/supabase';
-
-// Views
-import Dashboard from './views/Dashboard';
-import ClassesView from './views/ClassesView';
-import AnswerKeysView from './views/AnswerKeysView';
-import GradingView from './views/GradingView';
-import ReportsView from './views/ReportsView';
-import ManagementView from './views/ManagementView';
-import NotebookChecksView from './views/NotebookChecksView';
-import SystemTestsView from './views/SystemTestsView';
-import EnemSimuladoView from './views/EnemSimuladoView';
-import WhatsappAutomationView from './views/WhatsappAutomationView';
+import { safeGetItem, safeSetItem, safeRemoveItem, safeGetJson } from './lib/safeStorage';
+import ErrorBoundary from './components/ErrorBoundary';
 import Login from './components/Login';
+
+function lazyWithRetry<T extends React.ComponentType<any>>(
+  factory: () => Promise<{ default: T }>
+) {
+  return lazy(async () => {
+    try {
+      return await factory();
+    } catch (err) {
+      if (typeof window !== 'undefined') {
+        try {
+          const retryKey = 'educorrige_chunk_reloaded';
+          if (!window.sessionStorage?.getItem(retryKey)) {
+            window.sessionStorage?.setItem(retryKey, '1');
+            window.location.reload();
+          }
+        } catch {
+          // Ignore storage/reload errors
+        }
+      }
+      throw err;
+    }
+  });
+}
+
+// Lazy Views (reduz peso inicial no celular e isola falhas por módulo)
+const Dashboard = lazyWithRetry(() => import('./views/Dashboard'));
+const ClassesView = lazyWithRetry(() => import('./views/ClassesView'));
+const AnswerKeysView = lazyWithRetry(() => import('./views/AnswerKeysView'));
+const GradingView = lazyWithRetry(() => import('./views/GradingView'));
+const ReportsView = lazyWithRetry(() => import('./views/ReportsView'));
+const ManagementView = lazyWithRetry(() => import('./views/ManagementView'));
+const NotebookChecksView = lazyWithRetry(() => import('./views/NotebookChecksView'));
+const SystemTestsView = lazyWithRetry(() => import('./views/SystemTestsView'));
+const EnemSimuladoView = lazyWithRetry(() => import('./views/EnemSimuladoView'));
+const WhatsappAutomationView = lazyWithRetry(() => import('./views/WhatsappAutomationView'));
+
+const ViewLoaderFallback = () => (
+  <div className="min-h-[50vh] flex flex-col items-center justify-center gap-3 text-slate-500 dark:text-slate-400">
+    <Loader2 className="animate-spin text-brand-blue dark:text-brand-yellow" size={32} />
+    <span className="text-xs font-semibold">Carregando módulo...</span>
+  </div>
+);
+
+function isValidDemoSession(val: unknown): val is { user: Record<string, unknown>; isDemo?: boolean } {
+  return Boolean(val && typeof val === 'object' && 'user' in val && (val as any).user && typeof (val as any).user === 'object');
+}
+
+function isValidReviewerSession(val: unknown): val is { reviewerName: string } {
+  return Boolean(
+    val &&
+      typeof val === 'object' &&
+      typeof (val as any).reviewerName === 'string' &&
+      (val as any).reviewerName.trim().length > 0
+  );
+}
 
 type View = 'dashboard' | 'classes' | 'answer-keys' | 'grading' | 'notebook-checks' | 'enem' | 'whatsapp' | 'reports' | 'management' | 'tests';
 
 export default function App() {
   const [activeView, setActiveView] = useState<View>('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [session, setSession] = useState<any>(() => {
-    if (typeof window !== 'undefined') {
-      const demo = localStorage.getItem('local_demo_session');
-      if (demo) {
-        try {
-          return JSON.parse(demo);
-        } catch (e) {
-          return null;
-        }
-      }
-    }
-    return null;
-  });
+  const [session, setSession] = useState<any>(() =>
+    safeGetJson('local_demo_session', isValidDemoSession)
+  );
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [sessionNotice, setSessionNotice] = useState<string | null>(null);
   
   // Sessão de Corretor Convidado (via código de acesso)
-  const [reviewerSession, setReviewerSession] = useState<{ reviewerName: string } | null>(() => {
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('enem_reviewer_session');
-      if (stored) {
-        try {
-          return JSON.parse(stored);
-        } catch (e) {
-          return null;
-        }
-      }
-    }
-    return null;
-  });
+  const [reviewerSession, setReviewerSession] = useState<{ reviewerName: string } | null>(() =>
+    safeGetJson('enem_reviewer_session', isValidReviewerSession)
+  );
 
   const [darkMode, setDarkMode] = useState(() => {
+    const savedTheme = safeGetItem('theme');
+    if (savedTheme === 'dark') return true;
+    if (savedTheme === 'light') return false;
     if (typeof window !== 'undefined') {
-      return localStorage.getItem('theme') === 'dark' || 
-             (!localStorage.getItem('theme') && window.matchMedia('(prefers-color-scheme: dark)').matches);
+      try {
+        return Boolean(window.matchMedia?.('(prefers-color-scheme: dark)')?.matches);
+      } catch {
+        return false;
+      }
     }
     return false;
   });
@@ -92,10 +123,10 @@ export default function App() {
   useEffect(() => {
     if (darkMode) {
       document.documentElement.classList.add('dark');
-      localStorage.setItem('theme', 'dark');
+      safeSetItem('theme', 'dark');
     } else {
       document.documentElement.classList.remove('dark');
-      localStorage.setItem('theme', 'light');
+      safeSetItem('theme', 'light');
     }
   }, [darkMode]);
 
@@ -103,7 +134,7 @@ export default function App() {
     const handleInvalidRefreshToken = () => {
       clearSupabaseAuthStorage();
       setSession((prev: any) => (prev?.isDemo ? prev : null));
-      if (!localStorage.getItem('local_demo_session')) {
+      if (!safeGetItem('local_demo_session')) {
         setSessionNotice('Sua sessão anterior expirou. Faça login novamente ou entre pelo Modo Demonstração.');
       }
     };
@@ -121,7 +152,7 @@ export default function App() {
               clearSupabaseAuthStorage();
               await supabase.auth.signOut({ scope: 'local' }).catch(() => {});
               setSession((prev: any) => (prev?.isDemo ? prev : null));
-              if (!localStorage.getItem('local_demo_session')) {
+              if (!safeGetItem('local_demo_session')) {
                 setSessionNotice('Sua sessão anterior expirou. Faça login novamente ou entre pelo Modo Demonstração.');
               }
             }
@@ -148,7 +179,7 @@ export default function App() {
           setSession(nextSession);
           setSessionNotice(null);
         } else if (event === 'SIGNED_OUT') {
-          if (!localStorage.getItem('local_demo_session')) {
+          if (!safeGetItem('local_demo_session')) {
             setSession(null);
           }
         }
@@ -188,14 +219,10 @@ export default function App() {
 
   const handleAdminLoginComplete = () => {
     setSessionNotice(null);
-    const demo = localStorage.getItem('local_demo_session');
+    const demo = safeGetJson('local_demo_session', isValidDemoSession);
     if (demo) {
-      try {
-        setSession(JSON.parse(demo));
-        return;
-      } catch {
-        // Ignore parse error
-      }
+      setSession(demo);
+      return;
     }
     if (supabase) {
       supabase.auth.getSession()
@@ -207,7 +234,7 @@ export default function App() {
   };
 
   const handleAdminLogout = async () => {
-    localStorage.removeItem('local_demo_session');
+    safeRemoveItem('local_demo_session');
     clearSupabaseAuthStorage();
     setSession(null);
     setSessionNotice(null);
@@ -223,12 +250,12 @@ export default function App() {
   const handleReviewerLogin = (name: string) => {
     const revObj = { reviewerName: name };
     setReviewerSession(revObj);
-    localStorage.setItem('enem_reviewer_session', JSON.stringify(revObj));
+    safeSetItem('enem_reviewer_session', JSON.stringify(revObj));
   };
 
   const handleLogoutReviewer = () => {
     setReviewerSession(null);
-    localStorage.removeItem('enem_reviewer_session');
+    safeRemoveItem('enem_reviewer_session');
   };
 
   if (isAuthLoading) {
@@ -242,7 +269,7 @@ export default function App() {
   // Se o professor entrou como Corretor Convidado via Código de Acesso
   if (reviewerSession) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col transition-colors duration-300">
+      <div key="reviewer-portal" translate="no" className="notranslate min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col transition-colors duration-300">
         <header className="sticky top-0 z-20 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 p-4 sm:px-8 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-2xl bg-brand-yellow flex items-center justify-center shadow-md">
@@ -278,11 +305,15 @@ export default function App() {
         </header>
 
         <main className="flex-1 p-4 sm:p-8 max-w-7xl mx-auto w-full">
-          <EnemSimuladoView 
-            isReviewerMode={true} 
-            reviewerName={reviewerSession.reviewerName} 
-            onExitReviewerMode={handleLogoutReviewer} 
-          />
+          <ErrorBoundary resetKey={reviewerSession.reviewerName} title="Não foi possível carregar o Portal do Corretor">
+            <Suspense fallback={<ViewLoaderFallback />}>
+              <EnemSimuladoView 
+                isReviewerMode={true} 
+                reviewerName={reviewerSession.reviewerName} 
+                onExitReviewerMode={handleLogoutReviewer} 
+              />
+            </Suspense>
+          </ErrorBoundary>
         </main>
       </div>
     );
@@ -291,11 +322,15 @@ export default function App() {
   // Se não estiver logado com e-mail/senha e nem for corretor
   if (!session) {
     return (
-      <Login
-        onLogin={handleAdminLoginComplete}
-        onReviewerLogin={handleReviewerLogin}
-        sessionNotice={sessionNotice}
-      />
+      <div key="login-screen">
+        <ErrorBoundary resetKey="login-screen" title="Não foi possível exibir a tela de acesso">
+          <Login
+            onLogin={handleAdminLoginComplete}
+            onReviewerLogin={handleReviewerLogin}
+            sessionNotice={sessionNotice}
+          />
+        </ErrorBoundary>
+      </div>
     );
   }
 
@@ -313,7 +348,7 @@ export default function App() {
   ];
 
   return (
-    <div className="flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden relative transition-colors duration-300">
+    <div key="admin-portal" translate="no" className="notranslate flex h-screen bg-slate-50 dark:bg-slate-950 overflow-hidden relative transition-colors duration-300">
       {/* Mobile Menu Overlay */}
       <AnimatePresence>
         {isSidebarOpen && (
@@ -459,26 +494,30 @@ export default function App() {
         </header>
 
         <div className="p-4 sm:p-8 max-w-7xl mx-auto">
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeView}
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              transition={{ duration: 0.2 }}
-            >
-              {activeView === 'dashboard' && <Dashboard />}
-              {activeView === 'classes' && <ClassesView />}
-              {activeView === 'answer-keys' && <AnswerKeysView />}
-              {activeView === 'grading' && <GradingView />}
-              {activeView === 'notebook-checks' && <NotebookChecksView />}
-              {activeView === 'enem' && <EnemSimuladoView isReviewerMode={false} />}
-              {activeView === 'whatsapp' && <WhatsappAutomationView />}
-              {activeView === 'reports' && <ReportsView />}
-              {activeView === 'management' && <ManagementView />}
-              {activeView === 'tests' && <SystemTestsView />}
-            </motion.div>
-          </AnimatePresence>
+          <ErrorBoundary resetKey={activeView} title="Erro ao carregar este módulo">
+            <Suspense fallback={<ViewLoaderFallback />}>
+              <AnimatePresence mode="wait">
+                <motion.div
+                  key={activeView}
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  transition={{ duration: 0.2 }}
+                >
+                  {activeView === 'dashboard' && <Dashboard />}
+                  {activeView === 'classes' && <ClassesView />}
+                  {activeView === 'answer-keys' && <AnswerKeysView />}
+                  {activeView === 'grading' && <GradingView />}
+                  {activeView === 'notebook-checks' && <NotebookChecksView />}
+                  {activeView === 'enem' && <EnemSimuladoView isReviewerMode={false} />}
+                  {activeView === 'whatsapp' && <WhatsappAutomationView />}
+                  {activeView === 'reports' && <ReportsView />}
+                  {activeView === 'management' && <ManagementView />}
+                  {activeView === 'tests' && <SystemTestsView />}
+                </motion.div>
+              </AnimatePresence>
+            </Suspense>
+          </ErrorBoundary>
         </div>
       </main>
     </div>
