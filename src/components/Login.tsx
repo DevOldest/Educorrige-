@@ -3,6 +3,7 @@ import { LogIn, Loader2, GraduationCap, AlertCircle, Key, FileCheck } from 'luci
 import { motion } from 'motion/react';
 import { supabase, clearSupabaseAuthStorage } from '../lib/supabase';
 import { getStoredSimulation, fetchRemoteSimulation } from '../lib/enemService';
+import { safeGetItem, safeSetItem, safeRemoveItem } from '../lib/safeStorage';
 
 interface LoginProps {
   onLogin: () => void;
@@ -21,14 +22,10 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
   const [isNetworkError, setIsNetworkError] = useState(false);
 
   // Login Corretor via Código
-  const [reviewerName, setReviewerName] = useState(() => {
-    if (typeof window !== 'undefined') {
-      return localStorage.getItem('last_reviewer_name') || '';
-    }
-    return '';
-  });
+  const [reviewerName, setReviewerName] = useState(() => safeGetItem('last_reviewer_name') || '');
   const [accessCode, setAccessCode] = useState('');
   const [reviewerError, setReviewerError] = useState<string | null>(null);
+  const [isReviewerLoading, setIsReviewerLoading] = useState(false);
 
   useEffect(() => {
     fetchRemoteSimulation().catch(() => {});
@@ -52,7 +49,7 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
       });
 
       if (authError) throw authError;
-      localStorage.removeItem('local_demo_session');
+      safeRemoveItem('local_demo_session');
       onLogin();
     } catch (err: any) {
       console.warn('Erro durante tentativa de login:', err);
@@ -79,7 +76,7 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
       },
       isDemo: true
     };
-    localStorage.setItem('local_demo_session', JSON.stringify(demoSession));
+    safeSetItem('local_demo_session', JSON.stringify(demoSession));
     onLogin();
   };
 
@@ -87,34 +84,46 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
     e.preventDefault();
     setReviewerError(null);
 
-    if (!reviewerName.trim()) {
+    const trimmedName = reviewerName.trim();
+    if (!trimmedName) {
       setReviewerError('Informe o seu nome (ex: Prof. Carlos - Física).');
       return;
     }
 
-    let currentSim = getStoredSimulation();
     const enteredCode = accessCode.trim().toUpperCase();
-    let validCode = (currentSim.access_code || 'ENEM2026').trim().toUpperCase();
-
-    if (enteredCode !== validCode) {
-      currentSim = await fetchRemoteSimulation();
-      validCode = (currentSim.access_code || 'ENEM2026').trim().toUpperCase();
-    }
-
-    if (enteredCode !== validCode) {
-      setReviewerError('Código de acesso inválido. Peça o código correto ao professor coordenador.');
+    if (!enteredCode) {
+      setReviewerError('Informe o código de acesso do simulado.');
       return;
     }
 
-    // Código válido! Entrar no modo corretor
+    setIsReviewerLoading(true);
     try {
-      localStorage.setItem('last_reviewer_name', reviewerName.trim());
-    } catch (e) {}
-    onReviewerLogin(reviewerName.trim());
+      let currentSim = getStoredSimulation();
+      let validCode = String(currentSim?.access_code || 'ENEM2026').trim().toUpperCase();
+
+      if (enteredCode !== validCode) {
+        currentSim = await fetchRemoteSimulation();
+        validCode = String(currentSim?.access_code || 'ENEM2026').trim().toUpperCase();
+      }
+
+      if (enteredCode !== validCode) {
+        setReviewerError('Código de acesso inválido. Peça o código correto ao professor coordenador.');
+        return;
+      }
+
+      // Código válido! Entrar no modo corretor
+      safeSetItem('last_reviewer_name', trimmedName);
+      onReviewerLogin(trimmedName);
+    } catch (err: any) {
+      console.warn('Erro durante login do corretor:', err);
+      setReviewerError('Não foi possível validar o código agora. Verifique sua conexão e tente novamente.');
+    } finally {
+      setIsReviewerLoading(false);
+    }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
+    <div translate="no" className="notranslate min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center p-4">
       <motion.div 
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -138,7 +147,7 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
                   : 'text-white/80 hover:text-white'
               }`}
             >
-              Professor Titular
+              <span>Professor Titular</span>
             </button>
             <button
               type="button"
@@ -150,14 +159,14 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
               }`}
             >
               <FileCheck size={14} />
-              Corretor Simulado
+              <span>Corretor Simulado</span>
             </button>
           </div>
         </div>
 
         {mode === 'admin' ? (
           /* Formulário do Professor Titular (Login tradicional) */
-          <form onSubmit={handleAdminLogin} className="p-8 space-y-6">
+          <form key="admin-login-form" onSubmit={handleAdminLogin} className="p-8 space-y-6">
             {sessionNotice && !error && (
               <div className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/60 text-amber-800 dark:text-amber-300 rounded-2xl text-sm flex items-start gap-3">
                 <AlertCircle size={20} className="shrink-0 mt-0.5" />
@@ -177,16 +186,19 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
                     onClick={handleDemoLogin}
                     className="w-full py-2.5 px-4 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold text-xs shadow transition-all"
                   >
-                    Entrar no Modo Demonstração / Offline Agora
+                    <span>Entrar no Modo Demonstração / Offline Agora</span>
                   </button>
                 )}
               </div>
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-400 ml-1">E-mail</label>
+              <label htmlFor="admin-email" className="text-xs font-bold uppercase text-slate-400 ml-1">E-mail</label>
               <input 
-                type="email" 
+                id="admin-email"
+                name="email"
+                type="email"
+                autoComplete="email"
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -196,9 +208,12 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-400 ml-1">Senha</label>
+              <label htmlFor="admin-password" className="text-xs font-bold uppercase text-slate-400 ml-1">Senha</label>
               <input 
-                type="password" 
+                id="admin-password"
+                name="password"
+                type="password"
+                autoComplete="current-password"
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
@@ -213,7 +228,7 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
               className="w-full bg-brand-blue text-white py-4 rounded-2xl font-bold hover:bg-brand-blue-dark transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
             >
               {isLoading ? <Loader2 className="animate-spin" size={20} /> : <LogIn size={20} />}
-              Entrar no Sistema
+              <span>Entrar no Sistema</span>
             </button>
 
             <div className="pt-2 flex flex-col gap-2 text-center">
@@ -222,21 +237,21 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
                 onClick={handleDemoLogin}
                 className="text-xs text-slate-500 hover:text-brand-blue dark:hover:text-brand-yellow font-medium transition-colors"
               >
-                Ambiente de testes? Clique para entrar no Modo Offline / Demonstração
+                <span>Ambiente de testes? Clique para entrar no Modo Offline / Demonstração</span>
               </button>
 
               <button
                 type="button"
-                onClick={() => setMode('reviewer')}
+                onClick={() => { setMode('reviewer'); setReviewerError(null); }}
                 className="text-xs text-brand-blue dark:text-brand-yellow font-semibold hover:underline"
               >
-                Vai apenas corrigir o Simulado ENEM? Entre via Código aqui.
+                <span>Vai apenas corrigir o Simulado ENEM? Entre via Código aqui.</span>
               </button>
             </div>
           </form>
         ) : (
           /* Formulário de Acesso Rápido do Corretor de Simulado via Código */
-          <form onSubmit={handleReviewerLogin} className="p-8 space-y-6">
+          <form key="reviewer-login-form" onSubmit={handleReviewerLogin} className="p-8 space-y-6">
             <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900/50 rounded-2xl text-xs text-amber-800 dark:text-amber-300 space-y-1">
               <div className="font-bold flex items-center gap-1.5">
                 <Key size={14} /> Acesso Simplificado para Correção
@@ -246,15 +261,18 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
 
             {reviewerError && (
               <div className="p-4 bg-red-50 dark:bg-red-950/30 border border-red-100 dark:border-red-900 text-red-600 dark:text-red-400 rounded-xl text-sm flex items-center gap-3">
-                <AlertCircle size={18} />
-                {reviewerError}
+                <AlertCircle size={18} className="shrink-0" />
+                <span>{reviewerError}</span>
               </div>
             )}
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-400 ml-1">Seu Nome / Disciplina</label>
+              <label htmlFor="reviewer-name" className="text-xs font-bold uppercase text-slate-400 ml-1">Seu Nome / Disciplina</label>
               <input 
-                type="text" 
+                id="reviewer-name"
+                name="reviewerName"
+                type="text"
+                autoComplete="name"
                 required
                 value={reviewerName}
                 onChange={(e) => setReviewerName(e.target.value)}
@@ -264,9 +282,13 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
             </div>
 
             <div className="space-y-2">
-              <label className="text-xs font-bold uppercase text-slate-400 ml-1">Código de Acesso do Simulado</label>
+              <label htmlFor="reviewer-code" className="text-xs font-bold uppercase text-slate-400 ml-1">Código de Acesso do Simulado</label>
               <input 
-                type="text" 
+                id="reviewer-code"
+                name="accessCode"
+                type="text"
+                autoComplete="one-time-code"
+                autoCapitalize="characters"
                 required
                 value={accessCode}
                 onChange={(e) => setAccessCode(e.target.value.toUpperCase())}
@@ -277,19 +299,20 @@ export default function Login({ onLogin, onReviewerLogin, sessionNotice }: Login
 
             <button 
               type="submit"
-              className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-lg flex items-center justify-center gap-2"
+              disabled={isReviewerLoading}
+              className="w-full bg-emerald-600 text-white py-4 rounded-2xl font-bold hover:bg-emerald-700 transition-all shadow-lg flex items-center justify-center gap-2 disabled:opacity-50"
             >
-              <FileCheck size={20} />
-              Acessar Correção do Simulado
+              {isReviewerLoading ? <Loader2 className="animate-spin" size={20} /> : <FileCheck size={20} />}
+              <span>{isReviewerLoading ? 'Validando Acesso...' : 'Acessar Correção do Simulado'}</span>
             </button>
 
             <div className="text-center pt-2">
               <button
                 type="button"
-                onClick={() => setMode('admin')}
+                onClick={() => { setMode('admin'); setError(null); }}
                 className="text-xs text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
               >
-                Voltar para o login com e-mail e senha
+                <span>Voltar para o login com e-mail e senha</span>
               </button>
             </div>
           </form>
