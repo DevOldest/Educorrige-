@@ -1,5 +1,6 @@
 import { EnemSimulation, EnemSubmission, EnemAnswerOption } from '../types';
 import { supabase } from './supabase';
+import { safeGetItem, safeSetItem } from './safeStorage';
 import { ThinkingLevel, Type, type Schema } from '@google/genai';
 import { ai, GEMINI_MODEL } from './gemini';
 
@@ -46,17 +47,19 @@ export interface EnemCorrectionStats {
 }
 
 export function calculateEnemStatistics(
-  answers: Record<number, EnemAnswerOption>,
-  officialAnswers: Record<number, EnemAnswerOption>
+  answers: Record<number, EnemAnswerOption> | undefined | null,
+  officialAnswers: Record<number, EnemAnswerOption> | undefined | null
 ): EnemCorrectionStats {
+  const safeAnswers = answers && typeof answers === 'object' ? answers : {};
+  const safeOfficial = officialAnswers && typeof officialAnswers === 'object' ? officialAnswers : DEFAULT_SIMULATION.official_answers;
   let totalCorrect = 0;
   let totalBlank = 0;
   let totalMultiple = 0;
   let totalWrong = 0;
 
   for (let q = 1; q <= 45; q++) {
-    const studentAns = answers[q] || 'BLANK';
-    const officialAns = officialAnswers[q] || 'A';
+    const studentAns = safeAnswers[q] || 'BLANK';
+    const officialAns = safeOfficial[q] || 'A';
 
     if (studentAns === 'BLANK') {
       totalBlank++;
@@ -110,9 +113,102 @@ export const DEFAULT_SIMULATION: EnemSimulation = {
 // ID canônico único para o pool global de correções (garante visibilidade entre Admin e todos os Corretores)
 export const SHARED_SIMULATION_ID = DEFAULT_SIMULATION.id;
 
+const VALID_OFFICIAL_OPTIONS = new Set<string>(['A', 'B', 'C', 'D', 'E', 'ANULADA']);
+const VALID_SUBMISSION_OPTIONS = new Set<string>(['A', 'B', 'C', 'D', 'E', 'BLANK', 'DUPLA', 'ANULADA']);
+
+export function sanitizeOfficialAnswers(raw: unknown): Record<number, EnemAnswerOption> {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string | number, unknown>) : {};
+  const clean: Record<number, EnemAnswerOption> = {};
+  for (let q = 1; q <= 45; q++) {
+    const rawVal = source[q] ?? source[String(q)];
+    const val = typeof rawVal === 'string' ? rawVal.trim().toUpperCase() : '';
+    clean[q] = VALID_OFFICIAL_OPTIONS.has(val)
+      ? (val as EnemAnswerOption)
+      : DEFAULT_SIMULATION.official_answers[q];
+  }
+  return clean;
+}
+
+export function sanitizeSubmissionAnswers(raw: unknown): Record<number, EnemAnswerOption> {
+  const source = raw && typeof raw === 'object' ? (raw as Record<string | number, unknown>) : {};
+  const clean: Record<number, EnemAnswerOption> = {};
+  for (let q = 1; q <= 45; q++) {
+    const rawVal = source[q] ?? source[String(q)];
+    const val = typeof rawVal === 'string' ? rawVal.trim().toUpperCase() : '';
+    clean[q] = VALID_SUBMISSION_OPTIONS.has(val) ? (val as EnemAnswerOption) : 'BLANK';
+  }
+  return clean;
+}
+
+export function sanitizeSimulation(raw: unknown, reviewerName?: string): EnemSimulation {
+  const targetId = getSimulationIdForUser(reviewerName);
+  const obj = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const defaultTitle =
+    reviewerName && typeof reviewerName === 'string' && reviewerName.trim() && reviewerName.toLowerCase() !== 'administrador'
+      ? `Gabarito de ${reviewerName.trim()}`
+      : DEFAULT_SIMULATION.title;
+
+  return {
+    id: typeof obj.id === 'string' && obj.id.trim() ? obj.id : targetId,
+    title: typeof obj.title === 'string' && obj.title.trim() ? obj.title : defaultTitle,
+    area: typeof obj.area === 'string' && obj.area.trim() ? obj.area : DEFAULT_SIMULATION.area,
+    total_questions: Number(obj.total_questions) > 0 ? Number(obj.total_questions) : 45,
+    access_code:
+      typeof obj.access_code === 'string' && obj.access_code.trim()
+        ? obj.access_code.trim()
+        : DEFAULT_SIMULATION.access_code,
+    official_answers: sanitizeOfficialAnswers(obj.official_answers),
+    created_at: typeof obj.created_at === 'string' ? obj.created_at : undefined,
+  };
+}
+
+export function sanitizeSubmission(raw: unknown): EnemSubmission | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const d = raw as Record<string, unknown>;
+  const studentId = typeof d.student_id === 'string' ? d.student_id.trim() : '';
+  if (!studentId) return null;
+
+  const totalCorrectNum = Number(d.total_correct);
+  const scorePointsNum = Number(d.score_points);
+  const safeTotalCorrect = Number.isFinite(totalCorrectNum) ? totalCorrectNum : 0;
+  const safeScorePoints = Number.isFinite(scorePointsNum)
+    ? scorePointsNum
+    : calculateEnemScore(safeTotalCorrect);
+
+  return {
+    id: typeof d.id === 'string' && d.id.trim() ? d.id : `${SHARED_SIMULATION_ID}_${studentId}`,
+    simulation_id:
+      typeof d.simulation_id === 'string' && d.simulation_id.trim()
+        ? d.simulation_id
+        : SHARED_SIMULATION_ID,
+    student_id: studentId,
+    student_name:
+      typeof d.student_name === 'string' && d.student_name.trim()
+        ? d.student_name
+        : 'Aluno',
+    roll_number:
+      d.roll_number !== null && d.roll_number !== undefined && Number.isFinite(Number(d.roll_number))
+        ? Number(d.roll_number)
+        : undefined,
+    class_id: typeof d.class_id === 'string' ? d.class_id : '',
+    class_name: typeof d.class_name === 'string' ? d.class_name : undefined,
+    reviewer_name:
+      typeof d.reviewer_name === 'string' && d.reviewer_name.trim()
+        ? d.reviewer_name
+        : 'Corretor',
+    answers: sanitizeSubmissionAnswers(d.answers),
+    total_correct: safeTotalCorrect,
+    score_points: safeScorePoints,
+    blank_count: Number.isFinite(Number(d.blank_count)) ? Number(d.blank_count) : undefined,
+    multiple_count: Number.isFinite(Number(d.multiple_count)) ? Number(d.multiple_count) : undefined,
+    created_at: typeof d.created_at === 'string' && d.created_at ? d.created_at : new Date().toISOString(),
+    updated_at: typeof d.updated_at === 'string' ? d.updated_at : undefined,
+  };
+}
+
 // Obter ID determinístico do Gabarito Individual por usuário/corretor
 export function getSimulationIdForUser(reviewerName?: string): string {
-  if (!reviewerName || !reviewerName.trim() || reviewerName.toLowerCase() === 'administrador' || reviewerName.toLowerCase() === 'admin') {
+  if (!reviewerName || typeof reviewerName !== 'string' || !reviewerName.trim() || reviewerName.toLowerCase() === 'administrador' || reviewerName.toLowerCase() === 'admin') {
     return DEFAULT_SIMULATION.id;
   }
   const clean = reviewerName.trim().toLowerCase().replace(/[^a-z0-9]/g, '_');
@@ -125,15 +221,15 @@ export function getStoredSimulation(reviewerName?: string): EnemSimulation {
   const storageKey = `${LOCAL_STORAGE_SIM_KEY}_${targetId}`;
 
   try {
-    const raw = localStorage.getItem(storageKey);
+    const raw = safeGetItem(storageKey);
     if (raw) {
-      return JSON.parse(raw);
+      return sanitizeSimulation(JSON.parse(raw), reviewerName);
     }
     // Para o admin, tenta ler também a chave legada
     if (targetId === DEFAULT_SIMULATION.id) {
-      const legacyRaw = localStorage.getItem(LOCAL_STORAGE_SIM_KEY);
+      const legacyRaw = safeGetItem(LOCAL_STORAGE_SIM_KEY);
       if (legacyRaw) {
-        return JSON.parse(legacyRaw);
+        return sanitizeSimulation(JSON.parse(legacyRaw), reviewerName);
       }
     }
   } catch (e) {
@@ -144,29 +240,25 @@ export function getStoredSimulation(reviewerName?: string): EnemSimulation {
   let baseAnswers = { ...DEFAULT_SIMULATION.official_answers };
   let masterAccessCode = DEFAULT_SIMULATION.access_code;
   try {
-    const masterRaw = localStorage.getItem(`${LOCAL_STORAGE_SIM_KEY}_${DEFAULT_SIMULATION.id}`) || localStorage.getItem(LOCAL_STORAGE_SIM_KEY);
+    const masterRaw = safeGetItem(`${LOCAL_STORAGE_SIM_KEY}_${DEFAULT_SIMULATION.id}`) || safeGetItem(LOCAL_STORAGE_SIM_KEY);
     if (masterRaw) {
-      const parsedMaster = JSON.parse(masterRaw);
-      if (parsedMaster.official_answers) {
-        baseAnswers = { ...parsedMaster.official_answers };
-      }
-      if (parsedMaster.access_code) {
-        masterAccessCode = parsedMaster.access_code;
-      }
+      const parsedMaster = sanitizeSimulation(JSON.parse(masterRaw));
+      baseAnswers = parsedMaster.official_answers;
+      masterAccessCode = parsedMaster.access_code;
     }
   } catch (e) {
     // fallback
   }
 
-  return {
+  return sanitizeSimulation({
     ...DEFAULT_SIMULATION,
     id: targetId,
     access_code: masterAccessCode,
-    title: reviewerName && reviewerName.toLowerCase() !== 'administrador' 
+    title: reviewerName && typeof reviewerName === 'string' && reviewerName.toLowerCase() !== 'administrador' 
       ? `Gabarito de ${reviewerName}` 
       : DEFAULT_SIMULATION.title,
     official_answers: baseAnswers
-  };
+  }, reviewerName);
 }
 
 export async function fetchRemoteSimulation(reviewerName?: string): Promise<EnemSimulation> {
@@ -186,43 +278,34 @@ export async function fetchRemoteSimulation(reviewerName?: string): Promise<Enem
       .in('id', idsToFetch);
 
     if (!error && Array.isArray(data) && data.length > 0) {
-      const masterRow = data.find(r => r.id === DEFAULT_SIMULATION.id);
+      const masterRow = data.find(r => r && r.id === DEFAULT_SIMULATION.id);
       if (masterRow) {
-        const masterMerged: EnemSimulation = {
-          id: masterRow.id,
-          title: masterRow.title || DEFAULT_SIMULATION.title,
-          area: masterRow.area || DEFAULT_SIMULATION.area,
-          total_questions: masterRow.total_questions || 45,
-          access_code: masterRow.access_code || DEFAULT_SIMULATION.access_code,
-          official_answers: masterRow.official_answers || DEFAULT_SIMULATION.official_answers,
-          created_at: masterRow.created_at
-        };
+        const masterMerged = sanitizeSimulation({
+          ...masterRow,
+          id: DEFAULT_SIMULATION.id
+        });
         saveStoredSimulationLocal(masterMerged);
       }
 
-      const targetRow = data.find(r => r.id === targetId);
+      const targetRow = data.find(r => r && r.id === targetId);
       if (targetRow) {
-        const merged: EnemSimulation = {
-          id: targetRow.id,
-          title: targetRow.title || local.title,
-          area: targetRow.area || local.area,
-          total_questions: targetRow.total_questions || 45,
+        const merged = sanitizeSimulation({
+          ...local,
+          ...targetRow,
           access_code: masterRow?.access_code || targetRow.access_code || local.access_code,
-          official_answers: targetRow.official_answers || local.official_answers,
-          created_at: targetRow.created_at
-        };
+          official_answers: targetRow.official_answers || local.official_answers
+        }, reviewerName);
         saveStoredSimulationLocal(merged, reviewerName);
         return merged;
       } else if (masterRow && targetId !== DEFAULT_SIMULATION.id) {
         // Se o corretor ainda não salvou gabarito próprio no banco, preserva o local dele ou usa o mestre como ponto de partida
-        const hasLocalCustom = !!localStorage.getItem(`${LOCAL_STORAGE_SIM_KEY}_${targetId}`);
-        const initialReviewerSim: EnemSimulation = {
+        const hasLocalCustom = !!safeGetItem(`${LOCAL_STORAGE_SIM_KEY}_${targetId}`);
+        return sanitizeSimulation({
           ...local,
           id: targetId,
           access_code: masterRow.access_code || local.access_code,
           official_answers: hasLocalCustom ? local.official_answers : (masterRow.official_answers || local.official_answers)
-        };
-        return initialReviewerSim;
+        }, reviewerName);
       }
     }
   } catch (e) {
@@ -247,8 +330,8 @@ export async function fetchAllSimulationsMap(): Promise<Record<string, Record<nu
 
     if (!error && Array.isArray(data)) {
       for (const row of data) {
-        if (row.id && row.official_answers) {
-          map[row.id] = row.official_answers;
+        if (row && row.id && row.official_answers) {
+          map[row.id] = sanitizeOfficialAnswers(row.official_answers);
         }
       }
     }
@@ -264,9 +347,10 @@ function saveStoredSimulationLocal(sim: EnemSimulation, reviewerName?: string): 
   const targetId = getSimulationIdForUser(reviewerName);
   const storageKey = `${LOCAL_STORAGE_SIM_KEY}_${targetId}`;
   try {
-    localStorage.setItem(storageKey, JSON.stringify(sim));
+    const serialized = JSON.stringify(sanitizeSimulation(sim, reviewerName));
+    safeSetItem(storageKey, serialized);
     if (targetId === DEFAULT_SIMULATION.id) {
-      localStorage.setItem(LOCAL_STORAGE_SIM_KEY, JSON.stringify(sim));
+      safeSetItem(LOCAL_STORAGE_SIM_KEY, serialized);
     }
   } catch (e) {
     console.error('Erro ao salvar simulado local:', e);
@@ -356,11 +440,14 @@ function deduplicateSubmissionsByStudent(list: EnemSubmission[]): EnemSubmission
 // Obter submissões locais
 export function getStoredSubmissions(): EnemSubmission[] {
   try {
-    const raw = localStorage.getItem(LOCAL_STORAGE_SUBMISSIONS_KEY);
+    const raw = safeGetItem(LOCAL_STORAGE_SUBMISSIONS_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
-        return deduplicateSubmissionsByStudent(parsed);
+        const sanitized = parsed
+          .map((item) => sanitizeSubmission(item))
+          .filter((item): item is EnemSubmission => item !== null);
+        return deduplicateSubmissionsByStudent(sanitized);
       }
     }
   } catch (e) {
@@ -468,23 +555,10 @@ export async function fetchRemoteSubmissions(_simulationId?: string, _reviewerNa
       .select('*')
       .order('created_at', { ascending: false });
 
-    if (!error && data) {
-      const remoteFormatted: EnemSubmission[] = data.map((d: any) => ({
-        id: d.id || `${SHARED_SIMULATION_ID}_${d.student_id}`,
-        simulation_id: d.simulation_id || SHARED_SIMULATION_ID,
-        student_id: d.student_id,
-        student_name: d.student_name,
-        roll_number: d.roll_number,
-        class_id: d.class_id,
-        reviewer_name: d.reviewer_name,
-        answers: d.answers || {},
-        total_correct: Number(d.total_correct || 0),
-        score_points: Number(d.score_points || 0),
-        blank_count: d.blank_count,
-        multiple_count: d.multiple_count,
-        created_at: d.created_at,
-        updated_at: d.updated_at
-      }));
+    if (!error && Array.isArray(data)) {
+      const remoteFormatted: EnemSubmission[] = data
+        .map((d: any) => sanitizeSubmission(d))
+        .filter((item): item is EnemSubmission => item !== null);
 
       const remoteStudentIds = new Set(remoteFormatted.map(r => r.student_id));
 
@@ -520,9 +594,7 @@ export async function fetchRemoteSubmissions(_simulationId?: string, _reviewerNa
         }))
       );
 
-      try {
-        localStorage.setItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(unified));
-      } catch (e) {}
+      safeSetItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(unified));
 
       return unified;
     }
@@ -535,9 +607,10 @@ export async function fetchRemoteSubmissions(_simulationId?: string, _reviewerNa
 
 // Salvar submissão de aluno (local + Supabase compartilhado para todos)
 export async function saveStoredSubmission(sub: EnemSubmission): Promise<EnemSubmission[]> {
+  const sanitizedInput = sanitizeSubmission(sub) || sub;
   const canonicalSub: EnemSubmission = {
-    ...sub,
-    id: sub.id || `${SHARED_SIMULATION_ID}_${sub.student_id}`,
+    ...sanitizedInput,
+    id: sanitizedInput.id || `${SHARED_SIMULATION_ID}_${sanitizedInput.student_id}`,
     simulation_id: SHARED_SIMULATION_ID,
     updated_at: new Date().toISOString()
   };
@@ -555,11 +628,7 @@ export async function saveStoredSubmission(sub: EnemSubmission): Promise<EnemSub
 
   updated = deduplicateSubmissionsByStudent(updated);
 
-  try {
-    localStorage.setItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Erro ao salvar submissão:', e);
-  }
+  safeSetItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(updated));
 
   await persistSubmissionRemote(canonicalSub);
 
@@ -578,11 +647,7 @@ export async function deleteStoredSubmission(subId: string, studentId?: string):
     return true;
   });
 
-  try {
-    localStorage.setItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(updated));
-  } catch (e) {
-    console.error('Erro ao deletar submissão:', e);
-  }
+  safeSetItem(LOCAL_STORAGE_SUBMISSIONS_KEY, JSON.stringify(updated));
 
   if (supabase) {
     try {
