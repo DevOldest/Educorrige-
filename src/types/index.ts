@@ -132,6 +132,7 @@ export interface EnemSubmission {
   student_name: string;
   roll_number?: number;
   class_id: string;
+  class_name?: string;
   reviewer_name: string;
   answers: Record<number, EnemAnswerOption>;
   total_correct: number;
@@ -139,6 +140,7 @@ export interface EnemSubmission {
   blank_count?: number;
   multiple_count?: number;
   created_at: string;
+  updated_at?: string;
 }
 
 export interface ReviewerSession {
