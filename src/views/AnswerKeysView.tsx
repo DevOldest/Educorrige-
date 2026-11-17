@@ -3,8 +3,7 @@ import { Plus, FileText, Search, Trash2, Edit2, CheckCircle2, AlertCircle, FileU
 import { motion } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
 import { supabase, getSafeAuthUser } from '../lib/supabase';
-import { ThinkingLevel } from '@google/genai';
-import { ai, GEMINI_LITE_MODEL } from '../lib/gemini';
+import { AI_MODEL_LITE, callAiGateway, callAiWithPdf, extractJsonObject } from '../lib/aiClient';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -159,118 +158,82 @@ export default function AnswerKeysView() {
 
   const onDrop = async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
-    if (!file || !ai) return;
+    if (!file) return;
 
     setIsProcessing(true);
     try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = (reader.result as string).split(',')[1];
+      const prompt = `
+        Analise este PDF de um gabarito escolar e extraia os dados estritamente no formato JSON abaixo.
         
-        const prompt = `
-          Analise este PDF de um gabarito escolar e extraia os dados estritamente no formato JSON abaixo.
-          
-          OBJETIVO:
-          - Identificar o título da atividade.
-          - Listar todas as questões com seu número, tipo (objetiva ou dissertativa) e a resposta correta.
-          
-          REGRAS DE EXTRAÇÃO:
-          1. Se o gabarito indicar apenas uma letra (ex: "1. A"), o tipo é "objetiva".
-          2. Se o gabarito tiver um texto explicativo ou critérios, o tipo é "dissertativa".
-          3. Remova carácteres especiais e limpe as respostas.
-          
-          FORMATO DE RETORNO (JSON PURO):
-          {
-            "title": "NOME DA ATIVIDADE",
-            "questions": [
-              {
-                "question_number": 1,
-                "question_type": "objetiva",
-                "expected_answer": "A",
-                "max_score": 1.0,
-                "criteria": "Critério de correção",
-                "bncc_skills": []
-              }
-            ]
-          }
-
-          Retorne APENAS o JSON, sem explicações.
-        `;
-
-        try {
-          if (!ai) throw new Error("IA não configurada.");
-          const response = await ai.models.generateContent({
-            model: GEMINI_LITE_MODEL,
-            contents: [{
-              role: 'user',
-              parts: [
-                { text: prompt },
-                { inlineData: { mimeType: "application/pdf", data: base64 } }
-              ]
-            }],
-            config: {
-              responseMimeType: 'application/json',
-              thinkingConfig: {
-                thinkingLevel: ThinkingLevel.MINIMAL
-              }
+        OBJETIVO:
+        - Identificar o título da atividade.
+        - Listar todas as questões com seu número, tipo (objetiva ou dissertativa) e a resposta correta.
+        
+        REGRAS DE EXTRAÇÃO:
+        1. Se o gabarito indicar apenas uma letra (ex: "1. A"), o tipo é "objetiva".
+        2. Se o gabarito tiver um texto explicativo ou critérios, o tipo é "dissertativa".
+        3. Remova carácteres especiais e limpe as respostas.
+        
+        FORMATO DE RETORNO (JSON PURO):
+        {
+          "title": "NOME DA ATIVIDADE",
+          "questions": [
+            {
+              "question_number": 1,
+              "question_type": "objetiva",
+              "expected_answer": "A",
+              "max_score": 1.0,
+              "criteria": "Critério de correção",
+              "bncc_skills": []
             }
-          });
-
-          const responseText = response.text || '';
-          console.log('Raw AI Response for Answer Key:', responseText);
-          
-          // Robust JSON extraction
-          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-          if (!jsonMatch) {
-            console.error('No JSON match found in:', responseText);
-            throw new Error("A IA não retornou um formato de dados válido. Tente enviar o gabarito novamente.");
-          }
-          
-          try {
-            const data = JSON.parse(jsonMatch[0]);
-            
-            if (!data.questions || !Array.isArray(data.questions)) {
-              throw new Error("O gabarito extraído está incompleto.");
-            }
-
-            setFormData({
-              ...formData,
-              title: data.title || formData.title,
-              questions: data.questions.map((q: any) => ({
-                question_number: q.question_number || (formData.questions.length + 1),
-                question_type: q.question_type === 'dissertativa' ? 'dissertativa' : 'objetiva',
-                expected_answer: String(q.expected_answer || ''),
-                max_score: q.max_score || 1,
-                criteria: q.criteria || '',
-                bncc_skills: q.bncc_skills || []
-              }))
-            });
-            
-            setModal({
-              isOpen: true,
-              title: 'Sucesso',
-              message: `Gabarito extraído com ${data.questions.length} questões.`,
-              type: 'success'
-            });
-          } catch (parseError: any) {
-            console.error('JSON Parse Error:', parseError);
-            throw new Error(`Erro ao ler os dados do gabarito: ${parseError.message}`);
-          }
-        } catch (err) {
-          console.error('AI Processing Error:', err);
-          setModal({
-            isOpen: true,
-            title: 'Erro de Processamento',
-            message: 'Erro ao processar o PDF com IA. Tente novamente.',
-            type: 'error'
-          });
-        } finally {
-          setIsProcessing(false);
+          ]
         }
-      };
-      reader.readAsDataURL(file);
-    } catch (error) {
-      console.error('Error reading file:', error);
+
+        Retorne APENAS o JSON, sem explicações.
+      `;
+
+      const responseText = await callAiWithPdf({
+        file,
+        prompt,
+        model: AI_MODEL_LITE,
+        responseFormat: { type: 'json_object' },
+        temperature: 0
+      });
+
+      const data = extractJsonObject(responseText);
+
+      if (!data.questions || !Array.isArray(data.questions)) {
+        throw new Error("O gabarito extraído está incompleto.");
+      }
+
+      setFormData({
+        ...formData,
+        title: data.title || formData.title,
+        questions: data.questions.map((q: any) => ({
+          question_number: q.question_number || (formData.questions.length + 1),
+          question_type: q.question_type === 'dissertativa' ? 'dissertativa' : 'objetiva',
+          expected_answer: String(q.expected_answer || ''),
+          max_score: q.max_score || 1,
+          criteria: q.criteria || '',
+          bncc_skills: q.bncc_skills || []
+        }))
+      });
+
+      setModal({
+        isOpen: true,
+        title: 'Sucesso',
+        message: `Gabarito extraído com ${data.questions.length} questões.`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      console.error('AI Processing Error:', err);
+      setModal({
+        isOpen: true,
+        title: 'Erro de Processamento',
+        message: err?.message || 'Erro ao processar o PDF com IA. Tente novamente.',
+        type: 'error'
+      });
+    } finally {
       setIsProcessing(false);
     }
   };
@@ -282,7 +245,7 @@ export default function AnswerKeysView() {
   } as any);
 
   const handleProcessLatex = async () => {
-    if (!latexText.trim() || !ai) return;
+    if (!latexText.trim()) return;
 
     setIsProcessing(true);
     try {
@@ -319,31 +282,17 @@ export default function AnswerKeysView() {
         Retorne APENAS o JSON, sem explicações.
       `;
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_LITE_MODEL,
-        contents: [{
-          role: 'user',
-          parts: [
-            { text: prompt }
-          ]
-        }],
-        config: {
-          responseMimeType: 'application/json',
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.MINIMAL
-          }
-        }
+      const responseText = await callAiGateway({
+        model: AI_MODEL_LITE,
+        prompt,
+        responseFormat: { type: 'json_object' },
+        temperature: 0
       });
 
-      const responseText = response.text || '';
-
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      
-      if (!jsonMatch) {
-        throw new Error("A IA não retornou um formato de dados válido.");
+      const data = extractJsonObject(responseText);
+      if (!data.questions || !Array.isArray(data.questions)) {
+        throw new Error("O gabarito extraído está incompleto.");
       }
-
-      const data = JSON.parse(jsonMatch[0]);
       
       setFormData({
         ...formData,

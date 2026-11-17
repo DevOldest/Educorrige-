@@ -5,7 +5,7 @@ import { supabase, getSafeAuthUser } from '../lib/supabase';
 import { cn } from '../lib/utils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
-import { ThinkingLevel } from '@google/genai';
+import { AI_MODEL_LITE, callAiGateway, extractJsonObject } from '../lib/aiClient';
 import CustomModal from '../components/CustomModal';
 
 export default function ReportsView() {
@@ -323,7 +323,6 @@ export default function ReportsView() {
 
   const generateAIDataOnly = async (result: any) => {
     if (!supabase) return null;
-    const { ai, GEMINI_LITE_MODEL } = await import('../lib/gemini');
     
     const prompt = `
       Como Especialista Pedagógico e Analista de BNCC, gere um relatório conciso (máx 120 caracteres por questão e parecer geral de até 2 frases).
@@ -341,25 +340,18 @@ export default function ReportsView() {
     `;
 
     try {
-      const response = await ai.models.generateContent({
-        model: GEMINI_LITE_MODEL,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: {
-          responseMimeType: 'application/json',
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.MINIMAL
-          }
-        }
+      const responseText = await callAiGateway({
+        model: AI_MODEL_LITE,
+        prompt,
+        responseFormat: { type: 'json_object' },
+        temperature: 0.2
       });
 
-      const responseText = response.text || '';
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-      
-      if (jsonMatch) {
-        const payload = JSON.parse(jsonMatch[0]);
+      const payload = extractJsonObject(responseText);
+      if (payload) {
         await supabase.from('assessment_results').update({ overall_feedback: payload.parecer_geral }).eq('id', result.id);
         
-        for (const item of payload.questoes) {
+        for (const item of payload.questoes || []) {
           const corr = result.corrections.find((c: any) => c.questions?.question_number === item.n_questao);
           if (corr && corr.ai_corrections?.[0]) {
             await supabase.from('ai_corrections').update({ justification: item.comentario, correction_feedback: item.comentario }).eq('id', corr.ai_corrections[0].id);
@@ -377,8 +369,7 @@ export default function ReportsView() {
     if (!supabase) return;
     setIsGeneratingDetailed(true);
     try {
-      const user = await getSafeAuthUser();
-      const { ai, GEMINI_LITE_MODEL } = await import('../lib/gemini');
+      await getSafeAuthUser();
       
       const prompt = `
         Como Especialista Pedagógico e Analista de BNCC, gere um relatório objetivo e humanizado para este aluno.
@@ -420,36 +411,23 @@ export default function ReportsView() {
         }
       `;
 
-      const response = await ai.models.generateContent({
-        model: GEMINI_LITE_MODEL,
-        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-        config: {
-          responseMimeType: 'application/json',
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.MINIMAL
-          }
-        }
+      const responseText = await callAiGateway({
+        model: AI_MODEL_LITE,
+        prompt,
+        responseFormat: { type: 'json_object' },
+        temperature: 0.2
       });
 
-      const responseText = response.text || '';
-      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      const payload = extractJsonObject(responseText);
       
-      if (jsonMatch) {
-        const payload = JSON.parse(jsonMatch[0]);
-        
-        // Transform and save to DB
-        // We'll store the richer data in assessment_results.overall_feedback as a JSON string for now
-        // or just update existing fields. Let's update the records.
-        
+      if (payload) {
         await supabase.from('assessment_results')
           .update({ 
             overall_feedback: payload.parecer_geral,
-            // We can store the BNCC list in a separate field if needed, 
-            // but for now let's use the UI state to handle the display
           })
           .eq('id', result.id);
           
-        for (const item of payload.questoes) {
+        for (const item of payload.questoes || []) {
           const corr = result.corrections.find((c: any) => c.questions?.question_number === item.n_questao);
           if (corr && corr.ai_corrections?.[0]) {
             await supabase.from('ai_corrections')

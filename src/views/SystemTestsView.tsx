@@ -12,9 +12,7 @@ import {
   AlertTriangle
 } from 'lucide-react';
 import { supabase } from '../lib/supabase';
-import { ThinkingLevel } from '@google/genai';
-import { ai, GEMINI_MODEL, GEMINI_LITE_MODEL } from '../lib/gemini';
-import { Type } from '@google/genai';
+import { AI_MODEL_MAIN, AI_MODEL_LITE, checkAiStatus, callAiGateway } from '../lib/aiClient';
 
 export default function SystemTestsView() {
   const [tests, setTests] = useState<{
@@ -32,7 +30,7 @@ export default function SystemTestsView() {
   const runDbTest = async () => {
     setTests(prev => ({ ...prev, db: { status: 'running', message: 'Testando conexão...' } }));
     try {
-      const { data, error } = await supabase.from('assessments').select('count', { count: 'exact', head: true });
+      const { error } = await supabase.from('assessments').select('count', { count: 'exact', head: true });
       if (error) throw error;
       setTests(prev => ({ ...prev, db: { status: 'pass', message: 'Conexão estabelecida com sucesso!' } }));
     } catch (err: any) {
@@ -46,58 +44,55 @@ export default function SystemTestsView() {
   };
 
   const runApiTest = async () => {
-    setTests(prev => ({ ...prev, api: { status: 'running', message: 'Verificando chaves...' } }));
-    
-    const viteKey = import.meta.env.VITE_GEMINI_API_KEY;
-    const processKey = process.env.GEMINI_API_KEY;
+    setTests(prev => ({ ...prev, api: { status: 'running', message: 'Verificando chaves e endpoint /api/ai...' } }));
+
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
-    
-    // Check which one is populated
-    const hasVite = viteKey && viteKey.trim() !== '' && viteKey !== 'undefined' && viteKey !== 'null';
-    const hasProcess = processKey && processKey.trim() !== '' && processKey !== 'undefined' && processKey !== 'null';
     const hasSupabase = supabaseUrl && supabaseKey;
 
-    if (!hasVite && !hasProcess) {
-      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Falta: GEMINI_API_KEY' } }));
+    if (!hasSupabase) {
+      setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Falta: VITE_SUPABASE_URL ou VITE_SUPABASE_ANON_KEY' } }));
       return;
     }
-    
-    if (!hasSupabase) {
-       setTests(prev => ({ ...prev, api: { status: 'fail', message: 'Falta: VITE_SUPABASE_URL ou KEY (Obrigatório para o DB)' } }));
-       return;
+
+    try {
+      const status = await checkAiStatus();
+      if (!status.configured) {
+        setTests(prev => ({
+          ...prev,
+          api: { status: 'fail', message: 'Falta: OPENROUTER_API_KEY no servidor (/api/ai)' }
+        }));
+        return;
+      }
+      setTests(prev => ({
+        ...prev,
+        api: { status: 'pass', message: 'Supabase e OPENROUTER_API_KEY (servidor /api/ai) detectados com sucesso.' }
+      }));
+    } catch (err: any) {
+      setTests(prev => ({
+        ...prev,
+        api: { status: 'fail', message: `Falha ao consultar /api/ai: ${err?.message || 'Erro desconhecido'}` }
+      }));
     }
-    
-    setTests(prev => ({ ...prev, api: { status: 'pass', message: 'Chaves detectadas com sucesso.' } }));
   };
 
   const runAiTest = async () => {
-    setTests(prev => ({ ...prev, ai: { status: 'running', message: 'Processando prompt...' } }));
+    setTests(prev => ({ ...prev, ai: { status: 'running', message: 'Testando OpenRouter via /api/ai...' } }));
     try {
-      if (!ai) throw new Error("IA não disponível. Verifique a chave API.");
-      const response = await ai.models.generateContent({
-        model: GEMINI_LITE_MODEL,
-        contents: [{
-          role: 'user',
-          parts: [{ text: "Diga 'OK' se você estiver funcionando." }]
-        }],
-        config: {
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.MINIMAL
-          }
-        }
+      const text = await callAiGateway({
+        model: AI_MODEL_LITE,
+        prompt: "Diga apenas 'OK' se você estiver funcionando.",
+        temperature: 0,
       });
-      const text = response.text || '';
-      if (text.includes('OK')) {
-        setTests(prev => ({ ...prev, ai: { status: 'pass', message: `IA respondeu: ${text}` } }));
+      if (text.toUpperCase().includes('OK')) {
+        setTests(prev => ({ ...prev, ai: { status: 'pass', message: `OpenRouter respondeu: ${text.trim()}` } }));
       } else {
-        setTests(prev => ({ ...prev, ai: { status: 'pass', message: `IA respondeu, mas não o esperado: ${text}` } }));
+        setTests(prev => ({ ...prev, ai: { status: 'pass', message: `OpenRouter respondeu: ${text.trim() || '(vazio)'}` } }));
       }
     } catch (err: any) {
       console.error('AI Test detailed error:', err);
-      // Log more details if it's a fetch error
       if (err.message === 'Failed to fetch') {
-        setTests(prev => ({ ...prev, ai: { status: 'fail', message: 'Erro: Failed to fetch (Possível problema de rede ou CORS)' } }));
+        setTests(prev => ({ ...prev, ai: { status: 'fail', message: 'Erro: Failed to fetch (Endpoint /api/ai inacessível)' } }));
       } else {
         setTests(prev => ({ ...prev, ai: { status: 'fail', message: `Erro: ${err.message}` } }));
       }
@@ -138,7 +133,7 @@ export default function SystemTestsView() {
 
         {/* API Key Card */}
         <TestCard 
-          title="Configuração de API"
+          title="Configuração de API (/api/ai)"
           icon={<Key size={24} />}
           status={tests.api.status}
           message={tests.api.message}
@@ -147,7 +142,7 @@ export default function SystemTestsView() {
 
         {/* AI Integration Card */}
         <TestCard 
-          title={`Integração IA (${GEMINI_MODEL} + ${GEMINI_LITE_MODEL})`}
+          title={`Integração OpenRouter (${AI_MODEL_MAIN} + ${AI_MODEL_LITE})`}
           icon={<Cpu size={24} />}
           status={tests.ai.status}
           message={tests.ai.message}

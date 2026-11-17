@@ -3,8 +3,7 @@ import { Upload, Users, Plus, Trash2, Edit2, FileUp, Loader2, X, Search, ArrowRi
 import { motion } from 'motion/react';
 import { useDropzone, DropzoneOptions } from 'react-dropzone';
 import { supabase, getSafeAuthUser } from '../lib/supabase';
-import { ThinkingLevel } from '@google/genai';
-import { ai, GEMINI_LITE_MODEL } from '../lib/gemini';
+import { AI_MODEL_LITE, callAiWithPdf, extractJsonObject } from '../lib/aiClient';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 
@@ -475,76 +474,52 @@ export default function ClassesView() {
 
   const onDrop = async (acceptedFiles: File[]) => {
     const file = acceptedFiles[0];
-    if (!file || !ai) return;
+    if (!file) return;
 
     setIsProcessing(true);
     try {
-      const reader = new FileReader();
-      reader.onload = async () => {
-        const base64 = (reader.result as string).split(',')[1];
-        
-        const prompt = `
-          Analise esta lista de alunos em PDF e extraia o nome da turma e a lista de alunos (apenas os nomes).
-          Ignore números de chamada se houver, mas mantenha a ordem se possível.
-          Retorne um JSON estritamente no formato:
-          {
-            "className": "Nome da Turma Encontrado",
-            "students": [
-              { "name": "NOME COMPLETO DO ALUNO" },
-              ...
-            ]
-          }
-        `;
-
-        try {
-          if (!ai) throw new Error("IA não configurada.");
-          const response = await ai.models.generateContent({
-            model: GEMINI_LITE_MODEL,
-            contents: [{
-              role: 'user',
-              parts: [
-                { text: prompt },
-                { inlineData: { mimeType: "application/pdf", data: base64 } }
-              ]
-            }],
-            config: {
-              responseMimeType: "application/json",
-              thinkingConfig: {
-                thinkingLevel: ThinkingLevel.MINIMAL
-              }
-            }
-          });
-
-          const responseText = response.text || '';
-          const data = JSON.parse(responseText);
-          
-          // Add roll numbers based on order
-          const studentsWithRoll = data.students.map((s: any, index: number) => ({
-            name: s.name,
-            rollNumber: index + 1
-          }));
-
-          setPreviewData({
-            className: data.className || 'Nova Turma',
-            schoolYear: new Date().getFullYear(),
-            students: studentsWithRoll
-          });
-        } catch (err) {
-          console.error('AI Processing Error:', err);
-          setModal({
-            isOpen: true,
-            title: 'Erro de Processamento',
-            message: 'Erro ao processar o PDF com IA. Verifique se o arquivo é um PDF válido e tente novamente.',
-            type: 'error'
-          });
-        } finally {
-          setIsProcessing(false);
+      const prompt = `
+        Analise esta lista de alunos em PDF e extraia o nome da turma e a lista de alunos (apenas os nomes).
+        Ignore números de chamada se houver, mas mantenha a ordem se possível.
+        Retorne um JSON estritamente no formato:
+        {
+          "className": "Nome da Turma Encontrado",
+          "students": [
+            { "name": "NOME COMPLETO DO ALUNO" }
+          ]
         }
-      };
-      reader.readAsDataURL(file);
+      `;
 
-    } catch (error) {
-      console.error('Error processing PDF:', error);
+      const responseText = await callAiWithPdf({
+        file,
+        prompt,
+        model: AI_MODEL_LITE,
+        responseFormat: { type: 'json_object' },
+        temperature: 0
+      });
+
+      const data = extractJsonObject(responseText);
+
+      // Add roll numbers based on order
+      const studentsWithRoll = (Array.isArray(data.students) ? data.students : []).map((s: any, index: number) => ({
+        name: s.name,
+        rollNumber: index + 1
+      }));
+
+      setPreviewData({
+        className: data.className || 'Nova Turma',
+        schoolYear: new Date().getFullYear(),
+        students: studentsWithRoll
+      });
+    } catch (err) {
+      console.error('AI Processing Error:', err);
+      setModal({
+        isOpen: true,
+        title: 'Erro de Processamento',
+        message: 'Erro ao processar o PDF com IA. Verifique se o arquivo é um PDF válido e tente novamente.',
+        type: 'error'
+      });
+    } finally {
       setIsProcessing(false);
     }
   };

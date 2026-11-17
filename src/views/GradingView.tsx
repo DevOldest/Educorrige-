@@ -33,31 +33,32 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useDropzone } from 'react-dropzone';
 import { supabase, getSafeAuthUser } from '../lib/supabase';
-import { ThinkingLevel, Type, type Schema } from '@google/genai';
-import { ai, GEMINI_MODEL } from '../lib/gemini';
+import { AI_MODEL_MAIN, callAiGateway } from '../lib/aiClient';
 import { cn } from '../lib/utils';
 import CustomModal from '../components/CustomModal';
 import { compressImageForAI, formatBytes } from '../lib/imageOptimizer';
 
-const GRADING_RESPONSE_SCHEMA: Schema = {
-  type: Type.OBJECT,
+const GRADING_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
   properties: {
     c: {
-      type: Type.ARRAY,
+      type: 'array',
       items: {
-        type: Type.OBJECT,
+        type: 'object',
         properties: {
-          q: { type: Type.INTEGER },
-          a: { type: Type.STRING },
-          s: { type: Type.NUMBER },
-          f: { type: Type.STRING },
+          q: { type: 'integer' },
+          a: { type: 'string' },
+          s: { type: 'number' },
+          f: { type: 'string' },
         },
         required: ['q', 'a', 's', 'f'],
+        additionalProperties: false,
       },
     },
-    t: { type: Type.NUMBER },
+    t: { type: 'number' },
   },
   required: ['c', 't'],
+  additionalProperties: false,
 };
 
 function evaluateObjectiveAnswerMatch(studentAnsRaw: string, expectedAnsRaw: string): boolean | null {
@@ -818,7 +819,7 @@ export default function GradingView() {
         item.slot.status !== 'done'
       );
     
-    if (activeSlotsWithOrder.length === 0 || !selectedAssessmentId || !ai) {
+    if (activeSlotsWithOrder.length === 0 || !selectedAssessmentId) {
       setModal({
         isOpen: true,
         title: 'Dados Incompletos',
@@ -860,9 +861,8 @@ export default function GradingView() {
 
       const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-      // Motor padrão da Área Individual: Gemini 3.8 Flash em ThinkingLevel.MEDIUM
-      const activeModel = GEMINI_MODEL;
-      const activeThinkingLevel = ThinkingLevel.MEDIUM;
+      // Motor padrão da Área Individual: OpenRouter google/gemini-3.8-flash em reasoning medium
+      const activeModel = AI_MODEL_MAIN;
       const imageMaxDimension = 1400;
       const maxPossibleTotal = questions.reduce((sum, q) => sum + (Number(q.max_score) || 1.0), 0);
 
@@ -893,10 +893,8 @@ export default function GradingView() {
             const imageParts = await Promise.all(slot.files.map(async (file: File) => {
               const compressed = await compressImageForAI(file, imageMaxDimension, 0.84);
               return {
-                inlineData: {
-                  mimeType: compressed.mimeType,
-                  data: compressed.base64
-                }
+                mimeType: compressed.mimeType,
+                data: compressed.base64
               };
             }));
 
@@ -920,21 +918,22 @@ REGRAS ESTRITAS:
    - Escreva em "f" um feedback direto e preciso (máx 100 caracteres).
 5. Retorne ESTRITAMENTE JSON no esquema solicitado.`;
 
-            const response = await ai.models.generateContent({
+            const responseText = await callAiGateway({
               model: activeModel,
-              contents: [{ role: 'user', parts: [{ text: prompt }, ...imageParts] }],
-              config: {
-                temperature: 0,
-                seed: 42,
-                responseMimeType: 'application/json',
-                responseSchema: GRADING_RESPONSE_SCHEMA,
-                thinkingConfig: {
-                  thinkingLevel: activeThinkingLevel
-                }
-              }
+              prompt,
+              images: imageParts,
+              responseFormat: {
+                type: 'json_schema',
+                json_schema: {
+                  name: 'student_grading_result',
+                  strict: true,
+                  schema: GRADING_JSON_SCHEMA,
+                },
+              },
+              reasoningEffort: 'medium',
+              temperature: 0,
+              seed: 42,
             });
-
-            const responseText = response.text || '';
             const jsonMatch = responseText.match(/\{[\s\S]*\}/);
             
             if (jsonMatch) {
@@ -1186,7 +1185,7 @@ REGRAS ESTRITAS:
               if (ans) {
                 await supabase.from('ai_corrections').insert([{
                   student_answer_id: ans.id,
-                  ai_model: result.ai_model || GEMINI_MODEL,
+                  ai_model: result.ai_model || AI_MODEL_MAIN,
                   correction_feedback: corr.feedback || '',
                   score_given: finalItemScore,
                   justification: corr.feedback || '',
