@@ -1,5 +1,4 @@
-import { ThinkingLevel } from '@google/genai';
-import { ai, GEMINI_LITE_MODEL } from './gemini';
+import { AI_MODEL_LITE, callAiWithPdf, extractJsonObject } from './aiClient';
 import { supabase } from './supabase';
 import { WeeklyStudyMessage, ExtractedCampaign, WeeklyMessageStatus } from '../types';
 
@@ -390,12 +389,6 @@ export function fileToBase64(file: File): Promise<string> {
 }
 
 export async function extractStudyScheduleFromPdf(file: File): Promise<ExtractedCampaign> {
-  if (!ai) {
-    throw new Error('Chave da API Gemini não configurada.');
-  }
-
-  const base64Data = await fileToBase64(file);
-
   const prompt = `
 Você é um especialista pedagógico em Química e rotinas de Repetição Espaçada (AlgoApp / Anki).
 Sua missão é ler o arquivo PDF fornecido e extrair com rigor e completude TODAS as semanas ou blocos de mensagens de estudo contidos nele.
@@ -426,46 +419,15 @@ Responda OBRIGATORIAMENTE em JSON válido com esta estrutura exata:
 `;
 
   try {
-    const response = await ai.models.generateContent({
-      model: GEMINI_LITE_MODEL,
-      contents: [
-        {
-          role: 'user',
-          parts: [
-            { text: prompt },
-            {
-              inlineData: {
-                mimeType: 'application/pdf',
-                data: base64Data
-              }
-            }
-          ]
-        }
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        thinkingConfig: {
-          thinkingLevel: ThinkingLevel.MINIMAL
-        }
-      }
+    const responseText = await callAiWithPdf({
+      file,
+      prompt,
+      model: AI_MODEL_LITE,
+      responseFormat: { type: 'json_object' },
+      temperature: 0,
     });
 
-    const responseText = response.text || '';
-    if (!responseText) {
-      throw new Error('A IA retornou uma resposta vazia.');
-    }
-
-    let parsed: any;
-    try {
-      parsed = JSON.parse(responseText);
-    } catch {
-      const match = responseText.match(/\{[\s\S]*\}/);
-      if (match) {
-        parsed = JSON.parse(match[0]);
-      } else {
-        throw new Error('Não foi possível identificar o formato JSON na resposta da IA.');
-      }
-    }
+    const parsed = extractJsonObject<any>(responseText);
 
     if (!parsed || !Array.isArray(parsed.messages)) {
       throw new Error('Estrutura de dados retornada não contém a lista de mensagens.');

@@ -1,8 +1,7 @@
 import { EnemSimulation, EnemSubmission, EnemAnswerOption } from '../types';
 import { supabase } from './supabase';
 import { safeGetItem, safeSetItem } from './safeStorage';
-import { ThinkingLevel, Type, type Schema } from '@google/genai';
-import { ai, GEMINI_MODEL } from './gemini';
+import { AI_MODEL_MAIN, callAiGateway, extractJsonObject } from './aiClient';
 
 // Regra de pontuação por faixas do Simulado ENEM:
 // 1 a 10: 1.0 pt
@@ -666,27 +665,24 @@ export async function deleteStoredSubmission(subId: string, studentId?: string):
 
 const ENEM_ANSWER_ENUM = ['A', 'B', 'C', 'D', 'E', 'BLANK', 'DUPLA'];
 
-const ENEM_RESPONSE_SCHEMA: Schema = {
-  type: Type.OBJECT,
+const ENEM_JSON_SCHEMA: Record<string, unknown> = {
+  type: 'object',
   properties: Array.from({ length: 45 }, (_, i) => String(i + 1)).reduce(
     (acc, key) => {
       acc[key] = {
-        type: Type.STRING,
+        type: 'string',
         enum: ENEM_ANSWER_ENUM,
       };
       return acc;
     },
-    {} as Record<string, Schema>
+    {} as Record<string, unknown>
   ),
   required: Array.from({ length: 45 }, (_, i) => String(i + 1)),
+  additionalProperties: false,
 };
 
-// Processar imagem do cartão resposta via IA (Opção A: Gemini 3.8 Flash em ThinkingLevel.LOW com chaves numeradas 1..45)
+// Processar imagem do cartão resposta via IA (OpenRouter: google/gemini-3.8-flash em reasoning low com chaves 1..45)
 export async function analyzeEnemBubbleSheet(imageBase64: string): Promise<Record<number, EnemAnswerOption>> {
-  if (!ai) {
-    throw new Error('Chave da API de IA não configurada.');
-  }
-
   const prompt = `Você é um leitor óptico (OMR) de precisão para Cartão-Resposta padrão ENEM com 45 questões numeradas de 1 a 45 (alternativas A, B, C, D, E).
 
 INSTRUÇÕES DE LEITURA:
@@ -702,47 +698,6 @@ INSTRUÇÕES DE LEITURA:
 
   const cleanBase64 = imageBase64.replace(/^data:image\/[a-z]+;base64,/, '');
 
-  const executeWithRetry = async (attempt: number = 0): Promise<string> => {
-    try {
-      const response = await ai.models.generateContent({
-        model: GEMINI_MODEL,
-        contents: [
-          {
-            role: 'user',
-            parts: [
-              { text: prompt },
-              {
-                inlineData: {
-                  mimeType: 'image/jpeg',
-                  data: cleanBase64
-                }
-              }
-            ]
-          }
-        ],
-        config: {
-          temperature: 0,
-          seed: 42,
-          responseMimeType: 'application/json',
-          responseSchema: ENEM_RESPONSE_SCHEMA,
-          thinkingConfig: {
-            thinkingLevel: ThinkingLevel.LOW
-          }
-        }
-      });
-      return response.text || '{}';
-    } catch (err: any) {
-      const isQuotaOrOverload = err.message?.includes('503') || err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED');
-      if (isQuotaOrOverload && attempt < 3) {
-        const jitter = Math.floor(Math.random() * 600);
-        const waitTime = Math.pow(1.6, attempt + 1) * 750 + jitter;
-        await new Promise(r => setTimeout(r, waitTime));
-        return executeWithRetry(attempt + 1);
-      }
-      throw err;
-    }
-  };
-
   const normalizeOption = (raw: unknown): EnemAnswerOption => {
     const val = String(raw || 'BLANK').trim().toUpperCase();
     if (['A', 'B', 'C', 'D', 'E'].includes(val)) {
@@ -755,8 +710,29 @@ INSTRUÇÕES DE LEITURA:
   };
 
   try {
-    const text = await executeWithRetry();
-    const parsed = JSON.parse(text);
+    const text = await callAiGateway({
+      model: AI_MODEL_MAIN,
+      prompt,
+      images: [
+        {
+          mimeType: 'image/jpeg',
+          data: cleanBase64,
+        },
+      ],
+      responseFormat: {
+        type: 'json_schema',
+        json_schema: {
+          name: 'enem_bubble_sheet',
+          strict: true,
+          schema: ENEM_JSON_SCHEMA,
+        },
+      },
+      reasoningEffort: 'low',
+      temperature: 0,
+      seed: 42,
+    });
+
+    const parsed = extractJsonObject<any>(text);
     const answers: Record<number, EnemAnswerOption> = {};
 
     const compactArray = Array.isArray(parsed)
