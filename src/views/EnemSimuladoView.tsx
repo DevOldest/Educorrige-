@@ -63,6 +63,8 @@ import {
   isEnemQuestionCorrect,
   DEFAULT_SIMULATION,
   SHARED_SIMULATION_ID,
+  ENEM_SIMULATIONS_CATALOG,
+  getSimulationCatalogMeta,
   getSimulationIdForUser
 } from '../lib/enemService';
 import { compressImageForAI } from '../lib/imageOptimizer';
@@ -105,17 +107,30 @@ export default function EnemSimuladoView({
       ? reviewerName.trim()
       : 'Professor Corretor';
 
-  // Configurações e dados (gabarito individual por corretor; correções compartilhadas para todos)
+  // Simulado ENEM selecionado (Natureza, Linguagens ou Matemática)
+  const [selectedSimId, setSelectedSimId] = useState<string>(() => {
+    const saved = safeGetItem('enem_active_sim_id');
+    return ENEM_SIMULATIONS_CATALOG.some(item => item.id === saved)
+      ? (saved as string)
+      : DEFAULT_SIMULATION.id;
+  });
+  const activeSimMeta = getSimulationCatalogMeta(selectedSimId);
+
+  // Configurações e dados (gabarito por área/corretor; correções separadas por simulation_id)
   const [simulation, setSimulation] = useState<EnemSimulation>(() =>
-    getStoredSimulation(isReviewerMode ? safeReviewerName : undefined)
+    getStoredSimulation(isReviewerMode ? safeReviewerName : undefined, selectedSimId)
   );
   const safeOfficialAnswers: Record<number, EnemAnswerOption> =
     simulation?.official_answers && typeof simulation.official_answers === 'object'
       ? simulation.official_answers
       : DEFAULT_SIMULATION.official_answers;
-  const [simulationsMap, setSimulationsMap] = useState<Record<string, Record<number, EnemAnswerOption>>>(() => ({
-    [SHARED_SIMULATION_ID]: getStoredSimulation().official_answers
-  }));
+  const [simulationsMap, setSimulationsMap] = useState<Record<string, Record<number, EnemAnswerOption>>>(() => {
+    const initialMap: Record<string, Record<number, EnemAnswerOption>> = {};
+    ENEM_SIMULATIONS_CATALOG.forEach(item => {
+      initialMap[item.id] = getStoredSimulation(undefined, item.id).official_answers;
+    });
+    return initialMap;
+  });
   const [submissions, setSubmissions] = useState<EnemSubmission[]>(getStoredSubmissions);
   const [classes, setClasses] = useState<Class[]>([]);
   const [allClassesLookup, setAllClassesLookup] = useState<Class[]>([]);
@@ -166,6 +181,7 @@ export default function EnemSimuladoView({
   const [isCopiedCode, setIsCopiedCode] = useState(false);
 
   // Filtros de resultados (compartilhados para Admin e Corretores)
+  const [resultsViewMode, setResultsViewMode] = useState<'single' | 'consolidated'>('single');
   const [filterClassId, setFilterClassId] = useState<string>('all');
   const [filterReviewer, setFilterReviewer] = useState<string>('all');
 
@@ -175,19 +191,47 @@ export default function EnemSimuladoView({
   const [isSavingAudit, setIsSavingAudit] = useState(false);
   const [pendingDeleteSubmission, setPendingDeleteSubmission] = useState<EnemSubmission | null>(null);
 
+  // Troca de Simulado (Natureza / Linguagens / Matemática)
+  const handleSelectSimulation = (nextSimId: string) => {
+    if (nextSimId === selectedSimId || isProcessingBatch) return;
+    const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
+    safeSetItem('enem_active_sim_id', nextSimId);
+    setSelectedSimId(nextSimId);
+
+    const localSim = getStoredSimulation(targetReviewer, nextSimId);
+    setSimulation(localSim);
+    setEditingAnswers(localSim.official_answers);
+    setExpandedSlotIds({});
+    setStatusMessage(null);
+
+    const firstPending = students.find(
+      s => !submissions.some(sub => sub.student_id === s.id && sub.simulation_id === nextSimId)
+    );
+    setEnemSlots([{
+      id: `enem-slot-${Date.now()}-1`,
+      studentId: firstPending ? firstPending.id : (students[0]?.id || ''),
+      imagePreview: null,
+      answers: null,
+      status: 'idle',
+      error: null
+    }]);
+  };
+
   // Função central de sincronização de correções e gabaritos com o Supabase
-  const syncAllRemoteData = async (silent = true) => {
+  const syncAllRemoteData = async (silent = true, simIdOverride?: string) => {
     if (!silent) setIsSyncingSubmissions(true);
     const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
+    const targetSimId = simIdOverride || selectedSimId;
 
     try {
       const [sim, subs, allSims] = await Promise.all([
-        fetchRemoteSimulation(targetReviewer),
+        fetchRemoteSimulation(targetReviewer, targetSimId),
         fetchRemoteSubmissions(),
         fetchAllSimulationsMap()
       ]);
 
       setSimulation(sim);
+      setEditingAnswers(sim.official_answers);
       if (silent === false) {
         setTempAccessCode(sim.access_code);
       }
@@ -195,12 +239,12 @@ export default function EnemSimuladoView({
       setSimulationsMap(prev => ({
         ...prev,
         ...allSims,
-        [getSimulationIdForUser(targetReviewer)]: sim.official_answers
+        [getSimulationIdForUser(targetReviewer, targetSimId)]: sim.official_answers
       }));
 
       if (!silent) {
         setStatusMessage({
-          text: `Sincronização concluída! ${subs.length} correção(ões) carregada(s) para toda a equipe.`,
+          text: `Sincronização concluída! ${subs.length} correção(ões) carregada(s) em todos os simulados.`,
           type: 'success'
         });
       }
@@ -214,18 +258,6 @@ export default function EnemSimuladoView({
   // Carregar turmas e sincronizar dados com Supabase + Realtime + Polling leve
   useEffect(() => {
     fetchClasses();
-
-    const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
-    fetchRemoteSimulation(targetReviewer).then(sim => {
-      setSimulation(sim);
-      setEditingAnswers(sim.official_answers);
-      setTempAccessCode(sim.access_code);
-      setSimulationsMap(prev => ({
-        ...prev,
-        [getSimulationIdForUser(targetReviewer)]: sim.official_answers
-      }));
-    }).catch(() => {});
-
     fetchRemoteSubmissions().then(subs => setSubmissions(subs)).catch(() => {});
     fetchAllSimulationsMap().then(map => setSimulationsMap(prev => ({ ...prev, ...map }))).catch(() => {});
 
@@ -265,6 +297,20 @@ export default function EnemSimuladoView({
       }
     };
   }, [isReviewerMode, safeReviewerName]);
+
+  // Atualizar gabarito ativo sempre que trocar o simulado ou modo de corretor
+  useEffect(() => {
+    const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
+    fetchRemoteSimulation(targetReviewer, selectedSimId).then(sim => {
+      setSimulation(sim);
+      setEditingAnswers(sim.official_answers);
+      setTempAccessCode(sim.access_code);
+      setSimulationsMap(prev => ({
+        ...prev,
+        [getSimulationIdForUser(targetReviewer, selectedSimId)]: sim.official_answers
+      }));
+    }).catch(() => {});
+  }, [isReviewerMode, safeReviewerName, selectedSimId]);
 
   // Atualizar lista de correções sempre que alternar para aba de Correção ou Resultados
   useEffect(() => {
@@ -434,9 +480,11 @@ export default function EnemSimuladoView({
 
     setStudents(studentList);
 
-    // Se houver apenas 1 slot vazio inicial, já pré-seleciona o primeiro aluno pendente para agilizar
+    // Se houver apenas 1 slot vazio inicial, já pré-seleciona o primeiro aluno pendente deste simulado
     if (studentList.length > 0) {
-      const firstUncorrected = studentList.find(s => !submissions.some(sub => sub.student_id === s.id));
+      const firstUncorrected = studentList.find(
+        s => !submissions.some(sub => sub.student_id === s.id && sub.simulation_id === selectedSimId)
+      );
       setEnemSlots(prev => {
         if (prev.length === 1 && !prev[0].studentId && !prev[0].imagePreview && !prev[0].answers) {
           return [{
@@ -524,12 +572,14 @@ export default function EnemSimuladoView({
     }
 
     const targetList = onlyPending
-      ? students.filter(s => !submissions.some(sub => sub.student_id === s.id))
+      ? students.filter(
+          s => !submissions.some(sub => sub.student_id === s.id && sub.simulation_id === selectedSimId)
+        )
       : students;
 
     if (targetList.length === 0) {
       setStatusMessage({
-        text: 'Todos os alunos desta turma já estão corrigidos! Use "Preencher Todos" se desejar refazer algum cartão.',
+        text: `Todos os alunos desta turma já estão corrigidos em ${activeSimMeta.shortLabel}! Use "Preencher Todos" se desejar refazer algum cartão.`,
         type: 'info'
       });
       return;
@@ -634,7 +684,9 @@ export default function EnemSimuladoView({
     setEnemSlots(prev => {
       const remaining = prev.filter(s => s.status !== 'done');
       if (remaining.length === 0) {
-        const firstPending = students.find(s => !submissions.some(sub => sub.student_id === s.id));
+        const firstPending = students.find(
+          s => !submissions.some(sub => sub.student_id === s.id && sub.simulation_id === selectedSimId)
+        );
         const fallbackId = firstPending ? firstPending.id : (students[0]?.id || '');
         return [{
           id: `enem-slot-${Date.now()}-1`,
@@ -788,8 +840,8 @@ export default function EnemSimuladoView({
     const stats = calculateEnemStatistics(answers, safeOfficialAnswers);
 
     return {
-      id: `${SHARED_SIMULATION_ID}_${studentObj.id}`,
-      simulation_id: SHARED_SIMULATION_ID,
+      id: `${selectedSimId}_${studentObj.id}`,
+      simulation_id: selectedSimId,
       student_id: studentObj.id,
       student_name: studentObj.name,
       roll_number: studentObj.roll_number,
@@ -829,6 +881,8 @@ export default function EnemSimuladoView({
     let completedCount = 0;
     let successCount = 0;
 
+    let remoteSyncWarning: string | null = null;
+
     const processSlot = async (item: { slot: EnemSlotItem; slotVisualIndex: number }) => {
       const { slot, slotVisualIndex } = item;
       const studentObj = students.find(s => s.id === slot.studentId);
@@ -847,8 +901,11 @@ export default function EnemSimuladoView({
         const aiAnswers = await analyzeEnemBubbleSheet(slot.imagePreview!);
         const newSub = buildSubmissionFromSlot(slot, aiAnswers);
         if (newSub) {
-          const updatedSubs = await saveStoredSubmission(newSub);
-          setSubmissions(updatedSubs);
+          const saveRes = await saveStoredSubmission(newSub);
+          setSubmissions(saveRes.submissions);
+          if (!saveRes.syncedRemote && saveRes.syncError) {
+            remoteSyncWarning = saveRes.syncError;
+          }
         }
 
         updateEnemSlot(slot.id, {
@@ -890,8 +947,10 @@ export default function EnemSimuladoView({
 
     if (successCount > 0) {
       setStatusMessage({
-        text: `Correção em cascata concluída! ${successCount} de ${readySlots.length} cartões reconhecidos e salvos automaticamente para toda a equipe.`,
-        type: 'success'
+        text: remoteSyncWarning
+          ? `Correção em ${activeSimMeta.shortLabel} concluída (${successCount}/${readySlots.length}) e salva localmente, mas o Supabase recusou a gravação (${remoteSyncWarning}).`
+          : `Correção em ${activeSimMeta.shortLabel} concluída! ${successCount} de ${readySlots.length} cartões reconhecidos e salvos para toda a equipe.`,
+        type: remoteSyncWarning ? 'info' : 'success'
       });
     } else {
       setStatusMessage({
@@ -928,16 +987,23 @@ export default function EnemSimuladoView({
     setIsSavingBatch(true);
     try {
       let latestSubs = submissions;
+      let syncWarning: string | undefined;
       for (const slot of slotsToSave) {
         const newSub = buildSubmissionFromSlot(slot, slot.answers!);
         if (newSub) {
-          latestSubs = await saveStoredSubmission(newSub);
+          const saveRes = await saveStoredSubmission(newSub);
+          latestSubs = saveRes.submissions;
+          if (!saveRes.syncedRemote && saveRes.syncError) {
+            syncWarning = saveRes.syncError;
+          }
         }
       }
       setSubmissions(latestSubs);
       setStatusMessage({
-        text: `${slotsToSave.length} correção(ões) sincronizada(s) com sucesso para toda a equipe!`,
-        type: 'success'
+        text: syncWarning
+          ? `${slotsToSave.length} correção(ões) de ${activeSimMeta.shortLabel} salvas localmente, mas o banco retornou: ${syncWarning}`
+          : `${slotsToSave.length} correção(ões) de ${activeSimMeta.shortLabel} sincronizada(s) com sucesso para toda a equipe!`,
+        type: syncWarning ? 'info' : 'success'
       });
     } catch (err: any) {
       setStatusMessage({
@@ -983,24 +1049,27 @@ export default function EnemSimuladoView({
     });
   };
 
-  // Salvar novo Gabarito Oficial (Individual por corretor se for corretor)
+  // Salvar novo Gabarito Oficial (por área selecionada e individual por corretor se for corretor)
   const handleSaveOfficialAnswers = async () => {
     const targetReviewer = isReviewerMode ? safeReviewerName : undefined;
     const updatedSim: EnemSimulation = {
       ...simulation,
+      id: getSimulationIdForUser(targetReviewer, selectedSimId),
+      title: isReviewerMode ? `Gabarito de ${safeReviewerName} (${activeSimMeta.shortLabel})` : activeSimMeta.title,
+      area: activeSimMeta.area,
       official_answers: editingAnswers,
       access_code: (tempAccessCode || '').trim() || DEFAULT_SIMULATION.access_code
     };
     setSimulation(updatedSim);
     setSimulationsMap(prev => ({
       ...prev,
-      [getSimulationIdForUser(targetReviewer)]: editingAnswers
+      [getSimulationIdForUser(targetReviewer, selectedSimId)]: editingAnswers
     }));
-    await saveStoredSimulation(updatedSim, targetReviewer);
+    await saveStoredSimulation(updatedSim, targetReviewer, selectedSimId);
     setStatusMessage({
       text: isReviewerMode
-        ? `Seu gabarito pessoal de correção (${safeReviewerName}) foi salvo com sucesso!`
-        : 'Gabarito Oficial e Código de Acesso salvos com sucesso no banco de dados!',
+        ? `Seu gabarito pessoal de ${activeSimMeta.shortLabel} (${safeReviewerName}) foi salvo com sucesso!`
+        : `Gabarito Oficial de ${activeSimMeta.shortLabel} e Código de Acesso salvos com sucesso no banco de dados!`,
       type: 'success'
     });
   };
@@ -1040,10 +1109,13 @@ export default function EnemSimuladoView({
     setAuditAnswers({});
   };
 
-  // Gabarito de referência exato do professor que corrigiu a submissão em auditoria
+  // Gabarito de referência exato do simulado e professor que corrigiu a submissão em auditoria
   const auditOfficialAnswers: Record<number, EnemAnswerOption> = verifyingSubmission
-    ? (simulationsMap[getSimulationIdForUser(verifyingSubmission.reviewer_name)] ||
-       (verifyingSubmission.reviewer_name === safeReviewerName ? safeOfficialAnswers : undefined) ||
+    ? (simulationsMap[getSimulationIdForUser(verifyingSubmission.reviewer_name, verifyingSubmission.simulation_id)] ||
+       (verifyingSubmission.reviewer_name === safeReviewerName && verifyingSubmission.simulation_id === selectedSimId
+         ? safeOfficialAnswers
+         : undefined) ||
+       simulationsMap[verifyingSubmission.simulation_id] ||
        simulationsMap[SHARED_SIMULATION_ID] ||
        safeOfficialAnswers)
     : safeOfficialAnswers;
@@ -1056,9 +1128,10 @@ export default function EnemSimuladoView({
     if (!verifyingSubmission || !auditStats) return;
 
     setIsSavingAudit(true);
+    const targetSimId = verifyingSubmission.simulation_id || selectedSimId;
     const updatedSub: EnemSubmission = {
       ...verifyingSubmission,
-      simulation_id: SHARED_SIMULATION_ID,
+      simulation_id: targetSimId,
       answers: auditAnswers,
       total_correct: auditStats.totalCorrect,
       score_points: auditStats.score,
@@ -1068,11 +1141,12 @@ export default function EnemSimuladoView({
     };
 
     try {
-      const updatedList = await saveStoredSubmission(updatedSub);
-      setSubmissions(updatedList);
+      const saveRes = await saveStoredSubmission(updatedSub);
+      setSubmissions(saveRes.submissions);
 
+      const auditSimLabel = getSimulationCatalogMeta(targetSimId).shortLabel;
       setStatusMessage({
-        text: `Gabarito de "${verifyingSubmission.student_name}" verificado e sincronizado com sucesso! (${auditStats.totalCorrect}/45 acertos = ${auditStats.score.toFixed(1)} pts)`,
+        text: `Gabarito de "${verifyingSubmission.student_name}" (${auditSimLabel}) verificado e sincronizado com sucesso! (${auditStats.totalCorrect}/45 acertos = ${auditStats.score.toFixed(1)} pts)`,
         type: 'success'
       });
       handleCloseAuditModal();
@@ -1095,24 +1169,27 @@ export default function EnemSimuladoView({
     const sub = pendingDeleteSubmission;
     setPendingDeleteSubmission(null);
 
-    const updated = await deleteStoredSubmission(sub.id, sub.student_id);
+    const updated = await deleteStoredSubmission(sub.id, sub.student_id, sub.simulation_id);
     setSubmissions(updated);
 
-    setEnemSlots(prev => prev.map(slot => {
-      if (slot.studentId === sub.student_id) {
-        return {
-          ...slot,
-          answers: null,
-          status: 'idle',
-          error: null,
-          savedSubmissionId: null
-        };
-      }
-      return slot;
-    }));
+    if (sub.simulation_id === selectedSimId) {
+      setEnemSlots(prev => prev.map(slot => {
+        if (slot.studentId === sub.student_id) {
+          return {
+            ...slot,
+            answers: null,
+            status: 'idle',
+            error: null,
+            savedSubmissionId: null
+          };
+        }
+        return slot;
+      }));
+    }
 
+    const delLabel = getSimulationCatalogMeta(sub.simulation_id).shortLabel;
     setStatusMessage({
-      text: `Nota do simulado de "${sub.student_name}" excluída com sucesso. Aluno liberado para nova correção.`,
+      text: `Nota de ${delLabel} de "${sub.student_name}" excluída com sucesso. As demais áreas permanecem intactas.`,
       type: 'info'
     });
   };
@@ -1126,34 +1203,98 @@ export default function EnemSimuladoView({
     );
   };
 
-  const selectedClassObj = classes.find(c => c.id === selectedClassId);
+  // Submissões exclusivas do simulado selecionado no momento
+  const simSubmissions = submissions.filter(s => s.simulation_id === selectedSimId);
+
   const readyEnemSlotsCount = enemSlots.filter(s => s.studentId && s.imagePreview && s.status !== 'done').length;
   const doneEnemSlotsCount = enemSlots.filter(s => s.status === 'done' && s.answers).length;
-  const correctedInClassCount = students.filter(st => submissions.some(sub => sub.student_id === st.id)).length;
+  const correctedInClassCount = students.filter(st => simSubmissions.some(sub => sub.student_id === st.id)).length;
   const pendingInClassCount = Math.max(0, students.length - correctedInClassCount);
 
-  // Lista única de corretores que já realizaram correções para filtro opcional
+  // Lista única de corretores no simulado selecionado
   const uniqueReviewers = Array.from(
-    new Set(submissions.map(s => s.reviewer_name).filter((r): r is string => Boolean(r && r.trim())))
+    new Set(simSubmissions.map(s => s.reviewer_name).filter((r): r is string => Boolean(r && r.trim())))
   );
 
-  // Todas as correções do simulado ficam disponíveis para Admin e Corretores
-  const filteredSubmissions = submissions.filter(s => {
+  // Submissões filtradas do simulado selecionado
+  const filteredSubmissions = simSubmissions.filter(s => {
     const matchClass = filterClassId === 'all' || s.class_id === filterClassId;
     const matchReviewer = filterReviewer === 'all' || s.reviewer_name === filterReviewer;
     return matchClass && matchReviewer;
   });
 
-  // Exportação profissional de Relatório em PDF (Exclusivo do Administrador)
+  // Visão consolidada por aluno (Natureza + Linguagens + Matemática)
+  interface ConsolidatedStudentRow {
+    studentId: string;
+    studentName: string;
+    rollNumber?: number;
+    classId: string;
+    className: string;
+    bySim: Record<string, EnemSubmission | undefined>;
+    completedAreasCount: number;
+    totalScore: number;
+  }
+
+  const consolidatedRows: ConsolidatedStudentRow[] = (() => {
+    const map = new Map<string, ConsolidatedStudentRow>();
+    const relevantSubs = submissions.filter(
+      s => filterClassId === 'all' || s.class_id === filterClassId
+    );
+
+    for (const sub of relevantSubs) {
+      let row = map.get(sub.student_id);
+      if (!row) {
+        row = {
+          studentId: sub.student_id,
+          studentName: sub.student_name,
+          rollNumber: sub.roll_number,
+          classId: sub.class_id,
+          className: resolveClassName(sub.class_id, sub.class_name),
+          bySim: {},
+          completedAreasCount: 0,
+          totalScore: 0
+        };
+        map.set(sub.student_id, row);
+      }
+      row.bySim[sub.simulation_id] = sub;
+    }
+
+    const rows = Array.from(map.values()).map(row => {
+      let count = 0;
+      let sum = 0;
+      for (const preset of ENEM_SIMULATIONS_CATALOG) {
+        const areaSub = row.bySim[preset.id];
+        if (areaSub) {
+          count++;
+          sum += Number(areaSub.score_points || 0);
+        }
+      }
+      return {
+        ...row,
+        completedAreasCount: count,
+        totalScore: sum
+      };
+    });
+
+    rows.sort((a, b) => {
+      const clsCmp = a.className.localeCompare(b.className, 'pt-BR', { numeric: true });
+      if (clsCmp !== 0) return clsCmp;
+      return a.studentName.localeCompare(b.studentName, 'pt-BR', { sensitivity: 'base' });
+    });
+
+    return rows;
+  })();
+
+  // Exportação profissional de Relatório em PDF do Simulado Selecionado (Exclusivo do Administrador)
   const exportSimuladoPDF = (targetClassId?: string) => {
     if (isReviewerMode) return;
     const listToExport = targetClassId && targetClassId !== 'all'
-      ? submissions.filter(s => s.class_id === targetClassId)
+      ? simSubmissions.filter(s => s.class_id === targetClassId)
       : filteredSubmissions;
 
     if (listToExport.length === 0) {
       setStatusMessage({
-        text: 'Nenhum resultado corrigido encontrado para exportar o relatório em PDF.',
+        text: `Nenhum resultado corrigido encontrado em ${activeSimMeta.shortLabel} para exportar o PDF.`,
         type: 'info'
       });
       return;
@@ -1167,7 +1308,6 @@ export default function EnemSimuladoView({
             ? 'Todas as Turmas do 3º Ano'
             : resolveClassName(filterClassId, 'Turma Selecionada'));
 
-      // Cabeçalho institucional do documento
       doc.setFillColor(10, 37, 64);
       doc.rect(0, 0, 210, 32, 'F');
 
@@ -1177,15 +1317,13 @@ export default function EnemSimuladoView({
 
       doc.setFontSize(10);
       doc.setTextColor(226, 232, 240);
-      doc.text(`${DEFAULT_SIMULATION.title} | Turma: ${targetClassName} | Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 105, 23, { align: 'center' });
+      doc.text(`${activeSimMeta.title} | Turma: ${targetClassName} | Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 105, 23, { align: 'center' });
 
-      // Estatísticas gerais
       const totalCorrigidos = listToExport.length;
       const mediaAcertos = (listToExport.reduce((acc, s) => acc + Number(s.total_correct || 0), 0) / totalCorrigidos).toFixed(1);
       const mediaNota = (listToExport.reduce((acc, s) => acc + Number(s.score_points || 0), 0) / totalCorrigidos).toFixed(2);
       const maiorNota = Math.max(...listToExport.map(s => Number(s.score_points || 0))).toFixed(1);
 
-      // Card de resumo
       doc.setFillColor(248, 250, 252);
       doc.setDrawColor(226, 232, 240);
       doc.roundedRect(14, 38, 182, 18, 3, 3, 'FD');
@@ -1197,7 +1335,6 @@ export default function EnemSimuladoView({
       doc.text(`Média Geral: ${mediaNota} pts`, 122, 49);
       doc.text(`Maior Nota: ${maiorNota} pts`, 166, 49);
 
-      // Tabela ordenada por nota decrescente
       const sortedList = [...listToExport].sort((a, b) => {
         const diff = Number(b.score_points || 0) - Number(a.score_points || 0);
         if (diff !== 0) return diff;
@@ -1238,7 +1375,7 @@ export default function EnemSimuladoView({
           doc.setFontSize(8);
           doc.setTextColor(148, 163, 184);
           doc.text(
-            `Página ${doc.internal.pages.length - 1} | Sistema de Gestão Escolar - Simulado ENEM`,
+            `Página ${doc.internal.pages.length - 1} | Sistema de Gestão Escolar - ${activeSimMeta.title}`,
             105,
             doc.internal.pageSize.height - 10,
             { align: 'center' }
@@ -1247,16 +1384,104 @@ export default function EnemSimuladoView({
       });
 
       const safeClassName = targetClassName.replace(/[^a-zA-Z0-9]/g, '_');
-      doc.save(`Relatorio_Simulado_ENEM_${safeClassName}_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.pdf`);
+      const safeSimLabel = activeSimMeta.shortLabel.replace(/[^a-zA-Z0-9]/g, '_');
+      doc.save(`Relatorio_ENEM_${safeSimLabel}_${safeClassName}_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.pdf`);
 
       setStatusMessage({
-        text: `Relatório em PDF baixado com sucesso (${targetClassName})!`,
+        text: `Relatório em PDF (${activeSimMeta.shortLabel}) baixado com sucesso (${targetClassName})!`,
         type: 'success'
       });
     } catch (err: any) {
       console.error('Erro ao gerar PDF:', err);
       setStatusMessage({
         text: 'Não foi possível gerar o arquivo PDF. Tente novamente.',
+        type: 'error'
+      });
+    }
+  };
+
+  // Exportação de Boletim Consolidado em PDF com todas as áreas (Natureza + Linguagens + Matemática)
+  const exportConsolidatedPDF = () => {
+    if (isReviewerMode) return;
+    if (consolidatedRows.length === 0) {
+      setStatusMessage({
+        text: 'Nenhum resultado encontrado para gerar o Boletim Consolidado.',
+        type: 'info'
+      });
+      return;
+    }
+
+    try {
+      const doc = new jsPDF({ orientation: 'landscape' });
+      const targetClassName =
+        filterClassId === 'all'
+          ? 'Todas as Turmas do 3º Ano'
+          : resolveClassName(filterClassId, 'Turma Selecionada');
+
+      doc.setFillColor(10, 37, 64);
+      doc.rect(0, 0, 297, 28, 'F');
+
+      doc.setFontSize(15);
+      doc.setTextColor(255, 255, 255);
+      doc.text('BOLETIM CONSOLIDADO - SIMULADOS ENEM (NATUREZA, LINGUAGENS E MATEMÁTICA)', 148.5, 13, { align: 'center' });
+
+      doc.setFontSize(9.5);
+      doc.setTextColor(226, 232, 240);
+      doc.text(`Turma: ${targetClassName} | Total de Alunos: ${consolidatedRows.length} | Emissão: ${new Date().toLocaleDateString('pt-BR')}`, 148.5, 21, { align: 'center' });
+
+      const formatAreaCell = (sub?: EnemSubmission) => {
+        if (!sub) return '-';
+        return `${Number(sub.score_points || 0).toFixed(1)} pts (${Number(sub.total_correct || 0)}/45)`;
+      };
+
+      const bodyData = consolidatedRows.map(row => [
+        row.rollNumber ? `Nº ${row.rollNumber}` : '-',
+        row.studentName,
+        row.className,
+        formatAreaCell(row.bySim['sim-ciencias-natureza-2026']),
+        formatAreaCell(row.bySim['sim-linguagens-2026']),
+        formatAreaCell(row.bySim['sim-matematica-2026']),
+        `${row.totalScore.toFixed(1)} pts`
+      ]);
+
+      autoTable(doc, {
+        startY: 34,
+        head: [['Nº', 'Aluno', 'Turma', 'Natureza', 'Linguagens', 'Matemática', 'Soma ENEM']],
+        body: bodyData,
+        headStyles: { fillColor: [10, 37, 64], fontSize: 9, halign: 'center' },
+        bodyStyles: { fontSize: 8.5 },
+        columnStyles: {
+          0: { cellWidth: 16, halign: 'center' },
+          1: { cellWidth: 'auto' },
+          2: { cellWidth: 32, halign: 'center' },
+          3: { cellWidth: 40, halign: 'center' },
+          4: { cellWidth: 40, halign: 'center' },
+          5: { cellWidth: 40, halign: 'center' },
+          6: { cellWidth: 28, halign: 'center', fontStyle: 'bold' }
+        },
+        didDrawPage: () => {
+          doc.setFontSize(8);
+          doc.setTextColor(148, 163, 184);
+          doc.text(
+            `Página ${doc.internal.pages.length - 1} | Boletim Consolidado Simulados ENEM`,
+            148.5,
+            doc.internal.pageSize.height - 8,
+            { align: 'center' }
+          );
+        }
+      });
+
+      const safeClassName = targetClassName.replace(/[^a-zA-Z0-9]/g, '_');
+      doc.save(`Boletim_Consolidado_ENEM_${safeClassName}_${new Date().toLocaleDateString('pt-BR').replace(/\//g, '-')}.pdf`);
+
+      setStatusMessage({
+        text: `Boletim Consolidado em PDF baixado com sucesso (${targetClassName})!`,
+        type: 'success'
+      });
+    } catch (err: any) {
+      console.error('Erro ao gerar PDF consolidado:', err);
+      setStatusMessage({
+        text: 'Não foi possível gerar o PDF consolidado. Tente novamente.',
         type: 'error'
       });
     }
@@ -1286,125 +1511,172 @@ export default function EnemSimuladoView({
         </div>
       )}
 
-      {/* Cabeçalho do Módulo */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 mb-1">
-            <span className="px-3 py-1 bg-brand-yellow/20 text-brand-blue-dark dark:text-brand-yellow text-xs font-bold rounded-full uppercase tracking-wider">
-              {simulation.title}
-            </span>
+      {/* Cabeçalho do Módulo + Seletor de Simulado */}
+      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 sm:p-8 shadow-sm border border-slate-100 dark:border-slate-800 space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="px-3 py-1 bg-brand-yellow/20 text-brand-blue-dark dark:text-brand-yellow text-xs font-bold rounded-full uppercase tracking-wider">
+                {activeSimMeta.title}
+              </span>
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-serif font-bold text-brand-blue-dark dark:text-white">
+              {isReviewerMode ? 'Portal do Corretor' : 'Gestão do Simulado ENEM'}
+            </h1>
+            {isReviewerMode && (
+              <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
+                Conectado como: {safeReviewerName}
+              </p>
+            )}
           </div>
-          <h1 className="text-2xl sm:text-3xl font-serif font-bold text-brand-blue-dark dark:text-white">
-            {isReviewerMode ? 'Portal do Corretor' : 'Gestão do Simulado ENEM'}
-          </h1>
-          {isReviewerMode && (
-            <p className="text-slate-500 dark:text-slate-400 text-sm mt-1">
-              Conectado como: {safeReviewerName}
-            </p>
-          )}
-        </div>
 
-        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
-          <button
-            type="button"
-            onClick={() => syncAllRemoteData(false)}
-            disabled={isSyncingSubmissions}
-            className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 disabled:opacity-50"
-            title="Sincronizar todas as correções da equipe agora"
-          >
-            <RefreshCw size={14} className={isSyncingSubmissions ? 'animate-spin text-brand-blue' : ''} />
-            <span>Sincronizar</span>
-          </button>
+          <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+            <button
+              type="button"
+              onClick={() => syncAllRemoteData(false)}
+              disabled={isSyncingSubmissions}
+              className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold transition-all border border-slate-200 dark:border-slate-700 disabled:opacity-50"
+              title="Sincronizar todas as correções da equipe agora"
+            >
+              <RefreshCw size={14} className={isSyncingSubmissions ? 'animate-spin text-brand-blue' : ''} />
+              <span>Sincronizar</span>
+            </button>
 
-          {isReviewerMode ? (
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
+            {isReviewerMode ? (
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="flex items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
+                  <button
+                    onClick={() => setActiveTab('grading')}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                      activeTab === 'grading' 
+                        ? 'bg-brand-blue text-white shadow-md' 
+                        : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
+                    }`}
+                  >
+                    Corrigir Cartões
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('answer-key')}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                      activeTab === 'answer-key' 
+                        ? 'bg-brand-blue text-white shadow-md' 
+                        : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
+                    }`}
+                  >
+                    <Key size={13} />
+                    <span>Meu Gabarito</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('results')}
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                      activeTab === 'results' 
+                        ? 'bg-brand-blue text-white shadow-md' 
+                        : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
+                    }`}
+                  >
+                    Resultados ({simSubmissions.length})
+                  </button>
+                </div>
+
+                <button
+                  onClick={onExitReviewerMode}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 hover:bg-rose-100 text-xs font-bold transition-all border border-rose-200 dark:border-rose-900"
+                  title="Sair do Portal do Corretor"
+                >
+                  <LogOut size={14} />
+                  <span className="hidden sm:inline">Sair</span>
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
                 <button
                   onClick={() => setActiveTab('grading')}
-                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                     activeTab === 'grading' 
                       ? 'bg-brand-blue text-white shadow-md' 
                       : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
                   }`}
                 >
-                  Corrigir Cartões
+                  Correção
                 </button>
                 <button
                   onClick={() => setActiveTab('answer-key')}
-                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                     activeTab === 'answer-key' 
                       ? 'bg-brand-blue text-white shadow-md' 
                       : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
                   }`}
                 >
-                  <Key size={13} />
-                  <span>Meu Gabarito</span>
+                  Gabarito Oficial
                 </button>
                 <button
                   onClick={() => setActiveTab('results')}
-                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
                     activeTab === 'results' 
                       ? 'bg-brand-blue text-white shadow-md' 
                       : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
                   }`}
                 >
-                  Resultados ({submissions.length})
+                  Resultados & PDF ({simSubmissions.length})
+                </button>
+                <button
+                  onClick={() => setActiveTab('settings')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                    activeTab === 'settings' 
+                      ? 'bg-brand-blue text-white shadow-md' 
+                      : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
+                  }`}
+                >
+                  Acesso Corretores
                 </button>
               </div>
+            )}
+          </div>
+        </div>
 
-              <button
-                onClick={onExitReviewerMode}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400 hover:bg-rose-100 text-xs font-bold transition-all border border-rose-200 dark:border-rose-900"
-                title="Sair do Portal do Corretor"
-              >
-                <LogOut size={14} />
-                <span className="hidden sm:inline">Sair</span>
-              </button>
-            </div>
-          ) : (
-            <div className="flex flex-wrap items-center gap-1.5 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
-              <button
-                onClick={() => setActiveTab('grading')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === 'grading' 
-                    ? 'bg-brand-blue text-white shadow-md' 
-                    : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
-                }`}
-              >
-                Correção
-              </button>
-              <button
-                onClick={() => setActiveTab('answer-key')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === 'answer-key' 
-                    ? 'bg-brand-blue text-white shadow-md' 
-                    : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
-                }`}
-              >
-                Gabarito Oficial
-              </button>
-              <button
-                onClick={() => setActiveTab('results')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === 'results' 
-                    ? 'bg-brand-blue text-white shadow-md' 
-                    : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
-                }`}
-              >
-                Resultados & PDF ({submissions.length})
-              </button>
-              <button
-                onClick={() => setActiveTab('settings')}
-                className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-                  activeTab === 'settings' 
-                    ? 'bg-brand-blue text-white shadow-md' 
-                    : 'text-slate-600 dark:text-slate-300 hover:text-brand-blue'
-                }`}
-              >
-                Acesso Corretores
-              </button>
-            </div>
-          )}
+        {/* Seletor de Simulado (Natureza / Linguagens / Matemática) */}
+        <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2.5">
+            <span className="text-xs font-bold uppercase tracking-wider text-slate-400">
+              Selecione o Simulado para Corrigir / Consultar:
+            </span>
+            <span className="text-[11px] text-slate-400">
+              Cada simulado possui gabarito próprio e salva uma nota separada para o aluno.
+            </span>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+            {ENEM_SIMULATIONS_CATALOG.map((preset) => {
+              const isSelected = selectedSimId === preset.id;
+              const areaCount = submissions.filter(s => s.simulation_id === preset.id).length;
+              return (
+                <button
+                  key={preset.id}
+                  type="button"
+                  onClick={() => handleSelectSimulation(preset.id)}
+                  disabled={isProcessingBatch}
+                  className={`p-3.5 rounded-2xl border text-left transition-all flex items-center justify-between gap-3 disabled:opacity-60 ${
+                    isSelected
+                      ? 'bg-brand-blue text-white border-brand-blue shadow-md ring-2 ring-brand-yellow/70'
+                      : 'bg-slate-50 dark:bg-slate-800/60 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-brand-blue/50'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-bold truncate">{preset.shortLabel}</div>
+                    <div className={`text-[11px] truncate ${isSelected ? 'text-blue-100' : 'text-slate-400'}`}>
+                      {preset.area.split('(')[0].trim()}
+                    </div>
+                  </div>
+                  <span className={`px-2.5 py-1 rounded-xl text-[11px] font-bold shrink-0 ${
+                    isSelected
+                      ? 'bg-brand-yellow text-brand-blue-dark'
+                      : 'bg-white dark:bg-slate-900 text-slate-500 dark:text-slate-400 border border-slate-200 dark:border-slate-700'
+                  }`}>
+                    {areaCount} corr.
+                  </span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       </div>
 
@@ -1447,9 +1719,13 @@ export default function EnemSimuladoView({
                 <Key size={15} />
               </div>
               <div>
-                <span className="text-slate-500 dark:text-slate-400 block text-[11px]">Chave de Correção Utilizada:</span>
+                <span className="text-slate-500 dark:text-slate-400 block text-[11px]">
+                  Chave de Correção Utilizada ({activeSimMeta.shortLabel}):
+                </span>
                 <span className="font-bold text-slate-800 dark:text-slate-100 text-xs">
-                  {isReviewerMode ? `Gabarito Pessoal de ${safeReviewerName}` : 'Gabarito Oficial Mestre (Admin)'}
+                  {isReviewerMode
+                    ? `Gabarito Pessoal de ${safeReviewerName} — ${activeSimMeta.shortLabel}`
+                    : `Gabarito Oficial Mestre — ${activeSimMeta.shortLabel}`}
                 </span>
               </div>
             </div>
@@ -1555,14 +1831,14 @@ export default function EnemSimuladoView({
 
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <span className="px-3 py-2 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 font-bold border border-emerald-200 dark:border-emerald-900">
-                  ✓ {correctedInClassCount} Corrigido(s)
+                  ✓ {correctedInClassCount} Corrigido(s) ({activeSimMeta.shortLabel})
                 </span>
                 <span className="px-3 py-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 font-bold border border-amber-200 dark:border-amber-900">
-                  ⏳ {pendingInClassCount} Pendente(s)
+                  ⏳ {pendingInClassCount} Pendente(s) ({activeSimMeta.shortLabel})
                 </span>
                 {isReviewerMode && (
                   <span className="px-3 py-2 rounded-xl bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-brand-yellow font-bold border border-blue-200 dark:border-blue-900">
-                    {submissions.filter(s => s.reviewer_name === safeReviewerName).length} por você
+                    {simSubmissions.filter(s => s.reviewer_name === safeReviewerName).length} por você
                   </span>
                 )}
               </div>
@@ -1688,7 +1964,7 @@ export default function EnemSimuladoView({
                           {isLoadingStudents ? 'Carregando alunos...' : 'Selecionar Aluno (Ordem Alfabética)...'}
                         </option>
                         {students.map(s => {
-                          const existingSub = submissions.find(item => item.student_id === s.id);
+                          const existingSub = simSubmissions.find(item => item.student_id === s.id);
                           return (
                             <option key={s.id} value={s.id}>
                               {s.name}{s.roll_number ? ` (Nº ${s.roll_number})` : ''} {existingSub ? `✓ [${Number(existingSub.score_points || 0).toFixed(1)} pts]` : '• (Pendente)'}
@@ -1952,22 +2228,22 @@ export default function EnemSimuladoView({
               <div>
                 <h3 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white flex items-center gap-2">
                   <Users size={22} className="text-brand-blue dark:text-brand-yellow" />
-                  Alunos corrigidos nesta turma ({submissions.filter(s => s.class_id === selectedClassId).length} de {students.length})
+                  Alunos em {activeSimMeta.shortLabel} ({simSubmissions.filter(s => s.class_id === selectedClassId).length} de {students.length})
                 </h3>
                 <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                  Lista compartilhada em tempo real entre o Administrador e todos os Professores Corretores.
+                  Status do simulado <strong>{activeSimMeta.shortLabel}</strong> e resumo das demais áreas lançadas para cada aluno.
                 </p>
               </div>
 
               {!isReviewerMode && (
                 <button
                   onClick={() => exportSimuladoPDF(selectedClassId)}
-                  disabled={submissions.filter(s => s.class_id === selectedClassId).length === 0}
+                  disabled={simSubmissions.filter(s => s.class_id === selectedClassId).length === 0}
                   className="py-2.5 px-4 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-40"
                   title="Gerar e baixar relatório em PDF desta turma"
                 >
                   <Download size={14} />
-                  Baixar / Imprimir PDF da Turma
+                  Baixar PDF ({activeSimMeta.shortLabel})
                 </button>
               )}
             </div>
@@ -1978,16 +2254,17 @@ export default function EnemSimuladoView({
                   <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-xs">
                     <th className="py-3 px-3">Nº Chamada</th>
                     <th className="py-3 px-3">Aluno</th>
-                    <th className="py-3 px-3 text-center">Status</th>
-                    <th className="py-3 px-3 text-center">Total de Acertos</th>
-                    <th className="py-3 px-3 text-center">Nota do Simulado</th>
-                    <th className="py-3 px-3">Corretor Responsável</th>
+                    <th className="py-3 px-3 text-center">Status ({activeSimMeta.shortLabel})</th>
+                    <th className="py-3 px-3 text-center">Acertos</th>
+                    <th className="py-3 px-3 text-center">Nota ({activeSimMeta.shortLabel})</th>
+                    <th className="py-3 px-3">Todas as Áreas</th>
+                    <th className="py-3 px-3">Corretor</th>
                     <th className="py-3 px-3 text-right">Ações</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                   {students.map((student) => {
-                    const sub = submissions.find(
+                    const sub = simSubmissions.find(
                       item => item.student_id === student.id
                     );
 
@@ -2026,6 +2303,28 @@ export default function EnemSimuladoView({
                           ) : (
                             <span className="text-slate-400">-</span>
                           )}
+                        </td>
+                        <td className="py-3 px-3">
+                          <div className="flex flex-wrap items-center gap-1">
+                            {ENEM_SIMULATIONS_CATALOG.map(preset => {
+                              const areaSub = submissions.find(
+                                item => item.student_id === student.id && item.simulation_id === preset.id
+                              );
+                              return (
+                                <span
+                                  key={preset.id}
+                                  className={`px-2 py-0.5 rounded-lg text-[10px] font-bold border ${
+                                    areaSub
+                                      ? 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700'
+                                      : 'bg-transparent text-slate-300 dark:text-slate-600 border-slate-100 dark:border-slate-800'
+                                  }`}
+                                  title={`${preset.shortLabel}: ${areaSub ? `${Number(areaSub.score_points || 0).toFixed(1)} pts (${areaSub.total_correct}/45)` : 'Pendente'}`}
+                                >
+                                  {preset.shortLabel.slice(0, 3)}: {areaSub ? Number(areaSub.score_points || 0).toFixed(1) : '-'}
+                                </span>
+                              );
+                            })}
+                          </div>
                         </td>
                         <td className="py-3 px-3 text-slate-600 dark:text-slate-400 font-medium text-xs">
                           {sub?.reviewer_name || '-'}
@@ -2069,7 +2368,7 @@ export default function EnemSimuladoView({
                   })}
                   {students.length === 0 && (
                     <tr>
-                      <td colSpan={7} className="py-8 text-center text-slate-400">
+                      <td colSpan={8} className="py-8 text-center text-slate-400">
                         {selectedClassId ? 'Nenhum aluno encontrado para a turma selecionada.' : 'Selecione uma turma para carregar a lista de alunos.'}
                       </td>
                     </tr>
@@ -2088,15 +2387,19 @@ export default function EnemSimuladoView({
             <div>
               <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 dark:bg-blue-950/40 text-brand-blue dark:text-brand-yellow text-xs font-bold uppercase tracking-wider mb-2 border border-blue-200/60 dark:border-blue-900">
                 <Key size={13} />
-                {isReviewerMode ? `Gabarito Pessoal de ${safeReviewerName}` : 'Gabarito Oficial Master (Administrador)'}
+                {isReviewerMode
+                  ? `Gabarito Pessoal (${activeSimMeta.shortLabel}) de ${safeReviewerName}`
+                  : `Gabarito Oficial Mestre — ${activeSimMeta.shortLabel}`}
               </div>
               <h2 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white">
-                {isReviewerMode ? `Seu Gabarito Exclusivo de Correção (45 Questões)` : 'Gabarito Oficial do Simulado (45 Questões)'}
+                {isReviewerMode
+                  ? `Seu Gabarito de ${activeSimMeta.shortLabel} (45 Questões)`
+                  : `Gabarito Oficial — ${activeSimMeta.title} (45 Questões)`}
               </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1 max-w-2xl">
                 {isReviewerMode 
-                  ? `Professor(a) ${safeReviewerName}, este gabarito é individual para você. Suas correções usarão estritamente estas respostas. Suas alterações não afetam outros corretores nem o administrador.`
-                  : 'Defina a resposta correta de cada questão. Esse gabarito mestre serve como base padrão do simulado.'}
+                  ? `Professor(a) ${safeReviewerName}, este gabarito vale exclusivamente para ${activeSimMeta.shortLabel}. Suas alterações não afetam os outros simulados nem outros corretores.`
+                  : `Defina a resposta correta de cada uma das 45 questões do simulado de ${activeSimMeta.shortLabel}.`}
               </p>
             </div>
 
@@ -2222,16 +2525,46 @@ export default function EnemSimuladoView({
           <div className="flex flex-col lg:flex-row lg:items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800 gap-4">
             <div>
               <h2 className="text-xl font-serif font-bold text-brand-blue-dark dark:text-white">
-                {isReviewerMode ? 'Acompanhamento de Resultados' : 'Relatório Geral do Simulado ENEM'}
+                {resultsViewMode === 'consolidated'
+                  ? 'Boletim Consolidado (Natureza + Linguagens + Matemática)'
+                  : isReviewerMode
+                    ? `Resultados — ${activeSimMeta.shortLabel}`
+                    : `Relatório — ${activeSimMeta.title}`}
               </h2>
               <p className="text-sm text-slate-500 dark:text-slate-400 mt-1">
-                {isReviewerMode
-                  ? 'Acompanhe as correções da equipe, confira os acertos/erros de cada aluno e audite os cartões.'
-                  : 'Todas as correções da equipe ficam disponíveis aqui para consulta e exportação em PDF.'}
+                {resultsViewMode === 'consolidated'
+                  ? 'Visualize lado a lado as notas de cada aluno em Natureza, Linguagens e Matemática.'
+                  : 'Acompanhe os acertos, notas e auditoria deste simulado específico.'}
               </p>
             </div>
 
             <div className="flex flex-wrap items-center gap-2.5">
+              {/* Alternador entre visão do simulado selecionado e boletim consolidado */}
+              <div className="flex items-center gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
+                <button
+                  type="button"
+                  onClick={() => setResultsViewMode('single')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    resultsViewMode === 'single'
+                      ? 'bg-white dark:bg-slate-900 text-brand-blue dark:text-brand-yellow shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  {activeSimMeta.shortLabel}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultsViewMode('consolidated')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+                    resultsViewMode === 'consolidated'
+                      ? 'bg-white dark:bg-slate-900 text-brand-blue dark:text-brand-yellow shadow-xs'
+                      : 'text-slate-500 dark:text-slate-400'
+                  }`}
+                >
+                  Boletim (3 Áreas)
+                </button>
+              </div>
+
               <select
                 value={filterClassId}
                 onChange={(e) => setFilterClassId(e.target.value)}
@@ -2243,138 +2576,249 @@ export default function EnemSimuladoView({
                 ))}
               </select>
 
-              <select
-                value={filterReviewer}
-                onChange={(e) => setFilterReviewer(e.target.value)}
-                className="p-2.5 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
-              >
-                <option value="all">Todos os Corretores</option>
-                {uniqueReviewers.map(rev => (
-                  <option key={rev} value={rev}>{rev}</option>
-                ))}
-              </select>
+              {resultsViewMode === 'single' && (
+                <select
+                  value={filterReviewer}
+                  onChange={(e) => setFilterReviewer(e.target.value)}
+                  className="p-2.5 bg-slate-50 dark:bg-slate-800 border-none rounded-xl text-xs font-semibold text-slate-700 dark:text-slate-200"
+                >
+                  <option value="all">Todos os Corretores</option>
+                  {uniqueReviewers.map(rev => (
+                    <option key={rev} value={rev}>{rev}</option>
+                  ))}
+                </select>
+              )}
 
-              {!isReviewerMode && (
+              {!isReviewerMode && resultsViewMode === 'single' && (
                 <button
                   onClick={() => exportSimuladoPDF(filterClassId)}
                   disabled={filteredSubmissions.length === 0}
                   className="py-2.5 px-4 bg-brand-blue hover:bg-brand-blue-dark text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-50"
-                  title="Gerar e baixar relatório em PDF"
+                  title="Gerar e baixar relatório em PDF deste simulado"
                 >
                   <Download size={14} />
-                  Baixar / Imprimir PDF
+                  Baixar PDF ({activeSimMeta.shortLabel})
+                </button>
+              )}
+
+              {!isReviewerMode && resultsViewMode === 'consolidated' && (
+                <button
+                  onClick={exportConsolidatedPDF}
+                  disabled={consolidatedRows.length === 0}
+                  className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-xs flex items-center gap-2 shadow-sm transition-all disabled:opacity-50"
+                  title="Gerar e baixar Boletim Consolidado com as 3 notas"
+                >
+                  <Download size={14} />
+                  Baixar PDF Consolidado (3 Áreas)
                 </button>
               )}
             </div>
           </div>
 
-          {/* Cards de Resumo Estatístico */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400 uppercase font-semibold">Total Corrigidos</span>
-              <div className="text-2xl font-bold text-brand-blue-dark dark:text-white mt-1">
-                {filteredSubmissions.length}
-              </div>
-            </div>
-
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400 uppercase font-semibold">Média de Acertos</span>
-              <div className="text-2xl font-bold text-brand-blue-dark dark:text-white mt-1">
-                {filteredSubmissions.length > 0 
-                  ? (filteredSubmissions.reduce((acc, s) => acc + Number(s.total_correct || 0), 0) / filteredSubmissions.length).toFixed(1)
-                  : '0'} <span className="text-xs text-slate-400">/ 45</span>
-              </div>
-            </div>
-
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400 uppercase font-semibold">Média da Nota</span>
-              <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
-                {filteredSubmissions.length > 0 
-                  ? (filteredSubmissions.reduce((acc, s) => acc + Number(s.score_points || 0), 0) / filteredSubmissions.length).toFixed(2)
-                  : '0.00'} <span className="text-xs text-slate-400">pts</span>
-              </div>
-            </div>
-
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
-              <span className="text-xs text-slate-400 uppercase font-semibold">Faixa Máxima (4.0 pts)</span>
-              <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1">
-                {filteredSubmissions.filter(s => Number(s.score_points || 0) >= 4.0).length} <span className="text-xs text-slate-400">alunos</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Tabela de Resultados */}
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-xs">
-                  <th className="py-3 px-2">Aluno</th>
-                  <th className="py-3 px-2">Turma</th>
-                  <th className="py-3 px-2 text-center">Acertos</th>
-                  <th className="py-3 px-2 text-center">Nota no Simulado</th>
-                  <th className="py-3 px-2">Corretor Responsável</th>
-                  <th className="py-3 px-2 text-center">Data/Hora</th>
-                  <th className="py-3 px-2 text-right">Ações</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                {filteredSubmissions.map(sub => {
-                  const className = resolveClassName(sub.class_id, sub.class_name);
+          {resultsViewMode === 'consolidated' ? (
+            <>
+              {/* Cards de Resumo Consolidado por Área */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 uppercase font-semibold">Alunos Avaliados</span>
+                  <div className="text-2xl font-bold text-brand-blue-dark dark:text-white mt-1">
+                    {consolidatedRows.length}
+                  </div>
+                </div>
+                {ENEM_SIMULATIONS_CATALOG.map(preset => {
+                  const areaList = consolidatedRows
+                    .map(r => r.bySim[preset.id])
+                    .filter((s): s is EnemSubmission => Boolean(s));
+                  const avgScore =
+                    areaList.length > 0
+                      ? (areaList.reduce((acc, s) => acc + Number(s.score_points || 0), 0) / areaList.length).toFixed(2)
+                      : '0.00';
                   return (
-                    <tr key={sub.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
-                      <td className="py-3 px-2 font-medium text-slate-800 dark:text-white">
-                        {sub.roll_number ? `Nº ${sub.roll_number} - ` : ''}{sub.student_name}
-                      </td>
-                      <td className="py-3 px-2 text-slate-600 dark:text-slate-300">
-                        {className}
-                      </td>
-                      <td className="py-3 px-2 text-center font-bold text-slate-700 dark:text-slate-300">
-                        {Number(sub.total_correct || 0)} / 45
-                      </td>
-                      <td className="py-3 px-2 text-center">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold border ${getScoreBadgeColor(Number(sub.score_points || 0))}`}>
-                          {Number(sub.score_points || 0).toFixed(1)} pts
-                        </span>
-                      </td>
-                      <td className="py-3 px-2 text-xs text-slate-500">
-                        {sub.reviewer_name}
-                      </td>
-                      <td className="py-3 px-2 text-center text-xs text-slate-400">
-                        {formatSubmissionDateTime(sub.created_at)}
-                      </td>
-                      <td className="py-3 px-2 text-right">
-                        <div className="flex items-center justify-end gap-1">
-                          <button
-                            type="button"
-                            onClick={() => handleOpenAuditModal(sub)}
-                            className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg transition-colors"
-                            title="Verificar e comparar gabarito deste aluno"
-                          >
-                            <Eye size={15} />
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteSubmission(sub)}
-                            className="p-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors"
-                            title="Excluir nota / correção do aluno"
-                          >
-                            <Trash2 size={15} />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                    <div key={preset.id} className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                      <span className="text-xs text-slate-400 uppercase font-semibold">Média {preset.shortLabel}</span>
+                      <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                        {avgScore} <span className="text-xs text-slate-400">pts ({areaList.length})</span>
+                      </div>
+                    </div>
                   );
                 })}
-                {filteredSubmissions.length === 0 && (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-slate-400">
-                      Nenhum resultado registrado ainda para este filtro.
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+              </div>
+
+              {/* Tabela Consolidada: Natureza + Linguagens + Matemática lado a lado */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-xs">
+                      <th className="py-3 px-2">Aluno</th>
+                      <th className="py-3 px-2">Turma</th>
+                      {ENEM_SIMULATIONS_CATALOG.map(preset => (
+                        <th key={preset.id} className="py-3 px-2 text-center">
+                          {preset.shortLabel}
+                        </th>
+                      ))}
+                      <th className="py-3 px-2 text-center">Soma ENEM</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {consolidatedRows.map(row => (
+                      <tr key={row.studentId} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                        <td className="py-3 px-2 font-medium text-slate-800 dark:text-white">
+                          {row.rollNumber ? `Nº ${row.rollNumber} - ` : ''}{row.studentName}
+                        </td>
+                        <td className="py-3 px-2 text-slate-600 dark:text-slate-300 text-xs">
+                          {row.className}
+                        </td>
+                        {ENEM_SIMULATIONS_CATALOG.map(preset => {
+                          const areaSub = row.bySim[preset.id];
+                          return (
+                            <td key={preset.id} className="py-3 px-2 text-center">
+                              {areaSub ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenAuditModal(areaSub)}
+                                  className={`inline-flex flex-col items-center px-2.5 py-1 rounded-xl border text-xs font-bold hover:opacity-80 transition-opacity ${getScoreBadgeColor(Number(areaSub.score_points || 0))}`}
+                                  title={`Clique para auditar ${preset.shortLabel} de ${row.studentName}`}
+                                >
+                                  <span>{Number(areaSub.score_points || 0).toFixed(1)} pts</span>
+                                  <span className="text-[10px] font-semibold opacity-80">
+                                    {Number(areaSub.total_correct || 0)}/45
+                                  </span>
+                                </button>
+                              ) : (
+                                <span className="text-xs text-slate-300 dark:text-slate-600 font-semibold">—</span>
+                              )}
+                            </td>
+                          );
+                        })}
+                        <td className="py-3 px-2 text-center">
+                          <span className="px-3 py-1 rounded-full bg-brand-blue/10 dark:bg-brand-yellow/15 text-brand-blue-dark dark:text-brand-yellow font-black text-xs">
+                            {row.totalScore.toFixed(1)} pts
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                    {consolidatedRows.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="py-8 text-center text-slate-400">
+                          Nenhum resultado corrigido encontrado para este filtro.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          ) : (
+            <>
+              {/* Cards de Resumo Estatístico do Simulado Selecionado */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 uppercase font-semibold">Total Corrigidos ({activeSimMeta.shortLabel})</span>
+                  <div className="text-2xl font-bold text-brand-blue-dark dark:text-white mt-1">
+                    {filteredSubmissions.length}
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 uppercase font-semibold">Média de Acertos</span>
+                  <div className="text-2xl font-bold text-brand-blue-dark dark:text-white mt-1">
+                    {filteredSubmissions.length > 0 
+                      ? (filteredSubmissions.reduce((acc, s) => acc + Number(s.total_correct || 0), 0) / filteredSubmissions.length).toFixed(1)
+                      : '0'} <span className="text-xs text-slate-400">/ 45</span>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 uppercase font-semibold">Média da Nota</span>
+                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400 mt-1">
+                    {filteredSubmissions.length > 0 
+                      ? (filteredSubmissions.reduce((acc, s) => acc + Number(s.score_points || 0), 0) / filteredSubmissions.length).toFixed(2)
+                      : '0.00'} <span className="text-xs text-slate-400">pts</span>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/50 rounded-2xl border border-slate-100 dark:border-slate-800">
+                  <span className="text-xs text-slate-400 uppercase font-semibold">Faixa Máxima (4.0 pts)</span>
+                  <div className="text-2xl font-bold text-blue-600 dark:text-blue-400 mt-1">
+                    {filteredSubmissions.filter(s => Number(s.score_points || 0) >= 4.0).length} <span className="text-xs text-slate-400">alunos</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabela de Resultados */}
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead>
+                    <tr className="border-b border-slate-100 dark:border-slate-800 text-slate-400 uppercase text-xs">
+                      <th className="py-3 px-2">Aluno</th>
+                      <th className="py-3 px-2">Turma</th>
+                      <th className="py-3 px-2 text-center">Acertos</th>
+                      <th className="py-3 px-2 text-center">Nota ({activeSimMeta.shortLabel})</th>
+                      <th className="py-3 px-2">Corretor Responsável</th>
+                      <th className="py-3 px-2 text-center">Data/Hora</th>
+                      <th className="py-3 px-2 text-right">Ações</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {filteredSubmissions.map(sub => {
+                      const className = resolveClassName(sub.class_id, sub.class_name);
+                      return (
+                        <tr key={sub.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="py-3 px-2 font-medium text-slate-800 dark:text-white">
+                            {sub.roll_number ? `Nº ${sub.roll_number} - ` : ''}{sub.student_name}
+                          </td>
+                          <td className="py-3 px-2 text-slate-600 dark:text-slate-300">
+                            {className}
+                          </td>
+                          <td className="py-3 px-2 text-center font-bold text-slate-700 dark:text-slate-300">
+                            {Number(sub.total_correct || 0)} / 45
+                          </td>
+                          <td className="py-3 px-2 text-center">
+                            <span className={`px-3 py-1 rounded-full text-xs font-bold border ${getScoreBadgeColor(Number(sub.score_points || 0))}`}>
+                              {Number(sub.score_points || 0).toFixed(1)} pts
+                            </span>
+                          </td>
+                          <td className="py-3 px-2 text-xs text-slate-500">
+                            {sub.reviewer_name}
+                          </td>
+                          <td className="py-3 px-2 text-center text-xs text-slate-400">
+                            {formatSubmissionDateTime(sub.created_at)}
+                          </td>
+                          <td className="py-3 px-2 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={() => handleOpenAuditModal(sub)}
+                                className="p-1.5 text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 rounded-lg transition-colors"
+                                title="Verificar e comparar gabarito deste aluno"
+                              >
+                                <Eye size={15} />
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSubmission(sub)}
+                                className="p-1.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded-lg transition-colors"
+                                title="Excluir nota / correção deste simulado"
+                              >
+                                <Trash2 size={15} />
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                    {filteredSubmissions.length === 0 && (
+                      <tr>
+                        <td colSpan={7} className="py-8 text-center text-slate-400">
+                          Nenhum resultado registrado ainda em {activeSimMeta.shortLabel} para este filtro.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </div>
       )}
 
@@ -2561,8 +3005,9 @@ export default function EnemSimuladoView({
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 truncate">
-                    Corretor: <span className="font-semibold text-slate-700 dark:text-slate-300">{verifyingSubmission.reviewer_name || 'Administrador'}</span>
-                    {' '}&bull; Gabarito aplicado: <span className="font-semibold text-brand-blue dark:text-brand-yellow">{verifyingSubmission.reviewer_name && typeof verifyingSubmission.reviewer_name === 'string' && verifyingSubmission.reviewer_name.toLowerCase() !== 'administrador' ? `Gabarito de ${verifyingSubmission.reviewer_name}` : 'Gabarito Mestre'}</span>
+                    Área: <span className="font-bold text-slate-700 dark:text-slate-200">{getSimulationCatalogMeta(verifyingSubmission.simulation_id).shortLabel}</span>
+                    {' '}&bull; Corretor: <span className="font-semibold text-slate-700 dark:text-slate-300">{verifyingSubmission.reviewer_name || 'Administrador'}</span>
+                    {' '}&bull; Gabarito: <span className="font-semibold text-brand-blue dark:text-brand-yellow">{verifyingSubmission.reviewer_name && typeof verifyingSubmission.reviewer_name === 'string' && verifyingSubmission.reviewer_name.toLowerCase() !== 'administrador' ? `Gabarito de ${verifyingSubmission.reviewer_name}` : 'Gabarito Mestre'}</span>
                   </p>
                 </div>
               </div>
@@ -2830,7 +3275,7 @@ export default function EnemSimuladoView({
             </div>
 
             <p className="text-sm text-slate-600 dark:text-slate-300">
-              Deseja remover a nota do simulado de <strong className="text-slate-900 dark:text-white">{pendingDeleteSubmission.student_name}</strong>? O aluno voltará para o status <strong>Pendente</strong>.
+              Deseja remover a nota de <strong>{getSimulationCatalogMeta(pendingDeleteSubmission.simulation_id).shortLabel}</strong> do aluno <strong className="text-slate-900 dark:text-white">{pendingDeleteSubmission.student_name}</strong>? As demais áreas permanecem salvas e o aluno voltará para <strong>Pendente</strong> apenas neste simulado.
             </p>
 
             <div className="flex items-center justify-end gap-2 pt-2">
